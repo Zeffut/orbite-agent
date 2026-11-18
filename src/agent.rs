@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::actions::{Host, Review};
 use crate::memory::Memory;
 use crate::skills::Skills;
+use crate::web::Web;
 use crate::{
     ActionRequest, ActionSpec, Channel, Message, Provider, ProviderError, Request, Store,
     StoreError,
@@ -101,6 +102,7 @@ impl<P: Provider> Agent<P> {
             command_timeout: Duration::from_secs(120),
             memory: None,
             skills: None,
+            web: Web::new(),
         };
         Self { provider, store, host, context_budget: 60_000 }
     }
@@ -128,6 +130,12 @@ impl<P: Provider> Agent<P> {
     /// oldest part of the Conversation is replaced by a summary.
     pub fn keeping_context_under(mut self, tokens: usize) -> Self {
         self.context_budget = tokens;
+        self
+    }
+
+    /// The address of the search engine's results page.
+    pub fn searching_at(mut self, address: impl Into<String>) -> Self {
+        self.host.web.search_at = address.into();
         self
     }
 
@@ -322,7 +330,7 @@ impl<P: Provider> Agent<P> {
                         }
                     }
                 };
-                self.store.append(&outcome(text))?;
+                self.store.append(&outcome(self.sized(text)))?;
                 if !said.is_empty() && left_out.is_none() {
                     left_out =
                         Some("Your Owner wrote to you meanwhile: this action was not carried out.");
@@ -499,6 +507,18 @@ async fn patiently(
 }
 
 impl<P: Provider> Agent<P> {
+    /// `outcome`, cut when it alone would take too much of the budget: no
+    /// later summary could make room for it.
+    fn sized(&self, outcome: String) -> String {
+        // In bytes: a quarter of the budget, at four characters to a token.
+        let limit = self.context_budget;
+        if outcome.len() <= limit {
+            return outcome;
+        }
+        let kept = clip(&outcome, limit);
+        format!("{kept}\n[cut to fit: {} more characters]", outcome.len() - kept.len())
+    }
+
     /// Tells the Owner, and the model for later, that the work was stopped.
     async fn stopped(&mut self, channel: &mut impl Channel) -> Result<bool, StoreError> {
         self.store.append(&Message::from_agent("Stopped."))?;

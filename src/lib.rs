@@ -12,6 +12,7 @@ mod slug;
 mod store;
 mod telegram;
 mod terminal;
+mod web;
 
 pub use agent::Agent;
 pub use channel::{Approval, Channel};

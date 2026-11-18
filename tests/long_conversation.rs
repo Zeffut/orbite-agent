@@ -272,3 +272,35 @@ async fn the_owner_can_start_afresh_without_losing_memory() {
     assert!(provider.last_instructions().contains("Lives in Lyon."));
     assert!(!provider.last_instructions().contains("blue-horse"));
 }
+
+#[tokio::test]
+async fn one_enormous_outcome_does_not_push_a_turn_over_budget() {
+    let workspace = tempfile::tempdir().unwrap();
+    std::fs::write(workspace.path().join("big.txt"), "A line of a big file.\n".repeat(3_000))
+        .unwrap();
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("read_file", json!({ "path": "big.txt" }))]).then(Ok("It is big.".into()));
+    let (mut channel, mut owner) = memory_channel();
+    let agent_provider = provider.clone();
+    let folder = workspace.path().to_owned();
+    tokio::spawn(async move {
+        Agent::new(agent_provider, Store::in_memory())
+            .working_in(folder)
+            .keeping_context_under(4_000)
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("Read the big file.");
+    owner.hears().await;
+
+    let largest = provider
+        .every_call()
+        .iter()
+        .map(|(instructions, conversation)| size(instructions, conversation))
+        .max()
+        .unwrap();
+    assert!(largest <= 4_000, "a turn sent about {largest} tokens");
+    let Some(Message::Outcome { text, .. }) = provider.last_asked().pop() else { panic!() };
+    assert!(text.contains("cut"), "the model is told the Outcome is incomplete");
+}

@@ -13,6 +13,7 @@ use tokio::process::Command;
 
 use crate::memory::Memory;
 use crate::skills::{Skill, Skills};
+use crate::web::Web;
 use crate::{ActionRequest, ActionSpec, Approval};
 
 /// How much of a command's output, per stream, is passed on to the model.
@@ -44,6 +45,17 @@ pub(crate) struct Host {
     pub(crate) memory: Option<Memory>,
     /// Where the Agent keeps its Skills, when it has somewhere to.
     pub(crate) skills: Option<Skills>,
+    pub(crate) web: Web,
+}
+
+#[derive(Deserialize)]
+struct ReadPage {
+    url: String,
+}
+
+#[derive(Deserialize)]
+struct SearchWeb {
+    query: String,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +114,8 @@ enum Action {
     UseSkill(NamedSkill),
     SaveSkill(SaveSkill),
     RemoveSkill(NamedSkill),
+    ReadPage(ReadPage),
+    SearchWeb(SearchWeb),
 }
 
 impl Host {
@@ -147,6 +161,17 @@ impl Host {
                     "old": text("The exact passage to replace."),
                     "new": text("What to put in its place."),
                 }),
+            ),
+            spec(
+                "search_web",
+                "Searches the web and returns the first results: title, address and excerpt. \
+                 Follow up with read_page on the results worth reading.",
+                json!({ "query": text("What to search for, as typed in a search engine.") }),
+            ),
+            spec(
+                "read_page",
+                "Returns the readable content of a web page, or the text at a web address.",
+                json!({ "url": text("The full address, starting with http:// or https://.") }),
             ),
         ];
         if self.memory.is_some() {
@@ -236,6 +261,19 @@ impl Host {
                     irreversible: replaces,
                 })
             }
+            Action::SearchWeb(_) => Review::Free,
+            Action::ReadPage(page) => match web_address(&page.url) {
+                Err(problem) => Review::Refuse(problem),
+                Ok(url) if !crate::web::is_local(&url) => Review::Free,
+                Ok(_) => Review::Ask(Approval {
+                    summary: "Read an address on your own network".into(),
+                    detail: format!(
+                        "{}\n\nWhat it returns will be shown to the AI provider.",
+                        page.url
+                    ),
+                    irreversible: false,
+                }),
+            },
             Action::UseSkill(_) => Review::Free,
             Action::SaveSkill(skill) => {
                 let Some(skills) = &self.skills else { return Review::Refuse(NO_SKILLS.into()) };
@@ -289,6 +327,11 @@ impl Host {
             Ok(Action::RunCommand(run)) => self.run(&run.command).await,
             Ok(Action::ReadFile(read)) => self.read(&read.path),
             Ok(Action::WriteFile(write)) => self.write(&write.path, &write.content),
+            Ok(Action::SearchWeb(search)) => self.web.search(&search.query).await,
+            Ok(Action::ReadPage(page)) => match web_address(&page.url) {
+                Err(problem) => problem,
+                Ok(url) => self.web.read(&url).await,
+            },
             Ok(Action::Remember(entry)) => self.remember(&entry),
             Ok(Action::UseSkill(skill)) => match self.skill(&skill.name) {
                 Err(problem) => problem,
@@ -499,9 +542,21 @@ fn understand(request: &ActionRequest) -> Result<Action, String> {
         "remember" => input(request).map(Action::Remember),
         "forget" => input(request).map(Action::Forget),
         "use_skill" => input(request).map(Action::UseSkill),
+        "read_page" => input(request).map(Action::ReadPage),
+        "search_web" => input(request).map(Action::SearchWeb),
         "save_skill" => input(request).map(Action::SaveSkill),
         "remove_skill" => input(request).map(Action::RemoveSkill),
         other => Err(format!("There is no Action called {other}.")),
+    }
+}
+
+/// `address` as a web address, or what to tell the model is wrong with it.
+fn web_address(address: &str) -> Result<url::Url, String> {
+    match url::Url::parse(address.trim()) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") && url.host().is_some() => Ok(url),
+        _ => Err(format!(
+            "\"{address}\" is not a web address: it must start with http:// or https://."
+        )),
     }
 }
 
