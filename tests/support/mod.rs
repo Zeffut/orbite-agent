@@ -6,7 +6,9 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use orbite::{ActionRequest, Approval, Channel, Message, Provider, ProviderError, Reply, Request};
+use orbite::{
+    ActionRequest, Answer, Approval, Channel, Message, Provider, ProviderError, Reply, Request,
+};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -216,9 +218,16 @@ impl Channel for MemoryChannel {
         self.from_owner.recv().await
     }
 
-    async fn ask(&mut self, approval: &Approval) -> std::io::Result<bool> {
+    async fn ask(&mut self, approval: &Approval) -> std::io::Result<Answer> {
         self.asks.send(approval.clone()).map_err(std::io::Error::other)?;
-        self.answers.recv().await.ok_or_else(|| std::io::Error::other("the Owner is gone"))
+        tokio::select! {
+            answer = self.answers.recv() => match answer {
+                Some(true) => Ok(Answer::Allowed),
+                Some(false) => Ok(Answer::Denied),
+                None => Err(std::io::Error::other("the Owner is gone")),
+            },
+            Some(text) = self.from_owner.recv() => Ok(Answer::Wrote(text)),
+        }
     }
 }
 

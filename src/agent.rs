@@ -14,8 +14,8 @@ use crate::slug::slug;
 use crate::subagents::{Report, Subagents};
 use crate::web::Web;
 use crate::{
-    ActionRequest, ActionSpec, Approval, Channel, Message, Provider, ProviderError, Request, Store,
-    StoreError,
+    ActionRequest, ActionSpec, Answer, Approval, Channel, Message, Provider, ProviderError,
+    Request, Store, StoreError,
 };
 
 /// Who the Agent is, told to the model on every turn.
@@ -424,9 +424,23 @@ impl<P: Provider + 'static> Agent<P> {
                     Review::Refuse(problem) => Err(problem),
                     Review::Free => Ok(()),
                     Review::Ask(approval) => match channel.ask(&approval).await {
-                        Ok(true) => Ok(()),
-                        Ok(false) => {
+                        Ok(Answer::Allowed) => Ok(()),
+                        Ok(Answer::Denied) => {
                             Err("The Owner denied this action. It was not carried out.".into())
+                        }
+                        Ok(Answer::Wrote(text)) if means_stop(&text) => {
+                            stopped = true;
+                            left_out = Some(
+                                "The Owner stopped the work: this action was not carried out.",
+                            );
+                            Err("The Owner stopped the work: this action was not carried out."
+                                .into())
+                        }
+                        Ok(Answer::Wrote(text)) => {
+                            said.push(text);
+                            Err("Your Owner wrote to you instead of answering: this action was \
+                                 not carried out."
+                                .into())
                         }
                         Err(_) => return Ok(false),
                     },

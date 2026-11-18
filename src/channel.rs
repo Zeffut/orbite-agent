@@ -12,6 +12,16 @@ pub struct Approval {
     pub irreversible: bool,
 }
 
+/// How the Owner answered an [`Approval`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    Allowed,
+    Denied,
+    /// The Owner wrote this instead of answering: the Action is not allowed,
+    /// and what they wrote is to be heard.
+    Wrote(String),
+}
+
 /// A place where the Conversation happens.
 pub trait Channel: Send {
     /// The Owner's next message, or `None` once the Channel is closed.
@@ -21,9 +31,9 @@ pub trait Channel: Send {
 
     /// Asks the Owner to allow or deny an Action, and waits for the answer.
     /// A Channel with no way to ask denies.
-    fn ask(&mut self, approval: &Approval) -> impl Future<Output = io::Result<bool>> + Send {
+    fn ask(&mut self, approval: &Approval) -> impl Future<Output = io::Result<Answer>> + Send {
         let _ = approval;
-        async { Ok(false) }
+        async { Ok(Answer::Denied) }
     }
 
     /// What the Owner writes while the Agent is working, so that they can

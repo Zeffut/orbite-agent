@@ -310,7 +310,7 @@ async fn an_answer_telegram_refuses_to_format_is_still_delivered_as_plain_text()
 
 // --- Approvals ---
 
-use orbite::Approval;
+use orbite::{Answer, Approval};
 
 fn tap(update_id: i64, sender: i64, message_id: i64, choice: &str) -> Value {
     json!({
@@ -359,11 +359,15 @@ fn removal() -> Approval {
     }
 }
 
-async fn ask(channel: &mut Telegram, approval: &Approval) -> bool {
+async fn answer(channel: &mut Telegram, approval: &Approval) -> Answer {
     tokio::time::timeout(Duration::from_secs(5), channel.ask(approval))
         .await
         .expect("the Approval was never answered")
         .unwrap()
+}
+
+async fn ask(channel: &mut Telegram, approval: &Approval) -> bool {
+    answer(channel, approval).await == Answer::Allowed
 }
 
 #[tokio::test]
@@ -440,13 +444,14 @@ async fn a_tap_on_an_earlier_approval_does_not_answer_the_current_one() {
 }
 
 #[tokio::test]
-async fn what_the_owner_writes_while_an_approval_waits_is_read_afterwards() {
-    let server =
-        telegram_asking(vec![text_from(100, OWNER, "Actually, wait."), tap(101, OWNER, 7, "deny")])
-            .await;
+async fn writing_instead_of_tapping_cancels_the_approval_and_is_passed_on() {
+    let server = telegram_asking(vec![text_from(100, OWNER, "Actually, wait.")]).await;
     let mut channel = telegram(&server);
 
-    assert!(!ask(&mut channel, &removal()).await);
+    assert_eq!(answer(&mut channel, &removal()).await, Answer::Wrote("Actually, wait.".into()));
 
-    assert_eq!(channel.receive().await.as_deref(), Some("Actually, wait."));
+    let calls = calls(&server).await;
+    let (_, edited) = calls.iter().find(|(called, _)| called == "editMessageText").unwrap();
+    assert!(edited["text"].as_str().unwrap().contains("Not answered"), "{edited}");
+    assert!(edited.get("reply_markup").is_none(), "the buttons must go: {edited}");
 }

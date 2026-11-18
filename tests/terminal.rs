@@ -60,3 +60,26 @@ async fn the_prompt_is_shown_once_however_often_the_agent_looks_for_input() {
 
     assert_eq!(String::from_utf8(shown).unwrap(), "> ");
 }
+
+#[tokio::test]
+async fn something_else_typed_at_an_approval_is_taken_as_a_message() {
+    let workspace = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("run_command", serde_json::json!({ "command": "touch made.txt" }))])
+        .then(Ok("As you wish.".into()));
+    let asked = provider.clone();
+    let mut shown = Vec::new();
+
+    let mut terminal = Terminal::new("Create it\nno, call it other.txt\n".as_bytes(), &mut shown);
+    Agent::new(provider, Store::in_memory())
+        .working_in(workspace.path())
+        .converse(&mut terminal)
+        .await;
+
+    assert!(!workspace.path().join("made.txt").exists());
+    assert_eq!(
+        asked.last_asked().last(),
+        Some(&orbite::Message::from_owner("no, call it other.txt"))
+    );
+}

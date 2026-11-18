@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::{Approval, Channel};
+use crate::{Answer, Approval, Channel};
 
 /// How long Telegram may hold a request open waiting for a message.
 const LONG_POLL: Duration = Duration::from_secs(50);
@@ -227,7 +227,7 @@ impl Channel for Telegram {
         self.bot.say(text).await
     }
 
-    async fn ask(&mut self, approval: &Approval) -> io::Result<bool> {
+    async fn ask(&mut self, approval: &Approval) -> io::Result<Answer> {
         let mut text = format!(
             "<b>{}</b>\n\n<pre>{}</pre>",
             formatting::escape(&approval.summary),
@@ -252,29 +252,30 @@ impl Channel for Telegram {
             )
             .await?;
 
-        let allowed = loop {
+        let answer = loop {
             let tap = match self.taps.pop_front() {
                 Some(tap) => tap,
                 None => match self.next().await {
                     Some(Sent::Tap(tap)) => tap,
-                    // What the Owner writes meanwhile is read afterwards.
-                    Some(Sent::Text(text)) => {
-                        self.waiting.push_back(text);
-                        continue;
-                    }
+                    // Writing instead of tapping is an answer of its own.
+                    Some(Sent::Text(text)) => break Answer::Wrote(text),
                     None => return Err(io::Error::other("Telegram is no longer listened to")),
                 },
             };
             if tap.message == asked.message_id {
                 self.acknowledge(&tap, "").await;
-                break tap.choice == "allow";
+                break if tap.choice == "allow" { Answer::Allowed } else { Answer::Denied };
             }
             self.acknowledge(&tap, "This request is no longer open.").await;
         };
 
         // The buttons give way to the decision, so the Conversation keeps a
         // record of what was allowed.
-        let decision = if allowed { "✅ Allowed" } else { "❌ Denied" };
+        let decision = match answer {
+            Answer::Allowed => "✅ Allowed",
+            Answer::Denied => "❌ Denied",
+            Answer::Wrote(_) => "✍️ Not answered",
+        };
         let _ = self
             .bot
             .call::<Value>(
@@ -287,7 +288,7 @@ impl Channel for Telegram {
                 }),
             )
             .await;
-        Ok(allowed)
+        Ok(answer)
     }
 
     async fn interruption(&mut self) -> Option<String> {

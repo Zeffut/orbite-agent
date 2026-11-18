@@ -17,7 +17,7 @@ mod terminal;
 mod web;
 
 pub use agent::Agent;
-pub use channel::{Approval, Channel};
+pub use channel::{Answer, Approval, Channel};
 pub use openai_compatible::OpenAiCompatible;
 pub use provider::{ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request};
 pub use store::{Store, StoreError};

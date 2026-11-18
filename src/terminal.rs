@@ -2,7 +2,7 @@ use std::io;
 
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, Lines};
 
-use crate::{Approval, Channel};
+use crate::{Answer, Approval, Channel};
 
 /// A Channel for developers: the Conversation typed and read in a terminal.
 pub struct Terminal<R, W> {
@@ -44,11 +44,15 @@ impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Channel for T
         self.show(&format!("{start}{text}\n\n")).await
     }
 
-    async fn ask(&mut self, approval: &Approval) -> io::Result<bool> {
+    async fn ask(&mut self, approval: &Approval) -> io::Result<Answer> {
         let warning = if approval.irreversible { "This cannot be undone.\n" } else { "" };
         self.show(&format!("[{}]\n{}\n{warning}Allow? [y/N] ", approval.summary, approval.detail))
             .await?;
-        let answer = self.typed.next_line().await?.unwrap_or_default();
-        Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
+        let typed = self.typed.next_line().await?.unwrap_or_default();
+        Ok(match typed.trim() {
+            "y" | "Y" | "yes" => Answer::Allowed,
+            "" | "n" | "N" | "no" => Answer::Denied,
+            other => Answer::Wrote(other.to_owned()),
+        })
     }
 }

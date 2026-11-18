@@ -181,3 +181,46 @@ async fn stop_said_when_nothing_is_under_way_is_just_something_said() {
 
     assert_eq!(owner.hears().await, "There is nothing to stop.");
 }
+
+#[tokio::test]
+async fn stop_written_instead_of_answering_an_approval_cancels_it() {
+    let workspace = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([
+            ("run_command", json!({ "command": "touch made.txt" })),
+            ("write_file", json!({ "path": "after.txt", "content": "x" })),
+        ])
+        .then(Ok("Fine.".into()));
+    let mut owner = agent_in(workspace.path(), &provider);
+    owner.says("Make them.");
+    owner.is_asked().await;
+
+    owner.says("stop");
+
+    assert_eq!(owner.hears().await, "Stopped.");
+    assert!(!workspace.path().join("made.txt").exists());
+    assert!(!workspace.path().join("after.txt").exists());
+    assert!(owner.was_asked_nothing(), "the second Action must not be asked about");
+}
+
+#[tokio::test]
+async fn writing_instead_of_answering_an_approval_leaves_the_action_out_and_is_heard() {
+    let workspace = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("run_command", json!({ "command": "touch made.txt" }))])
+        .then(Ok("A different name, then.".into()));
+    let mut owner = agent_in(workspace.path(), &provider);
+    owner.says("Make it.");
+    owner.is_asked().await;
+
+    owner.says("Wait, call it other.txt instead.");
+
+    assert_eq!(owner.hears().await, "A different name, then.");
+    assert!(!workspace.path().join("made.txt").exists());
+    let seen = provider.last_asked();
+    assert_eq!(seen.last(), Some(&Message::from_owner("Wait, call it other.txt instead.")));
+    let Message::Outcome { text, .. } = &seen[seen.len() - 2] else { panic!("{seen:?}") };
+    assert!(text.contains("not carried out"), "{text}");
+}
