@@ -1,0 +1,418 @@
+//! The Actions the Agent can carry out on the Host, and the single gate that
+//! decides which of them need the Owner's Approval first.
+
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use serde_json::json;
+use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::process::Command;
+
+use crate::{ActionRequest, ActionSpec, Approval};
+
+/// How much of a command's output, per stream, is passed on to the model.
+const OUTPUT_KEPT: usize = 16_000;
+/// How much of a file is passed on to the model.
+const FILE_KEPT: usize = 100_000;
+/// How much of a text is shown to the Owner in an Approval.
+const PREVIEW_KEPT: usize = 1_500;
+
+/// What the gate decided about an Action.
+pub(crate) enum Review {
+    /// It only looks at things: carry it out.
+    Free,
+    /// It changes or reveals something: the Owner decides.
+    Ask(Approval),
+    /// It cannot be carried out at all; the text tells the model why.
+    Refuse(String),
+}
+
+/// The Agent's hands on the machine it runs on.
+pub(crate) struct Host {
+    /// Where commands run and relative paths start.
+    pub(crate) workspace: PathBuf,
+    /// A command still running after this long is stopped.
+    pub(crate) command_timeout: Duration,
+}
+
+#[derive(Deserialize)]
+struct RunCommand {
+    command: String,
+}
+
+#[derive(Deserialize)]
+struct ReadFile {
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct WriteFile {
+    path: String,
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct EditFile {
+    path: String,
+    old: String,
+    new: String,
+}
+
+enum Action {
+    RunCommand(RunCommand),
+    ReadFile(ReadFile),
+    WriteFile(WriteFile),
+    EditFile(EditFile),
+}
+
+impl Host {
+    /// The Actions on offer, as told to the model.
+    pub(crate) fn specs() -> Vec<ActionSpec> {
+        let text = |description: &str| json!({ "type": "string", "description": description });
+        let spec = |name: &str, description: &str, properties: serde_json::Value| {
+            let required: Vec<&String> = properties.as_object().unwrap().keys().collect();
+            ActionSpec {
+                name: name.into(),
+                description: description.into(),
+                input: json!({ "type": "object", "properties": properties, "required": required }),
+            }
+        };
+        vec![
+            spec(
+                "run_command",
+                "Runs a shell command on the Owner's machine, in your workspace folder, and \
+                 returns what it printed. Commands that only look at things run at once; any \
+                 other command first needs the Owner's approval, so prefer several simple \
+                 commands to one clever one.",
+                json!({ "command": text("The command, as typed in a shell.") }),
+            ),
+            spec(
+                "read_file",
+                "Returns the text of a file.",
+                json!({ "path": text("Absolute, or relative to your workspace folder.") }),
+            ),
+            spec(
+                "write_file",
+                "Creates a file, or replaces all of an existing one. Needs the Owner's approval.",
+                json!({
+                    "path": text("Absolute, or relative to your workspace folder."),
+                    "content": text("The whole new content of the file."),
+                }),
+            ),
+            spec(
+                "edit_file",
+                "Replaces one passage of a file. The passage must appear exactly once in it. \
+                 Needs the Owner's approval.",
+                json!({
+                    "path": text("Absolute, or relative to your workspace folder."),
+                    "old": text("The exact passage to replace."),
+                    "new": text("What to put in its place."),
+                }),
+            ),
+        ]
+    }
+
+    /// The gate every Action passes through before it is carried out.
+    pub(crate) fn review(&self, request: &ActionRequest) -> Review {
+        let action = match understand(request) {
+            Ok(action) => action,
+            Err(problem) => return Review::Refuse(problem),
+        };
+        match action {
+            Action::RunCommand(RunCommand { command }) => {
+                let reveals = looks_secret(&command);
+                if only_looks(&command) && !reveals {
+                    return Review::Free;
+                }
+                let mut detail = command;
+                if reveals {
+                    detail.push_str("\n\nThis may show a secret to the AI provider.");
+                }
+                Review::Ask(Approval {
+                    summary: "Run a command".into(),
+                    detail,
+                    // Orbite has no way to undo what a command did.
+                    irreversible: true,
+                })
+            }
+            Action::ReadFile(ReadFile { path }) => {
+                if !looks_secret(&path) {
+                    return Review::Free;
+                }
+                Review::Ask(Approval {
+                    summary: "Read a file".into(),
+                    detail: format!("{path}\n\nThis may show a secret to the AI provider."),
+                    irreversible: true,
+                })
+            }
+            Action::WriteFile(WriteFile { path, content }) => {
+                let replaces = self.locate(&path).exists();
+                let summary = if replaces {
+                    "Replace a file"
+                } else {
+                    "Create a file"
+                };
+                Review::Ask(Approval {
+                    summary: summary.into(),
+                    detail: format!("{path}\n\n{}", preview(&content)),
+                    irreversible: replaces,
+                })
+            }
+            Action::EditFile(edit) => match self.edited(&edit) {
+                Err(problem) => Review::Refuse(problem),
+                Ok(_) => Review::Ask(Approval {
+                    summary: "Edit a file".into(),
+                    detail: format!(
+                        "{}\n\nReplace:\n{}\n\nWith:\n{}",
+                        edit.path,
+                        preview(&edit.old),
+                        preview(&edit.new)
+                    ),
+                    // The replaced passage stays in the Conversation.
+                    irreversible: false,
+                }),
+            },
+        }
+    }
+
+    /// Carries out an Action the gate let through; the text is its Outcome.
+    pub(crate) async fn carry_out(&self, request: &ActionRequest) -> String {
+        match understand(request) {
+            Err(problem) => problem,
+            Ok(Action::RunCommand(run)) => self.run(&run.command).await,
+            Ok(Action::ReadFile(read)) => self.read(&read.path),
+            Ok(Action::WriteFile(write)) => self.write(&write.path, &write.content),
+            Ok(Action::EditFile(edit)) => match self.edited(&edit) {
+                Err(problem) => problem,
+                Ok(content) => match std::fs::write(self.locate(&edit.path), content) {
+                    Ok(()) => format!("Edited {}.", edit.path),
+                    Err(error) => format!("Could not edit {}: {error}.", edit.path),
+                },
+            },
+        }
+    }
+
+    /// `path` as the Host sees it: `~` is the home folder, and a relative
+    /// path starts in the workspace.
+    fn locate(&self, path: &str) -> PathBuf {
+        if let Some(rest) = path.strip_prefix("~/")
+            && let Some(home) = std::env::var_os("HOME")
+        {
+            return Path::new(&home).join(rest);
+        }
+        self.workspace.join(path)
+    }
+
+    fn read(&self, path: &str) -> String {
+        let bytes = match std::fs::read(self.locate(path)) {
+            Ok(bytes) => bytes,
+            Err(error) => return format!("Could not read {path}: {error}."),
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            return format!("{path} is not a text file.");
+        };
+        match cut(&text, FILE_KEPT) {
+            (kept, 0) => kept.to_owned(),
+            (kept, missing) => format!("{kept}\n[file cut: {missing} more bytes]"),
+        }
+    }
+
+    fn write(&self, path: &str, content: &str) -> String {
+        let target = self.locate(path);
+        let written = target
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&target, content));
+        match written {
+            Ok(()) => format!("Wrote {} bytes to {path}.", content.len()),
+            Err(error) => format!("Could not write {path}: {error}."),
+        }
+    }
+
+    /// The file's content once `edit` is applied, or why it cannot be.
+    fn edited(&self, edit: &EditFile) -> Result<String, String> {
+        let path = &edit.path;
+        let content = std::fs::read_to_string(self.locate(path))
+            .map_err(|error| format!("Could not read {path}: {error}."))?;
+        match content.matches(&edit.old).count() {
+            1 => Ok(content.replacen(&edit.old, &edit.new, 1)),
+            0 => Err(format!(
+                "The passage to replace does not appear in {path}; nothing changed."
+            )),
+            times => Err(format!(
+                "The passage to replace appears {times} times in {path}; nothing changed. \
+                 Give a longer passage that appears once."
+            )),
+        }
+    }
+
+    async fn run(&self, command: &str) -> String {
+        if let Err(error) = std::fs::create_dir_all(&self.workspace) {
+            return format!("Could not use the workspace folder: {error}.");
+        }
+        let mut shell = Command::new("sh");
+        shell
+            .arg("-c")
+            .arg(command)
+            .current_dir(&self.workspace)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            // Its own process group, so that everything the command started
+            // can be stopped with it.
+            .process_group(0)
+            .kill_on_drop(true);
+        let mut child = match shell.spawn() {
+            Ok(child) => child,
+            Err(error) => return format!("Could not start the command: {error}."),
+        };
+        let group = child.id();
+        let printed = tokio::spawn(keep_start(child.stdout.take().expect("stdout is piped")));
+        let complained = tokio::spawn(keep_start(child.stderr.take().expect("stderr is piped")));
+
+        let status = tokio::time::timeout(self.command_timeout, child.wait()).await;
+        if status.is_err()
+            && let Some(group) = group
+        {
+            // SAFETY: `killpg` only sends a signal; `group` is the process
+            // group created for this command just above.
+            unsafe { libc::killpg(group as libc::pid_t, libc::SIGKILL) };
+            let _ = child.wait().await;
+        }
+
+        let mut outcome = String::new();
+        for (label, stream) in [("", printed), ("[stderr]\n", complained)] {
+            let (kept, missing) = stream.await.unwrap_or_default();
+            if kept.is_empty() {
+                continue;
+            }
+            if !outcome.is_empty() {
+                outcome.push('\n');
+            }
+            outcome.push_str(label);
+            outcome.push_str(String::from_utf8_lossy(&kept).trim_end());
+            if missing > 0 {
+                outcome.push_str(&format!("\n[output cut: {missing} more bytes]"));
+            }
+        }
+        match status {
+            Err(_) => outcome.push_str(&format!(
+                "\n[The command was stopped after {:?} without finishing.]",
+                self.command_timeout
+            )),
+            Ok(Ok(status)) if !status.success() => match status.code() {
+                Some(code) => outcome.push_str(&format!("\n[exit code {code}]")),
+                None => outcome.push_str("\n[The command was killed.]"),
+            },
+            Ok(Ok(_)) if outcome.is_empty() => outcome.push_str("(no output)"),
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => outcome.push_str(&format!("\n[Could not wait for it: {error}]")),
+        }
+        outcome.trim_start().to_owned()
+    }
+}
+
+/// The Action a request stands for, or what to tell the model is wrong.
+fn understand(request: &ActionRequest) -> Result<Action, String> {
+    fn input<T: DeserializeOwned>(request: &ActionRequest) -> Result<T, String> {
+        serde_json::from_value(request.input.clone())
+            .map_err(|error| format!("The input of {} is not valid: {error}.", request.name))
+    }
+    match request.name.as_str() {
+        "run_command" => input(request).map(Action::RunCommand),
+        "read_file" => input(request).map(Action::ReadFile),
+        "write_file" => input(request).map(Action::WriteFile),
+        "edit_file" => input(request).map(Action::EditFile),
+        other => Err(format!("There is no Action called {other}.")),
+    }
+}
+
+/// True when `command` certainly changes nothing: a pipeline of programs that
+/// only look, with nothing the shell could turn into something else. Anything
+/// not recognised is assumed to change something.
+fn only_looks(command: &str) -> bool {
+    const LOOKING: &[&str] = &[
+        "cat", "cut", "date", "df", "du", "echo", "file", "find", "free", "grep", "head",
+        "hostname", "id", "ls", "lsblk", "lscpu", "nproc", "ps", "pwd", "stat", "tail", "tr",
+        "true", "uname", "uptime", "wc", "which", "whoami",
+    ];
+    // Options that make a looking program write, run or set something.
+    const CHANGING: &[&str] = &[
+        "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint", "-fprint0", "-fprintf",
+        "-s", "--set",
+    ];
+    if command.contains(|c| ";&><$`(){}\\\n\r!".contains(c)) {
+        return false;
+    }
+    command.split('|').all(|stage| {
+        let mut words = stage.split_whitespace();
+        let Some(program) = words.next() else {
+            return false;
+        };
+        LOOKING.contains(&program)
+            && words.all(|word| !CHANGING.contains(&word))
+            && (program != "hostname" || stage.split_whitespace().count() == 1)
+    })
+}
+
+/// True when `text` names something that is probably a secret.
+fn looks_secret(text: &str) -> bool {
+    const SECRET: &[&str] = &[
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".netrc",
+        ".env",
+        "secret",
+        "password",
+        "shadow",
+        "token",
+        "credential",
+        "id_rsa",
+        "id_ed25519",
+        "private",
+        "keychain",
+        "wallet",
+    ];
+    let text = text.to_lowercase();
+    SECRET.iter().any(|mark| text.contains(mark))
+}
+
+/// The start of `text` that fits in `limit` bytes, and how many bytes are left out.
+fn cut(text: &str, limit: usize) -> (&str, usize) {
+    if text.len() <= limit {
+        return (text, 0);
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], text.len() - end)
+}
+
+fn preview(text: &str) -> String {
+    match cut(text, PREVIEW_KEPT) {
+        (kept, 0) => kept.to_owned(),
+        (kept, missing) => format!("{kept}\n[… {missing} more bytes]"),
+    }
+}
+
+/// Reads `stream` to its end, keeping its first bytes and counting the rest,
+/// so that a command printing without end neither blocks nor fills memory.
+async fn keep_start(mut stream: impl AsyncRead + Unpin) -> (Vec<u8>, usize) {
+    let mut kept = Vec::new();
+    let mut missing = 0;
+    let mut buffer = [0u8; 8192];
+    while let Ok(read) = stream.read(&mut buffer).await {
+        if read == 0 {
+            break;
+        }
+        let room = OUTPUT_KEPT - kept.len();
+        kept.extend_from_slice(&buffer[..read.min(room)]);
+        missing += read.saturating_sub(room);
+    }
+    (kept, missing)
+}

@@ -1,6 +1,7 @@
 //! Orbite: a personal AI agent that lives on a machine its Owner controls.
 //! Vocabulary follows `GLOSSARY.md`.
 
+mod actions;
 mod agent;
 mod channel;
 mod openai_compatible;
@@ -10,7 +11,7 @@ mod telegram;
 mod terminal;
 
 pub use agent::Agent;
-pub use channel::Channel;
+pub use channel::{Approval, Channel};
 pub use openai_compatible::OpenAiCompatible;
 pub use provider::{ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request};
 pub use store::{Store, StoreError};

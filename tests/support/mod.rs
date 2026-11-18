@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use orbite::{ActionRequest, Channel, Message, Provider, ProviderError, Reply, Request};
+use orbite::{ActionRequest, Approval, Channel, Message, Provider, ProviderError, Reply, Request};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -42,6 +42,14 @@ impl ScriptedProvider {
 
     /// The model asks for these Actions, each given as (name, input).
     pub fn then_acts<const N: usize>(&self, actions: [(&str, Value); N]) -> &Self {
+        self.then_says_and_acts("", actions)
+    }
+
+    pub fn then_says_and_acts<const N: usize>(
+        &self,
+        text: &str,
+        actions: [(&str, Value); N],
+    ) -> &Self {
         let actions = actions
             .into_iter()
             .enumerate()
@@ -52,7 +60,7 @@ impl ScriptedProvider {
             })
             .collect();
         let reply = Reply {
-            text: String::new(),
+            text: text.to_string(),
             actions,
         };
         self.script
@@ -106,25 +114,35 @@ impl Provider for ScriptedProvider {
 pub struct MemoryChannel {
     from_owner: mpsc::UnboundedReceiver<String>,
     to_owner: mpsc::UnboundedSender<String>,
+    asks: mpsc::UnboundedSender<Approval>,
+    answers: mpsc::UnboundedReceiver<bool>,
 }
 
-/// The Owner's end: what a person would type and read.
+/// The Owner's end: what a person would type, read and tap.
 pub struct Owner {
     to_agent: mpsc::UnboundedSender<String>,
     from_agent: mpsc::UnboundedReceiver<String>,
+    asked: mpsc::UnboundedReceiver<Approval>,
+    answers: mpsc::UnboundedSender<bool>,
 }
 
 pub fn memory_channel() -> (MemoryChannel, Owner) {
     let (to_agent, from_owner) = mpsc::unbounded_channel();
     let (to_owner, from_agent) = mpsc::unbounded_channel();
+    let (asks, asked) = mpsc::unbounded_channel();
+    let (answers_in, answers_out) = mpsc::unbounded_channel();
     (
         MemoryChannel {
             from_owner,
             to_owner,
+            asks,
+            answers: answers_out,
         },
         Owner {
             to_agent,
             from_agent,
+            asked,
+            answers: answers_in,
         },
     )
 }
@@ -138,6 +156,16 @@ impl Channel for MemoryChannel {
         self.to_owner
             .send(text.to_string())
             .map_err(std::io::Error::other)
+    }
+
+    async fn ask(&mut self, approval: &Approval) -> std::io::Result<bool> {
+        self.asks
+            .send(approval.clone())
+            .map_err(std::io::Error::other)?;
+        self.answers
+            .recv()
+            .await
+            .ok_or_else(|| std::io::Error::other("the Owner is gone"))
     }
 }
 
@@ -156,9 +184,29 @@ impl Owner {
     }
 
     pub async fn hears(&mut self) -> String {
-        tokio::time::timeout(Duration::from_secs(2), self.from_agent.recv())
+        tokio::time::timeout(Duration::from_secs(5), self.from_agent.recv())
             .await
             .expect("the Agent stayed silent")
             .expect("the Agent is gone")
+    }
+
+    /// The Approval the Agent is waiting on.
+    pub async fn is_asked(&mut self) -> Approval {
+        tokio::time::timeout(Duration::from_secs(5), self.asked.recv())
+            .await
+            .expect("the Agent asked for nothing")
+            .expect("the Agent is gone")
+    }
+
+    pub fn was_asked_nothing(&mut self) -> bool {
+        self.asked.try_recv().is_err()
+    }
+
+    pub fn allows(&self) {
+        self.answers.send(true).expect("the Agent is gone");
+    }
+
+    pub fn denies(&self) {
+        self.answers.send(false).expect("the Agent is gone");
     }
 }
