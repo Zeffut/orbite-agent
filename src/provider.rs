@@ -66,6 +66,9 @@ pub struct Request<'a> {
     /// Images to show the model, each with the place in `conversation` of the
     /// message it came with.
     pub images: &'a [(usize, PathBuf)],
+    /// True for work a lighter, cheaper model does as well: a summary, a
+    /// Wake-up. A Provider with only one model ignores it.
+    pub light: bool,
 }
 
 /// What the model says next, and the Actions it asks for.
@@ -76,6 +79,22 @@ pub struct Reply {
     /// What the Provider needs back exactly as it was on later turns; see
     /// [`Message::Agent`].
     pub kept: Option<Value>,
+    /// Who answered and what it cost, when the Provider says.
+    pub usage: Option<Usage>,
+}
+
+/// What one answer cost, as its Provider counts it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Usage {
+    /// The Provider that answered, by the name it was connected under.
+    pub by: String,
+    pub model: String,
+    /// Tokens read, including those read from the Provider's cache.
+    pub input: u64,
+    /// Of `input`, the tokens read from the cache, which cost far less.
+    pub cached: u64,
+    /// Tokens written.
+    pub output: u64,
 }
 
 /// Something that runs AI models for the Agent.
@@ -84,6 +103,12 @@ pub trait Provider: Send + Sync {
         &self,
         request: Request<'_>,
     ) -> impl Future<Output = Result<Reply, ProviderError>> + Send;
+
+    /// The name of the Provider that normally answers, when several stand
+    /// behind this one, so that the Owner can be told when another does.
+    fn usual(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Why a Provider gave no answer. The text is the Provider's own explanation.

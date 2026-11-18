@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbite::{Agent, Both, Connected, Store, Telegram, Terminal, connect, known_providers};
+use orbite::{Agent, Both, Connected, Routed, Store, Telegram, Terminal, connect, known_providers};
 use tokio::io::{BufReader, stdin, stdout};
 
 const USAGE: &str = "\
@@ -19,6 +19,9 @@ Read from the environment:
   ORBITE_API_KEY         API Key of the Provider (not needed for one on this machine)
   ORBITE_MODEL           model to use (required)
   ORBITE_BASE_URL        the Provider's address, when it is not its usual one
+  ORBITE_LIGHT_MODEL     a lighter model for summaries and wake-ups (optional)
+  ORBITE_FALLBACK_PROVIDER, ORBITE_FALLBACK_MODEL, ORBITE_FALLBACK_API_KEY
+                         another Provider for when the usual one cannot answer (optional)
   ORBITE_HOME            folder where the Agent keeps its data (default: ~/.orbite)
   ORBITE_CONTEXT_TOKENS  most tokens sent to the model per turn (default: 60000)
   ORBITE_WAKE_UP_MINUTES minutes between the Agent's own wake-ups, 0 for never (default: 240)
@@ -78,15 +81,37 @@ async fn chat() -> Result<(), Failure> {
 }
 
 /// The Agent of this installation: its Provider and the folder holding its data.
-fn agent() -> Result<Agent<Connected>, Failure> {
+fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
     let name = setting("ORBITE_PROVIDER").unwrap_or("openai".into());
     let model = required("ORBITE_MODEL")?;
-    let provider = connect(
-        &name,
-        setting("ORBITE_API_KEY").as_deref(),
-        &model,
-        setting("ORBITE_BASE_URL").as_deref(),
-    )?;
+    let key = setting("ORBITE_API_KEY");
+    let address = setting("ORBITE_BASE_URL");
+    let mut provider =
+        Routed::through(&name, connect(&name, key.as_deref(), &model, address.as_deref())?);
+    // Another Provider to fall back on when the usual one cannot answer.
+    if let Some(other) = setting("ORBITE_FALLBACK_PROVIDER") {
+        let fallback = connect(
+            &other,
+            setting("ORBITE_FALLBACK_API_KEY").as_deref(),
+            &required("ORBITE_FALLBACK_MODEL")?,
+            setting("ORBITE_FALLBACK_BASE_URL").as_deref(),
+        )?;
+        provider = provider.or(&other, fallback);
+    }
+    // A lighter model for summaries and wake-ups, with the usual Provider
+    // unless another is named.
+    if let Some(light_model) = setting("ORBITE_LIGHT_MODEL") {
+        let light = match setting("ORBITE_LIGHT_PROVIDER") {
+            Some(other) => {
+                let key = setting("ORBITE_LIGHT_API_KEY");
+                (other.clone(), connect(&other, key.as_deref(), &light_model, None)?)
+            }
+            None => {
+                (name.clone(), connect(&name, key.as_deref(), &light_model, address.as_deref())?)
+            }
+        };
+        provider = provider.with_light(&format!("{} (light)", light.0), light.1);
+    }
 
     let home = home()?;
     fs::create_dir_all(&home)

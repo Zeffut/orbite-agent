@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::attachments::image_type;
-use crate::{ActionRequest, Message, Provider, ProviderError, Reply, Request};
+use crate::{ActionRequest, Message, Provider, ProviderError, Reply, Request, Usage};
 
 /// A Provider reached with an API Key over the chat-completions protocol that
 /// OpenAI introduced and most Providers and local servers also speak.
@@ -14,6 +14,8 @@ pub struct OpenAiCompatible {
     endpoint: String,
     api_key: String,
     model: String,
+    /// The name it was connected under, said with what each answer cost.
+    name: String,
 }
 
 impl OpenAiCompatible {
@@ -28,7 +30,14 @@ impl OpenAiCompatible {
             endpoint: format!("{}/chat/completions", base_url.as_ref().trim_end_matches('/')),
             api_key: api_key.into(),
             model: model.into(),
+            name: "openai-compatible".into(),
         }
+    }
+
+    /// The name this Provider goes by in what the Owner is shown.
+    pub fn named(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 }
 
@@ -113,9 +122,20 @@ impl Provider for OpenAiCompatible {
             )));
         }
 
-        let message = serde_json::from_str::<Completion>(&body)
-            .ok()
-            .and_then(|completion| completion.choices.into_iter().next())
+        let completion = serde_json::from_str::<Completion>(&body)
+            .map_err(|_| ProviderError::Failed("the answer was not understood".into()))?;
+        let count = |value: &Value| value.as_u64().unwrap_or(0);
+        let usage = Some(Usage {
+            by: self.name.clone(),
+            model: self.model.clone(),
+            input: count(&completion.usage["prompt_tokens"]),
+            cached: count(&completion.usage["prompt_tokens_details"]["cached_tokens"]),
+            output: count(&completion.usage["completion_tokens"]),
+        });
+        let message = completion
+            .choices
+            .into_iter()
+            .next()
             .map(|choice| choice.message)
             .ok_or_else(|| ProviderError::Failed("the answer was not understood".into()))?;
         let text = message.content.unwrap_or_default();
@@ -135,7 +155,7 @@ impl Provider for OpenAiCompatible {
         if text.is_empty() && actions.is_empty() {
             return Err(ProviderError::Failed("the answer contained no text".into()));
         }
-        Ok(Reply { text, actions, kept: None })
+        Ok(Reply { text, actions, kept: None, usage })
     }
 }
 
@@ -171,7 +191,10 @@ fn wire_message(message: &Message) -> Value {
 
 #[derive(Deserialize)]
 struct Completion {
+    #[serde(default)]
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Value,
 }
 
 #[derive(Deserialize)]

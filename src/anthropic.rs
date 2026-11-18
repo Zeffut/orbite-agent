@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::attachments::image_type;
-use crate::{ActionRequest, Message, Provider, ProviderError, Reply, Request};
+use crate::{ActionRequest, Message, Provider, ProviderError, Reply, Request, Usage};
 
 /// The version of the Messages API this is written for.
 const API_VERSION: &str = "2026-10-21";
@@ -23,6 +23,10 @@ pub struct Anthropic {
     api_root: String,
     api_key: String,
     model: String,
+    /// The name it was connected under, said with what each answer cost.
+    name: String,
+    /// The workspace to use, for a key that is not tied to one.
+    workspace: Option<String>,
 }
 
 impl Anthropic {
@@ -32,7 +36,21 @@ impl Anthropic {
             api_root: "https://api.anthropic.com".into(),
             api_key: api_key.into(),
             model: model.into(),
+            name: "anthropic".into(),
+            workspace: None,
         }
+    }
+
+    /// The name this Provider goes by in what the Owner is shown.
+    pub fn named(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// Names the workspace to use, which a key not tied to one requires.
+    pub fn in_workspace(mut self, workspace: impl Into<String>) -> Self {
+        self.workspace = Some(workspace.into());
+        self
     }
 
     /// Talks to another server speaking the Messages API.
@@ -69,11 +87,15 @@ impl Provider for Anthropic {
                 .collect();
         }
 
-        let response = self
+        let mut asking = self
             .http
             .post(format!("{}/v1/messages", self.api_root))
             .header("x-api-key", &self.api_key)
-            .header("anthropic-version", API_VERSION)
+            .header("anthropic-version", API_VERSION);
+        if let Some(workspace) = &self.workspace {
+            asking = asking.header("anthropic-workspace-id", workspace);
+        }
+        let response = asking
             .timeout(Duration::from_secs(600))
             .json(&body)
             .send()
@@ -132,7 +154,16 @@ impl Provider for Anthropic {
         }
         // Everything the model wrote goes back to it exactly as it was.
         let kept = Some(json!({ KEPT_AS: answer.content }));
-        Ok(Reply { text, actions, kept })
+        let count = |name: &str| answer.usage[name].as_u64().unwrap_or(0);
+        let cached = count("cache_read_input_tokens");
+        let usage = Some(Usage {
+            by: self.name.clone(),
+            model: self.model.clone(),
+            input: count("input_tokens") + cached + count("cache_creation_input_tokens"),
+            cached,
+            output: count("output_tokens"),
+        });
+        Ok(Reply { text, actions, kept, usage })
     }
 }
 
@@ -207,6 +238,8 @@ struct Answer {
     content: Vec<Value>,
     stop_reason: Option<String>,
     stop_details: Option<Value>,
+    #[serde(default)]
+    usage: Value,
 }
 
 /// The API's own explanation when the body carries one, else the body.

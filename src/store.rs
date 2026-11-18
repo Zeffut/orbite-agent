@@ -4,8 +4,8 @@ use std::sync::Mutex;
 
 use rusqlite::Connection;
 
-use crate::Message;
 use crate::routines::Routine;
+use crate::{Message, Usage};
 
 /// Each entry brings the database from one version to the next. Entries are
 /// only ever appended: an installation's database holds what its Owner said.
@@ -44,6 +44,16 @@ const MIGRATIONS: &[&str] = &[
         paused      INTEGER NOT NULL DEFAULT 0,
         last_run    INTEGER,
         last_result TEXT
+    ) STRICT;",
+    "CREATE TABLE usage (
+        day     TEXT NOT NULL,
+        by      TEXT NOT NULL,
+        model   TEXT NOT NULL,
+        answers INTEGER NOT NULL DEFAULT 0,
+        input   INTEGER NOT NULL DEFAULT 0,
+        cached  INTEGER NOT NULL DEFAULT 0,
+        output  INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, by, model)
     ) STRICT;",
 ];
 
@@ -217,6 +227,54 @@ impl Store {
         }
         found.sort_by_key(|entry| std::cmp::Reverse((entry.0, entry.1)));
         Ok(found.into_iter().take(8).map(|(_, _, date, message)| (date, message)).collect())
+    }
+
+    /// Adds what one answer cost to the count of `day` (written YYYY-MM-DD).
+    pub(crate) fn record_usage(&self, day: &str, usage: &Usage) -> Result<(), StoreError> {
+        let count = |tokens: u64| i64::try_from(tokens).unwrap_or(i64::MAX);
+        self.database.lock().expect("the Store is not poisoned").execute(
+            "INSERT INTO usage (day, by, model, answers, input, cached, output)
+             VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)
+             ON CONFLICT (day, by, model) DO UPDATE SET
+                 answers = answers + 1, input = input + excluded.input,
+                 cached = cached + excluded.cached, output = output + excluded.output",
+            (
+                day,
+                &usage.by,
+                &usage.model,
+                count(usage.input),
+                count(usage.cached),
+                count(usage.output),
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// What was used on each day from `since` on, as (day, answers, tokens),
+    /// the latest day first.
+    pub(crate) fn usage_since(&self, since: &str) -> Result<Vec<(String, u64, Usage)>, StoreError> {
+        let database = self.database.lock().expect("the Store is not poisoned");
+        let mut statement = database.prepare(
+            "SELECT day, by, model, answers, input, cached, output FROM usage
+             WHERE day >= ?1 ORDER BY day DESC, by, model",
+        )?;
+        let count = |tokens: i64| u64::try_from(tokens).unwrap_or(0);
+        let used = statement
+            .query_map([since], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    count(row.get(3)?),
+                    Usage {
+                        by: row.get(1)?,
+                        model: row.get(2)?,
+                        input: count(row.get(4)?),
+                        cached: count(row.get(5)?),
+                        output: count(row.get(6)?),
+                    },
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(used)
     }
 
     /// The value kept under `key`, if any.

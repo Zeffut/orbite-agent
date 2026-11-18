@@ -18,7 +18,7 @@ fn answered(content: Value) -> ResponseTemplate {
 }
 
 fn request<'a>(conversation: &'a [Message], actions: &'a [ActionSpec]) -> Request<'a> {
-    Request { instructions: "Be brief.", conversation, actions, images: &[] }
+    Request { instructions: "Be brief.", conversation, actions, images: &[], light: false }
 }
 
 /// The body of the one request the fake API received.
@@ -240,6 +240,7 @@ async fn an_image_is_sent_before_the_words_it_came_with() {
             conversation: &conversation,
             actions: &[],
             images: &images,
+            light: false,
         })
         .await
         .unwrap();
@@ -331,4 +332,59 @@ async fn an_unreachable_api_is_reported_as_such() {
     let reply = provider.reply(request(&[Message::from_owner("Hi")], &[])).await;
 
     assert!(matches!(reply, Err(ProviderError::Unreachable(_))), "{reply:?}");
+}
+
+#[tokio::test]
+async fn reports_what_the_answer_cost_counting_what_was_read_from_the_cache() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "content": [{ "type": "text", "text": "Hi." }], "stop_reason": "end_turn", "model": "claude-opus-5-5",
+            "usage": {
+                "input_tokens": 20, "cache_read_input_tokens": 900, "cache_creation_input_tokens": 80,
+                "output_tokens": 7,
+            },
+        })))
+        .mount(&server)
+        .await;
+    let provider = Anthropic::new("sk-ant-test", "claude-opus-5-5").at(server.uri());
+
+    let usage =
+        provider.reply(request(&[Message::from_owner("Hi")], &[])).await.unwrap().usage.unwrap();
+
+    assert_eq!(
+        usage,
+        orbite::Usage {
+            by: "anthropic".into(),
+            model: "claude-opus-5-5".into(),
+            input: 1000,
+            cached: 900,
+            output: 7
+        }
+    );
+}
+
+#[tokio::test]
+async fn a_key_not_tied_to_a_workspace_is_used_with_the_workspace_named() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(header("anthropic-workspace-id", "wrkspc_123"))
+        .respond_with(answered(json!([{ "type": "text", "text": "Hi." }])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = Anthropic::new("sk-ant-test", "claude-opus-5-5")
+        .at(server.uri())
+        .in_workspace("wrkspc_123");
+
+    assert_eq!(
+        provider.reply(request(&[Message::from_owner("Hi")], &[])).await.unwrap().text,
+        "Hi."
+    );
+
+    // Without one, the header is not sent at all.
+    let (server, provider) = provider_answering(json!([{ "type": "text", "text": "Hi." }])).await;
+    provider.reply(request(&[Message::from_owner("Hi")], &[])).await.unwrap();
+    let requests = server.received_requests().await.unwrap();
+    assert!(!requests[0].headers.contains_key("anthropic-workspace-id"));
 }

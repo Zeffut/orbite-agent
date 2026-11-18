@@ -27,6 +27,7 @@ pub struct ScriptedProvider {
     offered: Arc<Mutex<Vec<Vec<String>>>>,
     shown_images: Arc<Mutex<Vec<Images>>>,
     otherwise: Arc<Mutex<Option<Responder>>>,
+    cost: Arc<Mutex<Option<orbite::Usage>>>,
     held: Arc<Mutex<Option<Hold>>>,
 }
 
@@ -40,7 +41,7 @@ type Responder = Box<dyn Fn(&str, &[Message]) -> Result<Reply, ProviderError> + 
 
 /// A Reply that only says `text`.
 pub fn saying(text: &str) -> Reply {
-    Reply { text: text.to_string(), actions: Vec::new(), kept: None }
+    Reply { text: text.to_string(), actions: Vec::new(), kept: None, usage: None }
 }
 
 /// A Reply that asks for one Action.
@@ -49,6 +50,7 @@ pub fn acting(name: &str, input: Value) -> Reply {
         text: String::new(),
         actions: vec![ActionRequest { id: format!("{name}-0"), name: name.to_string(), input }],
         kept: None,
+        usage: None,
     }
 }
 
@@ -62,7 +64,8 @@ impl ScriptedProvider {
     }
 
     pub fn then(&self, outcome: Result<String, ProviderError>) -> &Self {
-        let outcome = outcome.map(|text| Reply { text, actions: Vec::new(), kept: None });
+        let outcome =
+            outcome.map(|text| Reply { text, actions: Vec::new(), kept: None, usage: None });
         self.script.lock().unwrap().push_back(Outcome::Now(outcome));
         self
     }
@@ -86,7 +89,7 @@ impl ScriptedProvider {
                 input,
             })
             .collect();
-        let reply = Reply { text: text.to_string(), actions, kept: None };
+        let reply = Reply { text: text.to_string(), actions, kept: None, usage: None };
         self.script.lock().unwrap().push_back(Outcome::Now(Ok(reply)));
         self
     }
@@ -129,6 +132,12 @@ impl ScriptedProvider {
     pub fn every_call(&self) -> Vec<(String, Vec<Message>)> {
         let instructed = self.instructed.lock().unwrap().clone();
         instructed.into_iter().zip(self.asked.lock().unwrap().clone()).collect()
+    }
+
+    /// Every answer from now on reports this cost.
+    pub fn costing(&self, usage: orbite::Usage) -> &Self {
+        *self.cost.lock().unwrap() = Some(usage);
+        self
     }
 
     /// The next call never returns, as when Orbite is stopped mid-answer.
@@ -182,10 +191,13 @@ impl Provider for ScriptedProvider {
         let Some(outcome) = scripted else {
             let otherwise = self.otherwise.lock().unwrap();
             let respond = otherwise.as_ref().expect("the script ran out of answers");
-            return respond(request.instructions, request.conversation);
+            let cost = self.cost.lock().unwrap().clone();
+            return respond(request.instructions, request.conversation)
+                .map(|reply| Reply { usage: cost, ..reply });
         };
+        let cost = self.cost.lock().unwrap().clone();
         match outcome {
-            Outcome::Now(outcome) => outcome,
+            Outcome::Now(outcome) => outcome.map(|reply| Reply { usage: cost, ..reply }),
             Outcome::Never => std::future::pending().await,
         }
     }

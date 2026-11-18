@@ -11,6 +11,7 @@ mod channel;
 mod memory;
 mod openai_compatible;
 mod provider;
+mod routed;
 mod routines;
 mod skills;
 mod slug;
@@ -28,7 +29,10 @@ pub use both::Both;
 pub use catalogue::{Connected, KnownProvider, Speaks, connect, known_providers};
 pub use channel::{Answer, Approval, Channel};
 pub use openai_compatible::OpenAiCompatible;
-pub use provider::{ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request};
+pub use provider::{
+    ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request, Usage,
+};
+pub use routed::Routed;
 pub use steps::Step;
 pub use store::{Entry, Store, StoreError};
 pub use telegram::Telegram;

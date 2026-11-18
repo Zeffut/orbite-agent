@@ -8,7 +8,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn hi() -> Request<'static> {
     static HI: std::sync::LazyLock<Vec<Message>> =
         std::sync::LazyLock::new(|| vec![Message::from_owner("Hi")]);
-    Request { instructions: "", conversation: &HI, actions: &[], images: &[] }
+    Request { instructions: "", conversation: &HI, actions: &[], images: &[], light: false }
 }
 
 #[test]

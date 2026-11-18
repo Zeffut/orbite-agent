@@ -116,7 +116,18 @@ pub fn connect(
     // A local server ignores the key, but the protocol wants one sent.
     let api_key = api_key.unwrap_or("none");
     Ok(match known.speaks {
-        Speaks::OpenAi => Connected::OpenAi(OpenAiCompatible::new(api_root, api_key, model)),
-        Speaks::Anthropic => Connected::Anthropic(Anthropic::new(api_key, model).at(api_root)),
+        Speaks::OpenAi => {
+            Connected::OpenAi(OpenAiCompatible::new(api_root, api_key, model).named(known.name))
+        }
+        Speaks::Anthropic => {
+            let provider = Anthropic::new(api_key, model).at(api_root).named(known.name);
+            // A key that is not tied to a workspace needs one named.
+            Connected::Anthropic(match std::env::var("ORBITE_ANTHROPIC_WORKSPACE") {
+                Ok(workspace) if !workspace.trim().is_empty() => {
+                    provider.in_workspace(workspace.trim())
+                }
+                _ => provider,
+            })
+        }
     })
 }

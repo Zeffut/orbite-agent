@@ -7,15 +7,20 @@ use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// The answer alone: what it cost is checked on its own.
+fn without_cost(reply: Result<Reply, ProviderError>) -> Result<Reply, ProviderError> {
+    reply.map(|reply| Reply { usage: None, ..reply })
+}
+
 fn said(text: &str) -> Reply {
-    Reply { text: text.to_string(), actions: Vec::new(), kept: None }
+    Reply { text: text.to_string(), actions: Vec::new(), kept: None, usage: None }
 }
 
 /// The smallest request: the Owner says hi.
 fn hi() -> Request<'static> {
     static HI: std::sync::LazyLock<Vec<Message>> =
         std::sync::LazyLock::new(|| vec![Message::from_owner("Hi")]);
-    Request { instructions: "", conversation: &HI, actions: &[], images: &[] }
+    Request { instructions: "", conversation: &HI, actions: &[], images: &[], light: false }
 }
 
 fn answer(text: &str) -> ResponseTemplate {
@@ -55,10 +60,11 @@ async fn sends_the_conversation_and_returns_the_models_answer() {
             ],
             actions: &[],
             images: &[],
+            light: false,
         })
         .await;
 
-    assert_eq!(reply, Ok(said("Lyon.")));
+    assert_eq!(without_cost(reply), Ok(said("Lyon.")));
 }
 
 #[tokio::test]
@@ -200,12 +206,13 @@ async fn offers_the_actions_and_returns_the_ones_the_model_asks_for() {
                 name: "run_command".into(),
                 description: "Runs a shell command.".into(),
                 input: json!({ "type": "object", "properties": { "command": { "type": "string" } } }),
-            }], images: &[]
+            }], images: &[],
+            light: false,
         })
         .await;
 
     assert_eq!(
-        reply,
+        without_cost(reply),
         Ok(Reply {
             text: String::new(),
             actions: vec![ActionRequest {
@@ -214,6 +221,7 @@ async fn offers_the_actions_and_returns_the_ones_the_model_asks_for() {
                 input: json!({ "command": "date" }),
             }],
             kept: None,
+            usage: None,
         })
     );
 }
@@ -261,10 +269,11 @@ async fn sends_back_the_actions_asked_for_and_what_came_of_them() {
             ],
             actions: &[],
             images: &[],
+            light: false,
         })
         .await;
 
-    assert_eq!(reply, Ok(said("It is 10:00.")));
+    assert_eq!(without_cost(reply), Ok(said("It is 10:00.")));
 }
 
 #[tokio::test]
@@ -320,8 +329,35 @@ async fn an_image_is_sent_with_the_message_it_came_with() {
             ],
             actions: &[],
             images: &[(2, photo)],
+            light: false,
         })
         .await;
 
-    assert_eq!(reply, Ok(said("A picture.")));
+    assert_eq!(without_cost(reply), Ok(said("A picture.")));
+}
+
+#[tokio::test]
+async fn reports_what_the_answer_cost_when_the_provider_says() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{ "message": { "role": "assistant", "content": "Hi." } }],
+            "usage": { "prompt_tokens": 1000, "completion_tokens": 7, "prompt_tokens_details": { "cached_tokens": 900 } },
+        })))
+        .mount(&server)
+        .await;
+    let provider = OpenAiCompatible::new(server.uri(), "sk-test", "some-model").named("groq");
+
+    let usage = provider.reply(hi()).await.unwrap().usage.unwrap();
+
+    assert_eq!(
+        usage,
+        orbite::Usage {
+            by: "groq".into(),
+            model: "some-model".into(),
+            input: 1000,
+            cached: 900,
+            output: 7
+        }
+    );
 }

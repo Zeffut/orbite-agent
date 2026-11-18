@@ -16,7 +16,7 @@ use crate::subagents::{Report, Subagents};
 use crate::web::Web;
 use crate::{
     ActionRequest, ActionSpec, Answer, Approval, Channel, Message, Provider, ProviderError,
-    Request, Step, Store, StoreError,
+    Request, Step, Store, StoreError, Usage,
 };
 
 /// Who the Agent is, told to the model on every turn.
@@ -165,6 +165,8 @@ pub struct Agent<P> {
     last_active: i64,
     /// False once the model has turned out not to take images.
     sees_images: bool,
+    /// The Provider that gave the latest answer, by name.
+    answered_by: Option<String>,
 }
 
 impl<P: Provider + 'static> Agent<P> {
@@ -191,6 +193,7 @@ impl<P: Provider + 'static> Agent<P> {
             wake_up_pace: 0,
             last_active: 0,
             sees_images: true,
+            answered_by: None,
         }
     }
 
@@ -310,6 +313,12 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
             };
+            if text.trim() == "/usage" {
+                if channel.send(&self.usage()).await.is_err() {
+                    return;
+                }
+                continue;
+            }
             if text.trim() == "/reset" {
                 let said = match self.store.reset() {
                     Ok(()) => "Started afresh. What I remember about you is unchanged.".to_owned(),
@@ -480,6 +489,7 @@ impl<P: Provider + 'static> Agent<P> {
                 conversation: &conversation,
                 actions: &actions,
                 images: &images,
+                light: false,
             };
             let mut said = Vec::new();
             let thinking = patiently(&*self.provider, request, self.host.busy_wait);
@@ -492,7 +502,16 @@ impl<P: Provider + 'static> Agent<P> {
                     }
                     continue;
                 }
-                Attended::Done(Ok(reply)) => reply,
+                Attended::Done(Ok(reply)) => {
+                    if let Some(usage) = &reply.usage {
+                        self.store
+                            .record_usage(&(self.clock)().format("%Y-%m-%d").to_string(), usage)?;
+                        if !self.tell_who_answers(channel, &usage.by).await {
+                            return Ok(false);
+                        }
+                    }
+                    reply
+                }
                 // Most likely a model that does not take images: go on without.
                 Attended::Done(Err(ProviderError::Failed(_))) if !images.is_empty() => {
                     self.sees_images = false;
@@ -731,6 +750,7 @@ impl<P: Provider + 'static> Agent<P> {
             conversation: &conversation,
             actions: &[],
             images: &[],
+            light: true,
         };
         let reply = showing_work(channel, patiently(&*self.provider, request, self.host.busy_wait))
             .await
@@ -1055,6 +1075,7 @@ impl<P: Provider + 'static> Agent<P> {
             conversation: &asked,
             actions: &[],
             images: &[],
+            light: true,
         };
         let Ok(reply) = patiently(&*self.provider, request, self.host.busy_wait).await else {
             return;
@@ -1182,6 +1203,76 @@ impl<P: Provider + 'static> Agent<P> {
             }
         }
         Ok(())
+    }
+
+    /// Tells the Owner, once, when another Provider than the usual one starts
+    /// answering, and when the usual one is back. False once the Channel is
+    /// closed.
+    async fn tell_who_answers(&mut self, channel: &mut impl Channel, by: &str) -> bool {
+        let before = self.answered_by.replace(by.to_owned());
+        let Some(usual) = self.provider.usual().map(str::to_owned) else { return true };
+        let said = match before.as_deref() {
+            Some(before) if before == by => return true,
+            // The first answer since Orbite started: only worth a word when
+            // it does not come from the usual Provider.
+            None if by == usual => return true,
+            _ if by == usual => format!("My usual AI provider ({usual}) is back."),
+            _ => format!("My usual AI provider ({usual}) is not answering: {by} answers for now."),
+        };
+        channel.send(&said).await.is_ok()
+    }
+
+    /// What was used today and over the last seven days, by Provider and model.
+    fn usage(&self) -> String {
+        let today = (self.clock)().date_naive();
+        let since = today - chrono::Days::new(6);
+        let Ok(used) = self.store.usage_since(&since.format("%Y-%m-%d").to_string()) else {
+            return "I could not read what was used.".into();
+        };
+        if used.is_empty() {
+            return "Nothing was used in the last seven days.".into();
+        }
+        let today = today.format("%Y-%m-%d").to_string();
+        let mut shown = String::new();
+        for (title, days) in [("Today", vec![today.as_str()]), ("Last seven days", Vec::new())] {
+            let mut totals: Vec<(String, String, u64, Usage)> = Vec::new();
+            for (day, answers, usage) in &used {
+                if !days.is_empty() && !days.contains(&day.as_str()) {
+                    continue;
+                }
+                match totals
+                    .iter_mut()
+                    .find(|(by, model, _, _)| *by == usage.by && *model == usage.model)
+                {
+                    Some((_, _, count, total)) => {
+                        *count += answers;
+                        total.input += usage.input;
+                        total.cached += usage.cached;
+                        total.output += usage.output;
+                    }
+                    None => totals.push((
+                        usage.by.clone(),
+                        usage.model.clone(),
+                        *answers,
+                        usage.clone(),
+                    )),
+                }
+            }
+            if totals.is_empty() {
+                continue;
+            }
+            shown.push_str(&format!("**{title}**\n"));
+            for (by, model, answers, total) in totals {
+                shown.push_str(&format!(
+                    "- {by} · {model}: {answers} answers, {} tokens read ({} from cache), {} written\n",
+                    grouped(total.input),
+                    grouped(total.cached),
+                    grouped(total.output)
+                ));
+            }
+            shown.push('\n');
+        }
+        shown.trim_end().to_owned()
     }
 
     /// Sends the Owner the file a `send_file` request names; the text is the
@@ -1540,6 +1631,19 @@ fn covered_by_always(action: &ActionRequest) -> String {
         .find_map(|field| action.input[*field].as_str())
         .unwrap_or_default();
     format!("{}: {}", action.name, what.trim())
+}
+
+/// `number` with its thousands set apart, as people write large numbers.
+fn grouped(number: u64) -> String {
+    let digits = number.to_string();
+    let mut written = String::new();
+    for (place, digit) in digits.chars().enumerate() {
+        if place > 0 && (digits.len() - place).is_multiple_of(3) {
+            written.push(',');
+        }
+        written.push(digit);
+    }
+    written
 }
 
 /// A Routine as listed to the model.

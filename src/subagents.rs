@@ -234,6 +234,7 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
             conversation: &conversation,
             actions: &actions,
             images: &[],
+            light: false,
         };
         let reply = match patiently(provider, request, host.busy_wait).await {
             Ok(reply) => reply,
@@ -272,6 +273,7 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
         conversation: &conversation,
         actions: &[],
         images: &[],
+        light: false,
     };
     match patiently(provider, request, host.busy_wait).await {
         Ok(reply) => format!("ran out of steps. Its report so far:\n{}", reply.text),
