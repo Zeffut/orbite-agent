@@ -8,7 +8,7 @@ use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn said(text: &str) -> Reply {
-    Reply { text: text.to_string(), actions: Vec::new() }
+    Reply { text: text.to_string(), actions: Vec::new(), kept: None }
 }
 
 /// The smallest request: the Owner says hi.
@@ -213,6 +213,7 @@ async fn offers_the_actions_and_returns_the_ones_the_model_asks_for() {
                 name: "run_command".into(),
                 input: json!({ "command": "date" }),
             }],
+            kept: None,
         })
     );
 }
@@ -251,6 +252,7 @@ async fn sends_back_the_actions_asked_for_and_what_came_of_them() {
                         name: "run_command".into(),
                         input: json!({ "command": "date" }),
                     }],
+                    kept: None,
                 },
                 Message::Outcome {
                     action: "call_1".into(),

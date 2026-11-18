@@ -239,8 +239,11 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
             Ok(reply) => reply,
             Err(error) => return format!("failed: {}", explain(&error)),
         };
-        conversation
-            .push(Message::Agent { text: reply.text.clone(), actions: reply.actions.clone() });
+        conversation.push(Message::Agent {
+            text: reply.text.clone(),
+            actions: reply.actions.clone(),
+            kept: reply.kept.clone(),
+        });
         if reply.actions.is_empty() {
             return format!("finished. Its report:\n{}", reply.text);
         }

@@ -2,7 +2,7 @@
 
 An open-source personal AI agent that lives on a machine you control, uses the AI you already pay for, and adapts to you over time.
 
-> **Status: early development.** Nothing is installable yet: so far the Agent holds a conversation in a terminal. Version 1.0 is specified in the issue tracker; versions before it are numbered 0.x.
+> **Status: early development.** Nothing is installable yet. The Agent itself works, in a terminal and in Telegram: it acts on its machine behind Approvals, remembers, learns Skills, runs Routines and Sub-agents, reads the web and wakes up by itself. Version 1.0 is specified in the issue tracker; versions before it are numbered 0.x.
 
 ## What 1.0 will be
 
@@ -19,8 +19,10 @@ An open-source personal AI agent that lives on a machine you control, uses the A
 cargo test                                   # the whole test suite
 cargo fmt && cargo clippy --all-targets      # before every commit
 
-# talk to the Agent in a terminal, with any OpenAI-compatible Provider
-ORBITE_API_KEY=... ORBITE_MODEL=... ORBITE_BASE_URL=https://api.openai.com/v1 cargo run -- chat
+# talk to the Agent in a terminal; `cargo run -- providers` lists the Providers known by name
+ORBITE_PROVIDER=openai ORBITE_API_KEY=... ORBITE_MODEL=... cargo run -- chat
+# the same Conversation in Telegram, and in this terminal as well
+ORBITE_TELEGRAM_TOKEN=... ORBITE_TELEGRAM_OWNER=... cargo run -- run --terminal
 # its data lives in ~/.orbite, or in the folder named by ORBITE_HOME
 ```
 

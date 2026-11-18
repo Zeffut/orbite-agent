@@ -3,8 +3,10 @@
 
 mod actions;
 mod agent;
+mod anthropic;
 mod attachments;
 mod both;
+mod catalogue;
 mod channel;
 mod memory;
 mod openai_compatible;
@@ -20,8 +22,10 @@ mod terminal;
 mod web;
 
 pub use agent::Agent;
+pub use anthropic::Anthropic;
 pub use attachments::attached;
 pub use both::Both;
+pub use catalogue::{Connected, KnownProvider, Speaks, connect, known_providers};
 pub use channel::{Answer, Approval, Channel};
 pub use openai_compatible::OpenAiCompatible;
 pub use provider::{ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request};

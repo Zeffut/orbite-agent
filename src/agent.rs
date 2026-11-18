@@ -510,6 +510,7 @@ impl<P: Provider + 'static> Agent<P> {
             self.store.append(&Message::Agent {
                 text: reply.text.clone(),
                 actions: reply.actions.clone(),
+                kept: reply.kept.clone(),
             })?;
             if !reply.text.is_empty() && !self.deliver(channel, &reply.text, initiated).await? {
                 return Ok(false);
@@ -710,7 +711,7 @@ impl<P: Provider + 'static> Agent<P> {
         for (_, message) in left_out {
             let line = match message {
                 Message::Owner(text) => format!("Owner: {text}"),
-                Message::Agent { text, actions } => {
+                Message::Agent { text, actions, .. } => {
                     let acted: Vec<String> = actions
                         .iter()
                         .map(|action| format!("[{} {}]", action.name, action.input))
@@ -1644,6 +1645,12 @@ pub(crate) fn explain(error: &ProviderError) -> String {
             // Providers explain rate limits at length; the start says it all.
             let reason = clip(reason, 160);
             format!("My AI provider is too busy to answer ({reason}). Try again later.")
+        }
+        ProviderError::Declined(reason) => {
+            format!(
+                "The AI model I run on declined this request ({reason}). You can put it another \
+                 way, or have me run on another model."
+            )
         }
         ProviderError::Failed(reason) => {
             format!("My AI provider failed to answer ({reason}). Try again in a moment.")

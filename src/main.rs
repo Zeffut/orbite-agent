@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbite::{Agent, Both, OpenAiCompatible, Store, Telegram, Terminal};
+use orbite::{Agent, Both, Connected, Store, Telegram, Terminal, connect, known_providers};
 use tokio::io::{BufReader, stdin, stdout};
 
 const USAGE: &str = "\
@@ -12,11 +12,13 @@ Usage: orbite <command>
 Commands:
   run    hold the Conversation in Telegram (add --terminal to open it here as well)
   chat   hold the Conversation in this terminal
+  providers  list the Providers known by name
 
 Read from the environment:
-  ORBITE_API_KEY         API Key of the Provider (required)
+  ORBITE_PROVIDER        the Provider, by name (default: openai); see `orbite providers`
+  ORBITE_API_KEY         API Key of the Provider (not needed for one on this machine)
   ORBITE_MODEL           model to use (required)
-  ORBITE_BASE_URL        Provider's API root (default: https://api.openai.com/v1)
+  ORBITE_BASE_URL        the Provider's address, when it is not its usual one
   ORBITE_HOME            folder where the Agent keeps its data (default: ~/.orbite)
   ORBITE_CONTEXT_TOKENS  most tokens sent to the model per turn (default: 60000)
   ORBITE_WAKE_UP_MINUTES minutes between the Agent's own wake-ups, 0 for never (default: 240)
@@ -30,6 +32,16 @@ async fn main() -> ExitCode {
     let outcome = match env::args().nth(1).as_deref() {
         Some("run") => run().await,
         Some("chat") => chat().await,
+        Some("providers") => {
+            for provider in known_providers() {
+                println!("{:<11} {}", provider.name, provider.label);
+            }
+            println!(
+                "{:<11} any server speaking OpenAI's protocol (set ORBITE_BASE_URL)",
+                "custom"
+            );
+            Ok(())
+        }
         _ => Err(USAGE.into()),
     };
     match outcome {
@@ -66,10 +78,15 @@ async fn chat() -> Result<(), Failure> {
 }
 
 /// The Agent of this installation: its Provider and the folder holding its data.
-fn agent() -> Result<Agent<OpenAiCompatible>, Failure> {
-    let api_key = required("ORBITE_API_KEY")?;
+fn agent() -> Result<Agent<Connected>, Failure> {
+    let name = setting("ORBITE_PROVIDER").unwrap_or("openai".into());
     let model = required("ORBITE_MODEL")?;
-    let base_url = setting("ORBITE_BASE_URL").unwrap_or("https://api.openai.com/v1".into());
+    let provider = connect(
+        &name,
+        setting("ORBITE_API_KEY").as_deref(),
+        &model,
+        setting("ORBITE_BASE_URL").as_deref(),
+    )?;
 
     let home = home()?;
     fs::create_dir_all(&home)
@@ -77,7 +94,6 @@ fn agent() -> Result<Agent<OpenAiCompatible>, Failure> {
     let store = Store::open(home.join("orbite.db"))
         .map_err(|error| format!("Could not open the Agent's data: {error}"))?;
 
-    let provider = OpenAiCompatible::new(base_url, api_key, model);
     let wake_ups: u32 = match setting("ORBITE_WAKE_UP_MINUTES") {
         Some(minutes) => minutes.parse().map_err(|_| "ORBITE_WAKE_UP_MINUTES must be a number.")?,
         None => 240,

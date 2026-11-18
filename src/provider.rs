@@ -11,7 +11,15 @@ pub enum Message {
     /// Something the Owner said.
     Owner(String),
     /// Something the Agent said, and the Actions it asked for while saying it.
-    Agent { text: String, actions: Vec<ActionRequest> },
+    Agent {
+        text: String,
+        actions: Vec<ActionRequest>,
+        /// What the Provider that wrote this needs back exactly as it was,
+        /// such as reasoning only it can read, under that Provider's name.
+        /// Nothing else in Orbite looks inside.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kept: Option<Value>,
+    },
     /// What came of the Action whose id is `action`.
     Outcome { action: String, text: String },
     /// Something the Agent is told that its Owner did not say: a Sub-agent's
@@ -25,7 +33,7 @@ impl Message {
     }
 
     pub fn from_agent(text: impl Into<String>) -> Self {
-        Self::Agent { text: text.into(), actions: Vec::new() }
+        Self::Agent { text: text.into(), actions: Vec::new(), kept: None }
     }
 }
 
@@ -65,6 +73,9 @@ pub struct Request<'a> {
 pub struct Reply {
     pub text: String,
     pub actions: Vec<ActionRequest>,
+    /// What the Provider needs back exactly as it was on later turns; see
+    /// [`Message::Agent`].
+    pub kept: Option<Value>,
 }
 
 /// Something that runs AI models for the Agent.
@@ -85,6 +96,8 @@ pub enum ProviderError {
     /// The Provider cannot answer right now but may shortly: a rate limit or
     /// an overload. `retry_after` is the wait it asked for, when it said.
     Busy { reason: String, retry_after: Option<Duration> },
+    /// The model itself declined the request, for the reason given.
+    Declined(String),
     /// The Provider was reached but failed to answer.
     Failed(String),
 }

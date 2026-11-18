@@ -135,7 +135,7 @@ impl Provider for OpenAiCompatible {
         if text.is_empty() && actions.is_empty() {
             return Err(ProviderError::Failed("the answer contained no text".into()));
         }
-        Ok(Reply { text, actions })
+        Ok(Reply { text, actions, kept: None })
     }
 }
 
@@ -143,10 +143,10 @@ impl Provider for OpenAiCompatible {
 fn wire_message(message: &Message) -> Value {
     match message {
         Message::Owner(text) => json!({ "role": "user", "content": text }),
-        Message::Agent { text, actions } if actions.is_empty() => {
+        Message::Agent { text, actions, .. } if actions.is_empty() => {
             json!({ "role": "assistant", "content": text })
         }
-        Message::Agent { text, actions } => {
+        Message::Agent { text, actions, .. } => {
             let calls: Vec<Value> = actions
                 .iter()
                 .map(|action| {

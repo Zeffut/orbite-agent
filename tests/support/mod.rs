@@ -40,7 +40,7 @@ type Responder = Box<dyn Fn(&str, &[Message]) -> Result<Reply, ProviderError> + 
 
 /// A Reply that only says `text`.
 pub fn saying(text: &str) -> Reply {
-    Reply { text: text.to_string(), actions: Vec::new() }
+    Reply { text: text.to_string(), actions: Vec::new(), kept: None }
 }
 
 /// A Reply that asks for one Action.
@@ -48,6 +48,7 @@ pub fn acting(name: &str, input: Value) -> Reply {
     Reply {
         text: String::new(),
         actions: vec![ActionRequest { id: format!("{name}-0"), name: name.to_string(), input }],
+        kept: None,
     }
 }
 
@@ -61,7 +62,7 @@ impl ScriptedProvider {
     }
 
     pub fn then(&self, outcome: Result<String, ProviderError>) -> &Self {
-        let outcome = outcome.map(|text| Reply { text, actions: Vec::new() });
+        let outcome = outcome.map(|text| Reply { text, actions: Vec::new(), kept: None });
         self.script.lock().unwrap().push_back(Outcome::Now(outcome));
         self
     }
@@ -85,7 +86,7 @@ impl ScriptedProvider {
                 input,
             })
             .collect();
-        let reply = Reply { text: text.to_string(), actions };
+        let reply = Reply { text: text.to_string(), actions, kept: None };
         self.script.lock().unwrap().push_back(Outcome::Now(Ok(reply)));
         self
     }
