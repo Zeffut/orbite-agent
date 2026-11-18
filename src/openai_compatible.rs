@@ -1,8 +1,10 @@
 use std::time::Duration;
 
+use base64::Engine;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::attachments::image_type;
 use crate::{ActionRequest, Message, Provider, ProviderError, Reply, Request};
 
 /// A Provider reached with an API Key over the chat-completions protocol that
@@ -36,7 +38,26 @@ impl Provider for OpenAiCompatible {
         if !request.instructions.is_empty() {
             messages.push(json!({ "role": "system", "content": request.instructions }));
         }
-        messages.extend(request.conversation.iter().map(wire_message));
+        for (place, message) in request.conversation.iter().enumerate() {
+            let mut written = wire_message(message);
+            // A message with images becomes a list of parts: its text, then each image.
+            let mut parts = Vec::new();
+            for (_, image) in request.images.iter().filter(|(at, _)| *at == place) {
+                let (Some(kind), Ok(bytes)) = (image_type(image), std::fs::read(image)) else {
+                    continue;
+                };
+                let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+                parts.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": format!("data:{kind};base64,{encoded}") },
+                }));
+            }
+            if !parts.is_empty() && written["role"] == "user" {
+                parts.insert(0, json!({ "type": "text", "text": written["content"] }));
+                written["content"] = Value::Array(parts);
+            }
+            messages.push(written);
+        }
         let mut body = json!({ "model": self.model, "messages": messages });
         if !request.actions.is_empty() {
             body["tools"] = request

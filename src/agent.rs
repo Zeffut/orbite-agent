@@ -7,6 +7,7 @@ use chrono::{DateTime, FixedOffset, Local, NaiveTime};
 use tokio::sync::mpsc;
 
 use crate::actions::{Host, Review};
+use crate::attachments::{attachments, is_showable_image};
 use crate::memory::Memory;
 use crate::routines::{self, Routine};
 use crate::skills::Skills;
@@ -33,6 +34,10 @@ try to reach the same end another way.
 With `schedule_routine` you set work for later: a reminder or a follow-up \
 once, or something recurring. Use it whenever your Owner asks to be reminded \
 or wants something done regularly, rather than promising to remember.
+
+When your Owner sends a file, their message ends with a line such as \
+[attached: /path/to/file]: the file is on this machine, for you to read or \
+use. Images sent lately are also shown to you directly.
 
 A notice is something you are told that your Owner did not write, such as \
 the report of a sub-agent or of a routine's run: your Owner has not seen it, so tell \
@@ -94,6 +99,14 @@ few short paragraphs at most. Reply with the summary only.";
 /// this pace while the Agent works.
 const WORKING_SIGNAL_EVERY: Duration = Duration::from_secs(4);
 
+/// An image is shown to the model while the message it came with is among
+/// this many latest entries of the Conversation.
+const ENTRIES_SHOWING_IMAGES: usize = 6;
+
+/// Added, for the model only, to a message whose image it cannot be shown.
+const BLIND_NOTE: &str = "\n[An image came with this, but the model you run on cannot see images: \
+tell your Owner you cannot look at it.]";
+
 /// How many of the latest entries of the Conversation a Wake-up is shown.
 const WAKE_UP_SEES: usize = 12;
 
@@ -150,6 +163,8 @@ pub struct Agent<P> {
     wake_up_pace: u32,
     /// When the Owner last wrote or the Agent last woke up, in seconds since 1970.
     last_active: i64,
+    /// False once the model has turned out not to take images.
+    sees_images: bool,
 }
 
 impl<P: Provider + 'static> Agent<P> {
@@ -175,6 +190,7 @@ impl<P: Provider + 'static> Agent<P> {
             owed: false,
             wake_up_pace: 0,
             last_active: 0,
+            sees_images: true,
         }
     }
 
@@ -424,6 +440,7 @@ impl<P: Provider + 'static> Agent<P> {
     ) -> Result<bool, StoreError> {
         let mut actions = self.host.specs();
         actions.push(search_spec());
+        actions.push(send_file_spec());
         actions.extend(Subagents::specs());
         actions.extend(routines::specs());
         actions.push(quiet_hours_spec());
@@ -441,10 +458,28 @@ impl<P: Provider + 'static> Agent<P> {
                 conversation.insert(0, Message::from_owner(SUMMARISED_NOTE));
             }
             let instructions = self.instructions();
+            // Images the Owner sent lately are shown to the model; older
+            // ones are costly to send again and stay as a path it can use.
+            let mut images = Vec::new();
+            let recent = conversation.len().saturating_sub(ENTRIES_SHOWING_IMAGES);
+            for (place, message) in conversation.iter_mut().enumerate().skip(recent) {
+                let Message::Owner(text) = message else { continue };
+                let sent: Vec<PathBuf> =
+                    attachments(text).filter(|file| is_showable_image(file)).collect();
+                if sent.is_empty() {
+                    continue;
+                }
+                if self.sees_images {
+                    images.extend(sent.into_iter().map(|file| (place, file)));
+                } else {
+                    text.push_str(BLIND_NOTE);
+                }
+            }
             let request = Request {
                 instructions: &instructions,
                 conversation: &conversation,
                 actions: &actions,
+                images: &images,
             };
             let mut said = Vec::new();
             let thinking = patiently(&*self.provider, request, self.host.busy_wait);
@@ -458,6 +493,11 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
                 Attended::Done(Ok(reply)) => reply,
+                // Most likely a model that does not take images: go on without.
+                Attended::Done(Err(ProviderError::Failed(_))) if !images.is_empty() => {
+                    self.sees_images = false;
+                    continue;
+                }
                 Attended::Done(Err(error)) => {
                     // The Owner will say it again: a message the Provider
                     // failed on must not stay and be answered twice.
@@ -485,6 +525,14 @@ impl<P: Provider + 'static> Agent<P> {
                 let outcome = |text: String| Message::Outcome { action: action.id.clone(), text };
                 if let Some(why) = left_out {
                     self.store.append(&outcome(why.into()))?;
+                    continue;
+                }
+                if action.name == "send_file" {
+                    let text = match self.send_file(channel, action).await {
+                        Some(text) => text,
+                        None => return Ok(false),
+                    };
+                    self.store.append(&outcome(text))?;
                     continue;
                 }
                 if action.name == "search_conversation" {
@@ -680,6 +728,7 @@ impl<P: Provider + 'static> Agent<P> {
             instructions: SUMMARY_INSTRUCTIONS,
             conversation: &conversation,
             actions: &[],
+            images: &[],
         };
         let reply = showing_work(channel, patiently(&*self.provider, request, self.host.busy_wait))
             .await
@@ -785,6 +834,21 @@ fn quiet_hours_spec() -> ActionSpec {
                 "until": { "type": "string", "description": "When they end, as HH:MM in your Owner's time." },
             },
             "required": ["from", "until"],
+        }),
+    }
+}
+
+fn send_file_spec() -> ActionSpec {
+    ActionSpec {
+        name: "send_file".into(),
+        description: "Sends your Owner a file from this machine, in the conversation.".into(),
+        input: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Absolute, or relative to your workspace folder." },
+                "caption": { "type": "string", "description": "A few words to go with it." },
+            },
+            "required": ["path"],
         }),
     }
 }
@@ -972,7 +1036,12 @@ impl<P: Provider + 'static> Agent<P> {
         let instructions =
             format!("{WAKE_UP_INSTRUCTIONS}\n\nIt is {}.", now.format("%A %Y-%m-%d %H:%M"));
         let asked = [Message::Owner(material)];
-        let request = Request { instructions: &instructions, conversation: &asked, actions: &[] };
+        let request = Request {
+            instructions: &instructions,
+            conversation: &asked,
+            actions: &[],
+            images: &[],
+        };
         let Ok(reply) = patiently(&*self.provider, request, self.host.busy_wait).await else {
             return;
         };
@@ -1099,6 +1168,45 @@ impl<P: Provider + 'static> Agent<P> {
             }
         }
         Ok(())
+    }
+
+    /// Sends the Owner the file a `send_file` request names; the text is the
+    /// Outcome, or `None` once the Channel is closed.
+    async fn send_file(
+        &mut self,
+        channel: &mut impl Channel,
+        request: &ActionRequest,
+    ) -> Option<String> {
+        let Some(path) = request.input["path"].as_str() else {
+            return Some("The input of send_file is not valid: missing field `path`.".into());
+        };
+        let caption = request.input["caption"].as_str().unwrap_or_default();
+        let file = self.host.locate(path);
+        if !file.is_file() {
+            return Some(format!("There is no file at {path}."));
+        }
+        // The Owner's own secret going to the Owner is no leak, but it does
+        // pass through the Channel's servers: they decide.
+        if crate::actions::looks_secret(path) {
+            let approval = Approval {
+                summary: "Send a file".into(),
+                detail: format!(
+                    "{path}\n\nThis may be a secret, and it would pass through the Channel's servers."
+                ),
+                critical: true,
+                ..Approval::default()
+            };
+            match channel.ask(&approval).await {
+                Ok(Answer::Allowed | Answer::AlwaysAllowed) => {}
+                Ok(_) => return Some("The Owner did not allow this file to be sent.".into()),
+                Err(_) => return None,
+            }
+        }
+        channel.doing(&Step::of(request)).await;
+        Some(match channel.send_file(&file, caption).await {
+            Ok(()) => format!("Sent {path} to your Owner."),
+            Err(error) => format!("Could not send {path}: {error}."),
+        })
     }
 
     /// The Owner's Permission Level.

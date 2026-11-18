@@ -25,9 +25,13 @@ pub struct ScriptedProvider {
     asked: Arc<Mutex<Vec<Vec<Message>>>>,
     instructed: Arc<Mutex<Vec<String>>>,
     offered: Arc<Mutex<Vec<Vec<String>>>>,
+    shown_images: Arc<Mutex<Vec<Images>>>,
     otherwise: Arc<Mutex<Option<Responder>>>,
     held: Arc<Mutex<Option<Hold>>>,
 }
+
+/// The images shown on one call, each with the place of its message.
+type Images = Vec<(usize, std::path::PathBuf)>;
 
 /// Calls whose instructions contain the text wait for the signal.
 type Hold = (String, tokio::sync::watch::Receiver<bool>);
@@ -141,6 +145,12 @@ impl ScriptedProvider {
         self.instructed.lock().unwrap().last().cloned().expect("the Provider was never asked")
     }
 
+    /// The images shown to the model on its latest call, each with the place
+    /// in the Conversation of the message it came with.
+    pub fn last_images(&self) -> Vec<(usize, std::path::PathBuf)> {
+        self.shown_images.lock().unwrap().last().cloned().expect("the Provider was never asked")
+    }
+
     /// The names of the Actions on offer on the Provider's latest call.
     pub fn last_offered(&self) -> Vec<String> {
         self.offered.lock().unwrap().last().cloned().expect("the Provider was never asked")
@@ -156,6 +166,7 @@ impl Provider for ScriptedProvider {
     async fn reply(&self, request: Request<'_>) -> Result<Reply, ProviderError> {
         self.asked.lock().unwrap().push(request.conversation.to_vec());
         self.instructed.lock().unwrap().push(request.instructions.to_string());
+        self.shown_images.lock().unwrap().push(request.images.to_vec());
         self.offered
             .lock()
             .unwrap()
@@ -220,6 +231,16 @@ impl Channel for MemoryChannel {
 
     async fn interruption(&mut self) -> Option<String> {
         self.from_owner.recv().await
+    }
+
+    async fn send_file(&mut self, file: &std::path::Path, caption: &str) -> std::io::Result<()> {
+        let content = std::fs::read_to_string(file)?;
+        self.to_owner
+            .send(format!(
+                "(file {}: {content}) {caption}",
+                file.file_name().unwrap().to_string_lossy()
+            ))
+            .map_err(std::io::Error::other)
     }
 
     async fn doing(&mut self, step: &Step) {

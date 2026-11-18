@@ -2,6 +2,7 @@ mod formatting;
 
 use std::collections::VecDeque;
 use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,13 +12,16 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::{Answer, Approval, Channel, Step};
+use crate::{Answer, Approval, Channel, Step, attached};
 
 /// How long Telegram may hold a request open waiting for a message.
 const LONG_POLL: Duration = Duration::from_secs(50);
 
 /// The longest text Telegram accepts in one message, in UTF-16 units.
 const MESSAGE_LIMIT: usize = 4096;
+
+/// The largest file Telegram lets a bot fetch.
+const FETCH_LIMIT: u64 = 20_000_000;
 
 /// How many steps of the work under way are shown at once.
 const STEPS_SHOWN: usize = 5;
@@ -45,6 +49,8 @@ struct Bot {
     token: String,
     owner: i64,
     retry_after: Duration,
+    /// Where the files the Owner sends are saved, when there is somewhere to.
+    inbox: Option<PathBuf>,
 }
 
 /// Something the Owner sent to the bot.
@@ -70,6 +76,7 @@ impl Telegram {
                 token: token.into(),
                 owner,
                 retry_after: Duration::from_secs(3),
+                inbox: None,
             }),
             listening: None,
             waiting: VecDeque::new(),
@@ -81,6 +88,12 @@ impl Telegram {
     /// Talks to a Bot API server other than Telegram's own.
     pub fn at(mut self, api_root: impl Into<String>) -> Self {
         self.bot_mut().api_root = api_root.into().trim_end_matches('/').to_owned();
+        self
+    }
+
+    /// The folder where the files the Owner sends are saved.
+    pub fn saving_files_in(mut self, inbox: impl Into<PathBuf>) -> Self {
+        self.bot_mut().inbox = Some(inbox.into());
         self
     }
 
@@ -146,6 +159,78 @@ impl Bot {
         }
     }
 
+    /// Fetches a file the Owner sent and saves it in the inbox, under a name
+    /// that stays inside it and replaces nothing. The text explains a failure
+    /// to the Owner.
+    async fn fetch(&self, file_id: &str, name: &str, size: u64) -> Result<PathBuf, String> {
+        let Some(inbox) = &self.inbox else {
+            return Err("I have nowhere to keep files yet, so I can only read text.".into());
+        };
+        if size > FETCH_LIMIT {
+            return Err(format!(
+                "That file is too big for me to fetch: Telegram lets bots fetch files up to {} MB.",
+                FETCH_LIMIT / 1_000_000
+            ));
+        }
+        let failed =
+            |error: &dyn std::fmt::Display| format!("I could not fetch that file ({error}).");
+        let located: Located = self
+            .call("getFile", json!({ "file_id": file_id }))
+            .await
+            .map_err(|error| failed(&error))?;
+        let response = self
+            .http
+            .get(format!("{}/file/bot{}/{}", self.api_root, self.token, located.file_path))
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| failed(&error))?;
+        let content = response.bytes().await.map_err(|error| failed(&error))?;
+
+        // Only the last part of the name is kept, so it cannot lead elsewhere.
+        let name = Path::new(name).file_name().and_then(|name| name.to_str()).unwrap_or("file");
+        let (stem, extension) = match name.rsplit_once('.') {
+            Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
+            _ => (name, String::new()),
+        };
+        std::fs::create_dir_all(inbox).map_err(|error| failed(&error))?;
+        let mut place = inbox.join(name);
+        let mut copy = 2;
+        while place.exists() {
+            place = inbox.join(format!("{stem}-{copy}{extension}"));
+            copy += 1;
+        }
+        std::fs::write(&place, &content).map_err(|error| failed(&error))?;
+        Ok(place)
+    }
+
+    /// Sends the Owner `file` as a document, with `caption`.
+    async fn upload(&self, file: &Path, caption: &str) -> io::Result<()> {
+        let name = file.file_name().and_then(|name| name.to_str()).unwrap_or("file").to_owned();
+        let content = std::fs::read(file)?;
+        let form = reqwest::multipart::Form::new()
+            .text("chat_id", self.owner.to_string())
+            .text("caption", caption.to_owned())
+            .part("document", reqwest::multipart::Part::bytes(content).file_name(name));
+        let response = self
+            .http
+            .post(format!("{}/bot{}/sendDocument", self.api_root, self.token))
+            .timeout(Duration::from_secs(300))
+            .multipart(form)
+            .send()
+            .await
+            .map_err(io::Error::other)?;
+        let reply: Reply<Value> = response.json().await.map_err(io::Error::other)?;
+        if reply.ok {
+            Ok(())
+        } else {
+            Err(io::Error::other(
+                reply.description.unwrap_or_else(|| "Telegram refused the file".into()),
+            ))
+        }
+    }
+
     /// Sends `text` to the Owner, formatted, in as many messages as it takes.
     async fn say(&self, text: &str) -> io::Result<()> {
         for part in split(text, MESSAGE_LIMIT) {
@@ -203,12 +288,36 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
                     eprintln!("Telegram: ignored a message that is not from the Owner");
                     continue;
                 }
-                match message.text {
-                    Some(text) => Sent::Text(text),
-                    None => {
-                        let _ = bot.say("I can only read text for now.").await;
+                // A file, in the largest size Telegram offers of a photo.
+                let file = match (message.document, message.photo.and_then(|mut sizes| sizes.pop()))
+                {
+                    (Some(document), _) => {
+                        let name = document
+                            .file_name
+                            .unwrap_or_else(|| format!("file-{}", update.update_id));
+                        Some((document.file_id, name, document.file_size.unwrap_or(0)))
+                    }
+                    (None, Some(photo)) => {
+                        let name = format!("photo-{}.jpg", update.update_id);
+                        Some((photo.file_id, name, photo.file_size.unwrap_or(0)))
+                    }
+                    (None, None) => None,
+                };
+                let words = message.text.or(message.caption).unwrap_or_default();
+                match file {
+                    None if words.is_empty() => {
+                        let _ = bot.say("I can only read text and files for now.").await;
                         continue;
                     }
+                    None => Sent::Text(words),
+                    Some((file_id, name, size)) => match bot.fetch(&file_id, &name, size).await {
+                        Ok(saved) if words.is_empty() => Sent::Text(attached(&saved)),
+                        Ok(saved) => Sent::Text(format!("{words}\n{}", attached(&saved))),
+                        Err(explanation) => {
+                            let _ = bot.say(&explanation).await;
+                            continue;
+                        }
+                    },
                 }
             } else {
                 continue;
@@ -240,6 +349,11 @@ impl Channel for Telegram {
     async fn send(&mut self, text: &str) -> io::Result<()> {
         self.clear_progress().await;
         self.bot.say(text).await
+    }
+
+    async fn send_file(&mut self, file: &Path, caption: &str) -> io::Result<()> {
+        self.clear_progress().await;
+        self.bot.upload(file, caption).await
     }
 
     async fn doing(&mut self, step: &Step) {
@@ -398,6 +512,23 @@ struct Incoming {
     from: Option<Account>,
     chat: Account,
     text: Option<String>,
+    caption: Option<String>,
+    document: Option<Attached>,
+    photo: Option<Vec<Attached>>,
+}
+
+/// A file as Telegram describes it.
+#[derive(Deserialize)]
+struct Attached {
+    file_id: String,
+    file_name: Option<String>,
+    file_size: Option<u64>,
+}
+
+/// Where Telegram keeps a file to fetch.
+#[derive(Deserialize)]
+struct Located {
+    file_path: String,
 }
 
 #[derive(Deserialize)]

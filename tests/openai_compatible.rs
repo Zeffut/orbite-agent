@@ -15,7 +15,7 @@ fn said(text: &str) -> Reply {
 fn hi() -> Request<'static> {
     static HI: std::sync::LazyLock<Vec<Message>> =
         std::sync::LazyLock::new(|| vec![Message::from_owner("Hi")]);
-    Request { instructions: "", conversation: &HI, actions: &[] }
+    Request { instructions: "", conversation: &HI, actions: &[], images: &[] }
 }
 
 fn answer(text: &str) -> ResponseTemplate {
@@ -54,6 +54,7 @@ async fn sends_the_conversation_and_returns_the_models_answer() {
                 Message::from_owner("Where do I live?"),
             ],
             actions: &[],
+            images: &[],
         })
         .await;
 
@@ -199,7 +200,7 @@ async fn offers_the_actions_and_returns_the_ones_the_model_asks_for() {
                 name: "run_command".into(),
                 description: "Runs a shell command.".into(),
                 input: json!({ "type": "object", "properties": { "command": { "type": "string" } } }),
-            }],
+            }], images: &[]
         })
         .await;
 
@@ -257,6 +258,7 @@ async fn sends_back_the_actions_asked_for_and_what_came_of_them() {
                 },
             ],
             actions: &[],
+            images: &[],
         })
         .await;
 
@@ -280,4 +282,44 @@ async fn action_input_that_is_not_valid_json_is_reported_as_a_failure() {
     let reply = provider.reply(hi()).await;
 
     assert!(matches!(reply, Err(ProviderError::Failed(_))), "{reply:?}");
+}
+
+#[tokio::test]
+async fn an_image_is_sent_with_the_message_it_came_with() {
+    let folder = tempfile::tempdir().unwrap();
+    let photo = folder.path().join("photo.png");
+    std::fs::write(&photo, [0x89, b'P', b'N', b'G']).unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_json(json!({
+            "model": "some-model",
+            "messages": [
+                { "role": "user", "content": "Earlier." },
+                { "role": "assistant", "content": "Yes." },
+                { "role": "user", "content": [
+                    { "type": "text", "text": "What is this?" },
+                    { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw==" } },
+                ] },
+            ]
+        })))
+        .respond_with(answer("A picture."))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let provider = OpenAiCompatible::new(server.uri(), "sk-test", "some-model");
+
+    let reply = provider
+        .reply(Request {
+            instructions: "",
+            conversation: &[
+                Message::from_owner("Earlier."),
+                Message::from_agent("Yes."),
+                Message::from_owner("What is this?"),
+            ],
+            actions: &[],
+            images: &[(2, photo)],
+        })
+        .await;
+
+    assert_eq!(reply, Ok(said("A picture.")));
 }

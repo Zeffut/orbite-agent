@@ -47,7 +47,8 @@ async fn run() -> Result<(), Failure> {
         .parse()
         .map_err(|_| "ORBITE_TELEGRAM_OWNER must be a numeric Telegram account id.")?;
     let mut agent = agent()?;
-    agent.converse(&mut Telegram::new(token, owner)).await;
+    let mut telegram = Telegram::new(token, owner).saving_files_in(home()?.join("workspace/inbox"));
+    agent.converse(&mut telegram).await;
     Ok(())
 }
 
@@ -63,10 +64,7 @@ fn agent() -> Result<Agent<OpenAiCompatible>, Failure> {
     let model = required("ORBITE_MODEL")?;
     let base_url = setting("ORBITE_BASE_URL").unwrap_or("https://api.openai.com/v1".into());
 
-    let home = match setting("ORBITE_HOME") {
-        Some(home) => PathBuf::from(home),
-        None => PathBuf::from(required("HOME")?).join(".orbite"),
-    };
+    let home = home()?;
     fs::create_dir_all(&home)
         .map_err(|error| format!("Could not create {}: {error}", home.display()))?;
     let store = Store::open(home.join("orbite.db"))
@@ -87,6 +85,14 @@ fn agent() -> Result<Agent<OpenAiCompatible>, Failure> {
         .learning_in(home.join("skills"))
         .keeping_context_under(context)
         .waking_up_every_minutes(wake_ups))
+}
+
+/// The folder that holds everything of this installation.
+fn home() -> Result<PathBuf, Failure> {
+    Ok(match setting("ORBITE_HOME") {
+        Some(home) => PathBuf::from(home),
+        None => PathBuf::from(required("HOME")?).join(".orbite"),
+    })
 }
 
 fn required(name: &str) -> Result<String, Failure> {

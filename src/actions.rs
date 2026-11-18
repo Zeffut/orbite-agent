@@ -435,7 +435,7 @@ impl Host {
 
     /// `path` as the Host sees it: `~` is the home folder, and a relative
     /// path starts in the workspace.
-    fn locate(&self, path: &str) -> PathBuf {
+    pub(crate) fn locate(&self, path: &str) -> PathBuf {
         if let Some(rest) = path.strip_prefix("~/")
             && let Some(home) = std::env::var_os("HOME")
         {
@@ -671,7 +671,7 @@ fn is_critical(command: &str) -> bool {
 }
 
 /// True when `text` names something that is probably a secret.
-fn looks_secret(text: &str) -> bool {
+pub(crate) fn looks_secret(text: &str) -> bool {
     const SECRET: &[&str] = &[
         ".ssh",
         ".gnupg",

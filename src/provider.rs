@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,9 @@ pub struct Request<'a> {
     pub instructions: &'a str,
     pub conversation: &'a [Message],
     pub actions: &'a [ActionSpec],
+    /// Images to show the model, each with the place in `conversation` of the
+    /// message it came with.
+    pub images: &'a [(usize, PathBuf)],
 }
 
 /// What the model says next, and the Actions it asks for.

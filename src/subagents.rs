@@ -229,8 +229,12 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
         .collect();
     let mut conversation = vec![Message::from_owner(task)];
     for _ in 0..steps {
-        let request =
-            Request { instructions: INSTRUCTIONS, conversation: &conversation, actions: &actions };
+        let request = Request {
+            instructions: INSTRUCTIONS,
+            conversation: &conversation,
+            actions: &actions,
+            images: &[],
+        };
         let reply = match patiently(provider, request, host.busy_wait).await {
             Ok(reply) => reply,
             Err(error) => return format!("failed: {}", explain(&error)),
@@ -260,7 +264,12 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
     conversation.push(Message::from_owner(
         "You are out of steps. Do nothing more: report now what you found and what is left to do.",
     ));
-    let request = Request { instructions: INSTRUCTIONS, conversation: &conversation, actions: &[] };
+    let request = Request {
+        instructions: INSTRUCTIONS,
+        conversation: &conversation,
+        actions: &[],
+        images: &[],
+    };
     match patiently(provider, request, host.busy_wait).await {
         Ok(reply) => format!("ran out of steps. Its report so far:\n{}", reply.text),
         Err(error) => format!("ran out of steps, then failed: {}", explain(&error)),

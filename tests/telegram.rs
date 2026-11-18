@@ -586,3 +586,154 @@ async fn a_critical_action_cannot_be_allowed_for_always() {
         ]])
     );
 }
+
+// --- Files and images ---
+
+fn document_from(update_id: i64, name: &str, size: u64, caption: Option<&str>) -> Value {
+    json!({
+        "update_id": update_id,
+        "message": {
+            "message_id": update_id,
+            "from": { "id": OWNER, "is_bot": false, "first_name": "Owner" },
+            "chat": { "id": OWNER, "type": "private" },
+            "document": { "file_id": "doc-1", "file_unique_id": "u1", "file_name": name, "file_size": size },
+            "caption": caption,
+        }
+    })
+}
+
+/// A fake Bot API delivering `updates` once and serving one file.
+async fn telegram_with_file(updates: Vec<Value>, content: &'static [u8]) -> MockServer {
+    let server = telegram_delivering(updates).await;
+    Mock::given(path("/botTOKEN/getFile"))
+        .respond_with(ok(json!({ "file_id": "x", "file_path": "documents/file_7.bin" })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/file/botTOKEN/documents/file_7.bin"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(content))
+        .mount(&server)
+        .await;
+    server
+}
+
+async fn received(channel: &mut Telegram) -> String {
+    tokio::time::timeout(Duration::from_secs(5), channel.receive())
+        .await
+        .expect("nothing was received")
+        .expect("the Channel closed")
+}
+
+#[tokio::test]
+async fn a_document_the_owner_sends_is_saved_and_handed_over_with_its_caption() {
+    let inbox = tempfile::tempdir().unwrap();
+    let server = telegram_with_file(
+        vec![document_from(100, "report.txt", 17, Some("Summarise this."))],
+        b"Sales rose by 4%.",
+    )
+    .await;
+    let mut channel = telegram(&server).saving_files_in(inbox.path());
+
+    let said = received(&mut channel).await;
+
+    let saved = inbox.path().join("report.txt");
+    assert_eq!(std::fs::read(&saved).unwrap(), b"Sales rose by 4%.");
+    assert_eq!(said, format!("Summarise this.\n{}", orbite::attached(&saved)));
+}
+
+#[tokio::test]
+async fn a_photo_the_owner_sends_is_saved_in_its_largest_size() {
+    let inbox = tempfile::tempdir().unwrap();
+    let photo = json!({
+        "update_id": 100,
+        "message": {
+            "message_id": 100,
+            "from": { "id": OWNER, "is_bot": false, "first_name": "Owner" },
+            "chat": { "id": OWNER, "type": "private" },
+            "photo": [
+                { "file_id": "small", "file_unique_id": "a", "width": 90, "height": 90, "file_size": 1000 },
+                { "file_id": "large", "file_unique_id": "b", "width": 1280, "height": 1280, "file_size": 90000 },
+            ],
+        }
+    });
+    let server = telegram_with_file(vec![photo], b"jpeg bytes").await;
+    let mut channel = telegram(&server).saving_files_in(inbox.path());
+
+    let said = received(&mut channel).await;
+
+    let saved = inbox.path().join("photo-100.jpg");
+    assert_eq!(std::fs::read(&saved).unwrap(), b"jpeg bytes");
+    assert_eq!(said, orbite::attached(&saved));
+    let asked = server.received_requests().await.unwrap();
+    let get_file = asked.iter().find(|request| request.url.path().ends_with("/getFile")).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&get_file.body).unwrap(),
+        json!({ "file_id": "large" })
+    );
+}
+
+#[tokio::test]
+async fn a_file_name_cannot_lead_outside_the_inbox_or_replace_an_earlier_file() {
+    let home = tempfile::tempdir().unwrap();
+    let inbox = home.path().join("inbox");
+    std::fs::create_dir_all(&inbox).unwrap();
+    std::fs::write(inbox.join("report.txt"), "earlier").unwrap();
+    let server = telegram_with_file(
+        vec![
+            document_from(100, "../../report.txt", 3, None),
+            document_from(101, "report.txt", 3, None),
+        ],
+        b"new",
+    )
+    .await;
+    let mut channel = telegram(&server).saving_files_in(&inbox);
+
+    let first = received(&mut channel).await;
+    let second = received(&mut channel).await;
+
+    assert_eq!(std::fs::read_to_string(inbox.join("report.txt")).unwrap(), "earlier");
+    assert!(!home.path().join("report.txt").exists());
+    assert_ne!(first, second, "each file gets a place of its own");
+    for entry in std::fs::read_dir(home.path()).unwrap() {
+        assert_eq!(entry.unwrap().file_name(), "inbox");
+    }
+}
+
+#[tokio::test]
+async fn a_file_too_big_to_fetch_is_refused_with_the_reason() {
+    let inbox = tempfile::tempdir().unwrap();
+    let server =
+        telegram_with_file(vec![document_from(100, "film.mkv", 900_000_000, None)], b"").await;
+    let provider = ScriptedProvider::default();
+    let mut channel = telegram(&server).saving_files_in(inbox.path());
+    tokio::spawn(
+        async move { Agent::new(provider, Store::in_memory()).converse(&mut channel).await },
+    );
+
+    let calls = sent_messages(&server, 1).await;
+
+    assert!(texts(&calls)[0].contains("20 MB"), "{calls:?}");
+    assert_eq!(std::fs::read_dir(inbox.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn the_agent_sends_a_file_as_a_document_with_its_caption() {
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("summary.txt");
+    std::fs::write(&file, "All good.").unwrap();
+    let server = telegram_accepting().await;
+    let mut channel = telegram(&server);
+
+    channel.send_file(&file, "Here it is.").await.unwrap();
+
+    let asked = server.received_requests().await.unwrap();
+    let upload = asked
+        .iter()
+        .find(|request| request.url.path().ends_with("/sendDocument"))
+        .expect("no upload");
+    let body = String::from_utf8_lossy(&upload.body);
+    assert!(body.contains("All good."), "the file's content is uploaded");
+    assert!(body.contains("filename=\"summary.txt\""), "{body}");
+    assert!(body.contains("Here it is."), "{body}");
+    assert!(body.contains(&OWNER.to_string()));
+}

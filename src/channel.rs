@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::io;
+use std::path::Path;
 
 use crate::Step;
 
@@ -50,6 +51,17 @@ pub trait Channel: Send {
     /// cannot listen while the Agent works never yields anything.
     fn interruption(&mut self) -> impl Future<Output = Option<String>> + Send {
         std::future::pending()
+    }
+
+    /// Sends the Owner a file, with a few words. A Channel that cannot
+    /// carry files says so.
+    fn send_file(
+        &mut self,
+        file: &Path,
+        caption: &str,
+    ) -> impl Future<Output = io::Result<()>> + Send {
+        let _ = (file, caption);
+        async { Err(io::Error::other("this Channel cannot carry files")) }
     }
 
     /// Shows the Owner what the Agent is starting to do.

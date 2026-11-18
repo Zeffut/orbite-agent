@@ -47,6 +47,11 @@ impl Step {
             "resume_routine" => ("⏰", format!("Resuming the routine {}", field("name"))),
             "remove_routine" => ("⏰", format!("Removing the routine {}", field("name"))),
             "run_routine" => ("⏰", format!("Trying out the routine {}", field("name"))),
+            "send_file" => {
+                let path = field("path");
+                let name = path.rsplit('/').next().unwrap_or_default().to_owned();
+                ("📎", format!("Sending {name}"))
+            }
             "set_quiet_hours" => ("🌙", "Setting quiet hours".to_owned()),
             other => ("⚙️", other.replace('_', " ")),
         };
