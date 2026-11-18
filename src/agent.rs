@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::actions::{Host, Review};
+use crate::memory::Memory;
 use crate::{Channel, Message, Provider, ProviderError, Request, Store, StoreError};
 
 /// Who the Agent is, told to the model on every turn.
@@ -18,6 +19,22 @@ would do, with buttons to allow or deny it. When an action is denied, do not \
 try to reach the same end another way.
 
 Answer in the language your Owner writes in. Be direct and brief.";
+
+const MEMORY_INSTRUCTIONS: &str = "\
+## Your memory
+
+Your memory outlives every conversation. Use `remember` for what will still \
+matter later about your Owner (who they are, what they prefer, what they are \
+working on, how they want things done), and not for passing details. Keep one \
+topic per entry, under a name that says what it is about: their name, their \
+studies and their preferences are three entries, not one.
+
+To correct an entry, or to drop only part of it, `remember` it again under the \
+same name with the text as it should now read. Use `forget` only when the \
+whole entry must go. Your Owner can read all of it, so tell them plainly what \
+you remember when asked.
+
+What you remember now, as name: text.";
 
 /// Channels show a working signal for a few seconds only; it is renewed at
 /// this pace while the Agent works.
@@ -39,6 +56,7 @@ impl<P: Provider> Agent<P> {
         let host = Host {
             workspace: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             command_timeout: Duration::from_secs(120),
+            memory: None,
         };
         Self { provider, store, host }
     }
@@ -46,6 +64,12 @@ impl<P: Provider> Agent<P> {
     /// The folder where the Agent's commands run and its relative paths start.
     pub fn working_in(mut self, workspace: impl Into<PathBuf>) -> Self {
         self.host.workspace = workspace.into();
+        self
+    }
+
+    /// The folder where the Agent keeps its Memory, one file per entry.
+    pub fn remembering_in(mut self, folder: impl Into<PathBuf>) -> Self {
+        self.host.memory = Some(Memory::kept_in(folder.into()));
         self
     }
 
@@ -72,6 +96,20 @@ impl<P: Provider> Agent<P> {
                 return;
             }
         }
+    }
+
+    /// Who the Agent is and what it remembers, as told to the model.
+    fn instructions(&self) -> String {
+        let Some(memory) = &self.host.memory else { return INSTRUCTIONS.to_owned() };
+        let mut instructions = format!("{INSTRUCTIONS}\n\n{MEMORY_INSTRUCTIONS}\n");
+        let entries = memory.entries();
+        if entries.is_empty() {
+            instructions.push_str("\n(nothing yet)");
+        }
+        for (name, text) in entries {
+            instructions.push_str(&format!("\n- {name}: {text}"));
+        }
+        instructions
     }
 
     /// True when the Conversation ends on something still owed a response.
@@ -112,11 +150,12 @@ impl<P: Provider> Agent<P> {
 
     /// Thinks and acts, turn after turn, until the model has nothing left to do.
     async fn respond(&mut self, channel: &mut impl Channel) -> Result<bool, StoreError> {
-        let actions = Host::specs();
+        let actions = self.host.specs();
         for _ in 0..STEPS_BEFORE_STOPPING {
             let conversation = self.store.conversation()?;
+            let instructions = self.instructions();
             let request = Request {
-                instructions: INSTRUCTIONS,
+                instructions: &instructions,
                 conversation: &conversation,
                 actions: &actions,
             };

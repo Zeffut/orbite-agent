@@ -71,7 +71,9 @@ fn agent() -> Result<Agent<OpenAiCompatible>, Failure> {
         .map_err(|error| format!("Could not open the Agent's data: {error}"))?;
 
     let provider = OpenAiCompatible::new(base_url, api_key, model);
-    Ok(Agent::new(provider, store).working_in(home.join("workspace")))
+    Ok(Agent::new(provider, store)
+        .working_in(home.join("workspace"))
+        .remembering_in(home.join("memory")))
 }
 
 fn required(name: &str) -> Result<String, Failure> {

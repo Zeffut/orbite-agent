@@ -11,6 +11,7 @@ use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
+use crate::memory::Memory;
 use crate::{ActionRequest, ActionSpec, Approval};
 
 /// How much of a command's output, per stream, is passed on to the model.
@@ -36,6 +37,19 @@ pub(crate) struct Host {
     pub(crate) workspace: PathBuf,
     /// A command still running after this long is stopped.
     pub(crate) command_timeout: Duration,
+    /// Where the Agent keeps its Memory, when it has somewhere to.
+    pub(crate) memory: Option<Memory>,
+}
+
+#[derive(Deserialize)]
+struct Remember {
+    name: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct Forget {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -66,11 +80,13 @@ enum Action {
     ReadFile(ReadFile),
     WriteFile(WriteFile),
     EditFile(EditFile),
+    Remember(Remember),
+    Forget(Forget),
 }
 
 impl Host {
     /// The Actions on offer, as told to the model.
-    pub(crate) fn specs() -> Vec<ActionSpec> {
+    pub(crate) fn specs(&self) -> Vec<ActionSpec> {
         let text = |description: &str| json!({ "type": "string", "description": description });
         let spec = |name: &str, description: &str, properties: serde_json::Value| {
             let required: Vec<&String> = properties.as_object().unwrap().keys().collect();
@@ -80,7 +96,7 @@ impl Host {
                 input: json!({ "type": "object", "properties": properties, "required": required }),
             }
         };
-        vec![
+        let mut specs = vec![
             spec(
                 "run_command",
                 "Runs a shell command on the Owner's machine, in your workspace folder, and \
@@ -112,7 +128,24 @@ impl Host {
                     "new": text("What to put in its place."),
                 }),
             ),
-        ]
+        ];
+        if self.memory.is_some() {
+            specs.push(spec(
+                "remember",
+                "Keeps something about your Owner for all later conversations. Using a name \
+                 already in your memory replaces that entry, which is how you correct it.",
+                json!({
+                    "name": text("A few words naming the entry, such as \"home\" or \"coffee order\"."),
+                    "text": text("What to remember, written so it makes sense on its own."),
+                }),
+            ));
+            specs.push(spec(
+                "forget",
+                "Deletes an entry of your memory.",
+                json!({ "name": text("The entry's name, as listed in your memory.") }),
+            ));
+        }
+        specs
     }
 
     /// The gate every Action passes through before it is carried out.
@@ -157,6 +190,8 @@ impl Host {
                     irreversible: replaces,
                 })
             }
+            // Memory is the Agent's own, and its Owner can read and undo all of it.
+            Action::Remember(_) | Action::Forget(_) => Review::Free,
             Action::EditFile(edit) => match self.edited(&edit) {
                 Err(problem) => Review::Refuse(problem),
                 Ok(_) => Review::Ask(Approval {
@@ -181,6 +216,8 @@ impl Host {
             Ok(Action::RunCommand(run)) => self.run(&run.command).await,
             Ok(Action::ReadFile(read)) => self.read(&read.path),
             Ok(Action::WriteFile(write)) => self.write(&write.path, &write.content),
+            Ok(Action::Remember(entry)) => self.remember(&entry),
+            Ok(Action::Forget(entry)) => self.forget(&entry.name),
             Ok(Action::EditFile(edit)) => match self.edited(&edit) {
                 Err(problem) => problem,
                 Ok(content) => match std::fs::write(self.locate(&edit.path), content) {
@@ -188,6 +225,30 @@ impl Host {
                     Err(error) => format!("Could not edit {}: {error}.", edit.path),
                 },
             },
+        }
+    }
+
+    fn remember(&self, entry: &Remember) -> String {
+        let Some(memory) = &self.memory else { return "There is no memory to keep it in.".into() };
+        match memory.remember(&entry.name, &entry.text) {
+            Ok(name) => format!("Remembered as \"{name}\"."),
+            Err(error) => format!("Could not remember it: {error}."),
+        }
+    }
+
+    fn forget(&self, name: &str) -> String {
+        let Some(memory) = &self.memory else { return "There is no memory.".into() };
+        match memory.forget(name) {
+            Ok(true) => format!("Forgot \"{name}\"."),
+            Ok(false) => {
+                let names: Vec<String> =
+                    memory.entries().into_iter().map(|(name, _)| name).collect();
+                format!(
+                    "Nothing is remembered as \"{name}\". The entries are: {}.",
+                    names.join(", ")
+                )
+            }
+            Err(error) => format!("Could not forget it: {error}."),
         }
     }
 
@@ -320,6 +381,8 @@ fn understand(request: &ActionRequest) -> Result<Action, String> {
         "read_file" => input(request).map(Action::ReadFile),
         "write_file" => input(request).map(Action::WriteFile),
         "edit_file" => input(request).map(Action::EditFile),
+        "remember" => input(request).map(Action::Remember),
+        "forget" => input(request).map(Action::Forget),
         other => Err(format!("There is no Action called {other}.")),
     }
 }

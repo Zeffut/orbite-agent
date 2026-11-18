@@ -4,6 +4,7 @@
 mod actions;
 mod agent;
 mod channel;
+mod memory;
 mod openai_compatible;
 mod provider;
 mod store;

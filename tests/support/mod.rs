@@ -20,6 +20,8 @@ enum Outcome {
 pub struct ScriptedProvider {
     script: Arc<Mutex<VecDeque<Outcome>>>,
     asked: Arc<Mutex<Vec<Vec<Message>>>>,
+    instructed: Arc<Mutex<Vec<String>>>,
+    offered: Arc<Mutex<Vec<Vec<String>>>>,
 }
 
 impl ScriptedProvider {
@@ -71,6 +73,16 @@ impl ScriptedProvider {
         self.asked.lock().unwrap().len()
     }
 
+    /// The instructions the Provider was given on its latest call.
+    pub fn last_instructions(&self) -> String {
+        self.instructed.lock().unwrap().last().cloned().expect("the Provider was never asked")
+    }
+
+    /// The names of the Actions on offer on the Provider's latest call.
+    pub fn last_offered(&self) -> Vec<String> {
+        self.offered.lock().unwrap().last().cloned().expect("the Provider was never asked")
+    }
+
     /// The Conversation as the Provider saw it on its latest call.
     pub fn last_asked(&self) -> Vec<Message> {
         self.asked.lock().unwrap().last().cloned().expect("the Provider was never asked")
@@ -80,6 +92,11 @@ impl ScriptedProvider {
 impl Provider for ScriptedProvider {
     async fn reply(&self, request: Request<'_>) -> Result<Reply, ProviderError> {
         self.asked.lock().unwrap().push(request.conversation.to_vec());
+        self.instructed.lock().unwrap().push(request.instructions.to_string());
+        self.offered
+            .lock()
+            .unwrap()
+            .push(request.actions.iter().map(|action| action.name.clone()).collect());
         let outcome =
             self.script.lock().unwrap().pop_front().expect("the script ran out of answers");
         match outcome {
