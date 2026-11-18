@@ -280,3 +280,74 @@ async fn the_owner_is_told_when_they_send_something_the_agent_cannot_read_yet() 
     assert!(texts(&calls)[0].contains("only read text"), "{calls:?}");
     assert_eq!(asked.times_asked(), 0);
 }
+
+/// What Telegram is asked to show for an answer written as `markdown`.
+async fn shown_for(markdown: &str) -> Value {
+    let server = telegram_delivering(vec![]).await;
+    let mut channel = telegram(&server);
+    channel.send(markdown).await.unwrap();
+    let calls = calls(&server).await;
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    calls[0].1.clone()
+}
+
+#[tokio::test]
+async fn the_models_markdown_is_shown_as_formatting_not_as_symbols() {
+    let sent =
+        shown_for("**Important**: read *this* and run `ls`, see [the docs](https://example.org).")
+            .await;
+
+    assert_eq!(sent["parse_mode"], "HTML");
+    assert_eq!(
+        sent["text"],
+        "<b>Important</b>: read <i>this</i> and run <code>ls</code>, \
+         see <a href=\"https://example.org\">the docs</a>."
+    );
+}
+
+#[tokio::test]
+async fn characters_telegram_would_take_for_formatting_are_shown_as_typed() {
+    let sent = shown_for("If a < b && b > c, write <b> & carry on.").await;
+
+    assert_eq!(
+        sent["text"],
+        "If a &lt; b &amp;&amp; b &gt; c, write &lt;b&gt; &amp; carry on."
+    );
+}
+
+#[tokio::test]
+async fn titles_lists_and_code_blocks_keep_their_shape() {
+    let sent = shown_for(
+        "# Plan\n\nTwo steps:\n\n- first\n- second\n\n1. one\n2. two\n\n```sh\necho <hi>\n```\n",
+    )
+    .await;
+
+    assert_eq!(
+        sent["text"],
+        "<b>Plan</b>\n\nTwo steps:\n\n• first\n• second\n\n1. one\n2. two\n\n\
+         <pre><code class=\"language-sh\">echo &lt;hi&gt;\n</code></pre>"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_telegram_refuses_to_format_is_still_delivered_as_plain_text() {
+    let server = MockServer::start().await;
+    Mock::given(path("/botTOKEN/sendMessage"))
+        .and(body_partial_json(json!({ "parse_mode": "HTML" })))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "ok": false, "error_code": 400, "description": "Bad Request: can't parse entities"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(path("/botTOKEN/sendMessage"))
+        .respond_with(ok(json!(true)))
+        .mount(&server)
+        .await;
+    let mut channel = telegram(&server);
+
+    channel.send("**Hello**").await.unwrap();
+
+    let calls = calls(&server).await;
+    let (_, last) = calls.last().unwrap();
+    assert_eq!(last, &json!({ "chat_id": OWNER, "text": "**Hello**" }));
+}

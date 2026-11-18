@@ -7,6 +7,7 @@ description = "An open-source, self-hosted personal AI agent that lives on your 
 repository = "https://github.com/Zeffut/orbite-agent"
 
 [dependencies]
+pulldown-cmark = { version = "0.13.6", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "http2"] }
 rusqlite = { version = "0.43.0", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }

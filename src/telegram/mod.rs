@@ -1,3 +1,5 @@
+mod formatting;
+
 use std::collections::VecDeque;
 use std::io;
 use std::time::Duration;
@@ -120,8 +122,17 @@ impl Channel for Telegram {
 
     async fn send(&mut self, text: &str) -> io::Result<()> {
         for part in split(text, MESSAGE_LIMIT) {
-            let body = json!({ "chat_id": self.owner, "text": part });
-            let _: Value = self.call("sendMessage", body).await?;
+            let plain = json!({ "chat_id": self.owner, "text": part });
+            let html = formatting::to_html(&part);
+            if !html.is_empty() && html.encode_utf16().count() <= MESSAGE_LIMIT {
+                let formatted =
+                    json!({ "chat_id": self.owner, "text": html, "parse_mode": "HTML" });
+                if self.call::<Value>("sendMessage", formatted).await.is_ok() {
+                    continue;
+                }
+            }
+            // Delivering the answer matters more than its formatting.
+            let _: Value = self.call("sendMessage", plain).await?;
         }
         Ok(())
     }
