@@ -6,11 +6,12 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use orbite::{Channel, Message, Provider, ProviderError};
+use orbite::{ActionRequest, Channel, Message, Provider, ProviderError, Reply, Request};
+use serde_json::Value;
 use tokio::sync::mpsc;
 
 enum Outcome {
-    Now(Result<String, ProviderError>),
+    Now(Result<Reply, ProviderError>),
     Never,
 }
 
@@ -31,7 +32,33 @@ impl ScriptedProvider {
     }
 
     pub fn then(&self, outcome: Result<String, ProviderError>) -> &Self {
+        let outcome = outcome.map(|text| Reply {
+            text,
+            actions: Vec::new(),
+        });
         self.script.lock().unwrap().push_back(Outcome::Now(outcome));
+        self
+    }
+
+    /// The model asks for these Actions, each given as (name, input).
+    pub fn then_acts<const N: usize>(&self, actions: [(&str, Value); N]) -> &Self {
+        let actions = actions
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, input))| ActionRequest {
+                id: format!("{name}-{index}"),
+                name: name.to_string(),
+                input,
+            })
+            .collect();
+        let reply = Reply {
+            text: String::new(),
+            actions,
+        };
+        self.script
+            .lock()
+            .unwrap()
+            .push_back(Outcome::Now(Ok(reply)));
         self
     }
 
@@ -57,8 +84,11 @@ impl ScriptedProvider {
 }
 
 impl Provider for ScriptedProvider {
-    async fn reply(&self, conversation: &[Message]) -> Result<String, ProviderError> {
-        self.asked.lock().unwrap().push(conversation.to_vec());
+    async fn reply(&self, request: Request<'_>) -> Result<Reply, ProviderError> {
+        self.asked
+            .lock()
+            .unwrap()
+            .push(request.conversation.to_vec());
         let outcome = self
             .script
             .lock()

@@ -112,3 +112,42 @@ fn a_database_from_a_newer_orbite_is_refused_rather_than_damaged() {
 
     assert!(error.to_string().contains("newer Orbite"), "{error}");
 }
+
+#[tokio::test]
+async fn a_conversation_from_the_first_version_of_orbite_is_kept() {
+    let home = tempfile::tempdir().unwrap();
+    let database = home.path().join("orbite.db");
+    rusqlite::Connection::open(&database)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE conversation (
+                 id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                 speaker TEXT NOT NULL CHECK (speaker IN ('owner', 'agent')),
+                 text    TEXT NOT NULL
+             ) STRICT;
+             INSERT INTO conversation (speaker, text) VALUES ('owner', 'I live in Lyon.'), ('agent', 'Noted.');
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+
+    let provider = ScriptedProvider::answering(["Lyon."]);
+    let (mut channel, mut owner) = memory_channel();
+    let store = Store::open(&database).unwrap();
+    let agent_provider = provider.clone();
+    tokio::spawn(async move {
+        Agent::new(agent_provider, store)
+            .converse(&mut channel)
+            .await
+    });
+    owner.says("Where do I live?");
+    owner.hears().await;
+
+    assert_eq!(
+        provider.last_asked(),
+        [
+            Message::from_owner("I live in Lyon."),
+            Message::from_agent("Noted."),
+            Message::from_owner("Where do I live?"),
+        ]
+    );
+}

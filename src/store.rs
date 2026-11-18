@@ -4,15 +4,30 @@ use std::sync::Mutex;
 
 use rusqlite::Connection;
 
-use crate::{Message, Speaker};
+use crate::Message;
 
 /// Each entry brings the database from one version to the next. Entries are
 /// only ever appended: an installation's database holds what its Owner said.
-const MIGRATIONS: &[&str] = &["CREATE TABLE conversation (
+const MIGRATIONS: &[&str] = &[
+    "CREATE TABLE conversation (
         id      INTEGER PRIMARY KEY AUTOINCREMENT,
         speaker TEXT NOT NULL CHECK (speaker IN ('owner', 'agent')),
         text    TEXT NOT NULL
-    ) STRICT;"];
+    ) STRICT;",
+    // Entries became richer than a speaker and a text once the Agent could
+    // act: each is now kept whole, as JSON.
+    "CREATE TABLE messages (
+        id   INTEGER PRIMARY KEY AUTOINCREMENT,
+        body TEXT NOT NULL
+    ) STRICT;
+    INSERT INTO messages (id, body)
+        SELECT id, CASE speaker
+            WHEN 'owner' THEN json_object('Owner', text)
+            ELSE json_object('Agent', json_object('text', text, 'actions', json_array()))
+        END
+        FROM conversation ORDER BY id;
+    DROP TABLE conversation;",
+];
 
 /// Where an installation keeps what must survive a restart.
 pub struct Store {
@@ -72,38 +87,23 @@ impl Store {
     /// The Conversation so far, oldest first.
     pub(crate) fn conversation(&self) -> Result<Vec<Message>, StoreError> {
         let database = self.database.lock().expect("the Store is not poisoned");
-        let mut statement =
-            database.prepare("SELECT speaker, text FROM conversation ORDER BY id")?;
-        let messages = statement
-            .query_map([], |row| {
-                let speaker: String = row.get(0)?;
-                let speaker = if speaker == "owner" {
-                    Speaker::Owner
-                } else {
-                    Speaker::Agent
-                };
-                Ok(Message {
-                    speaker,
-                    text: row.get(1)?,
-                })
-            })?
-            .collect::<Result<_, _>>()?;
-        Ok(messages)
+        let mut statement = database.prepare("SELECT body FROM messages ORDER BY id")?;
+        let bodies = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        bodies
+            .iter()
+            .map(|body| serde_json::from_str(body).map_err(|error| StoreError(error.to_string())))
+            .collect()
     }
 
     /// Adds `message` to the end of the Conversation.
     pub(crate) fn append(&self, message: &Message) -> Result<(), StoreError> {
-        let speaker = match message.speaker {
-            Speaker::Owner => "owner",
-            Speaker::Agent => "agent",
-        };
+        let body = serde_json::to_string(message).map_err(|error| StoreError(error.to_string()))?;
         self.database
             .lock()
             .expect("the Store is not poisoned")
-            .execute(
-                "INSERT INTO conversation (speaker, text) VALUES (?1, ?2)",
-                (speaker, &message.text),
-            )?;
+            .execute("INSERT INTO messages (body) VALUES (?1)", [body])?;
         Ok(())
     }
 
@@ -113,7 +113,7 @@ impl Store {
             .lock()
             .expect("the Store is not poisoned")
             .execute(
-                "DELETE FROM conversation WHERE id = (SELECT MAX(id) FROM conversation)",
+                "DELETE FROM messages WHERE id = (SELECT MAX(id) FROM messages)",
                 (),
             )?;
         Ok(())

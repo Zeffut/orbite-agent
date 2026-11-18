@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{Message, Provider, ProviderError, Speaker};
+use crate::{ActionRequest, Message, Provider, ProviderError, Reply, Request};
 
 /// A Provider reached with an API Key over the chat-completions protocol that
 /// OpenAI introduced and most Providers and local servers also speak.
@@ -32,23 +32,35 @@ impl OpenAiCompatible {
 }
 
 impl Provider for OpenAiCompatible {
-    async fn reply(&self, conversation: &[Message]) -> Result<String, ProviderError> {
-        let messages: Vec<Value> = conversation
-            .iter()
-            .map(|message| {
-                let role = match message.speaker {
-                    Speaker::Owner => "user",
-                    Speaker::Agent => "assistant",
-                };
-                json!({ "role": role, "content": message.text })
-            })
-            .collect();
+    async fn reply(&self, request: Request<'_>) -> Result<Reply, ProviderError> {
+        let mut messages = Vec::new();
+        if !request.instructions.is_empty() {
+            messages.push(json!({ "role": "system", "content": request.instructions }));
+        }
+        messages.extend(request.conversation.iter().map(wire_message));
+        let mut body = json!({ "model": self.model, "messages": messages });
+        if !request.actions.is_empty() {
+            body["tools"] = request
+                .actions
+                .iter()
+                .map(|action| {
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": action.name,
+                            "description": action.description,
+                            "parameters": action.input,
+                        }
+                    })
+                })
+                .collect();
+        }
 
         let response = self
             .http
             .post(&self.endpoint)
             .bearer_auth(&self.api_key)
-            .json(&json!({ "model": self.model, "messages": messages }))
+            .json(&body)
             .send()
             .await
             .map_err(|error| ProviderError::Unreachable(root_cause(&error)))?;
@@ -70,11 +82,59 @@ impl Provider for OpenAiCompatible {
             )));
         }
 
-        serde_json::from_str::<Completion>(&body)
+        let message = serde_json::from_str::<Completion>(&body)
             .ok()
             .and_then(|completion| completion.choices.into_iter().next())
-            .and_then(|choice| choice.message.content)
-            .ok_or_else(|| ProviderError::Failed("the answer contained no text".into()))
+            .map(|choice| choice.message)
+            .ok_or_else(|| ProviderError::Failed("the answer was not understood".into()))?;
+        let text = message.content.unwrap_or_default();
+        let actions = message
+            .tool_calls
+            .into_iter()
+            .map(|call| {
+                let input = serde_json::from_str(&call.function.arguments).map_err(|_| {
+                    ProviderError::Failed(format!(
+                        "the model gave unreadable input for {}",
+                        call.function.name
+                    ))
+                })?;
+                Ok(ActionRequest {
+                    id: call.id,
+                    name: call.function.name,
+                    input,
+                })
+            })
+            .collect::<Result<Vec<_>, ProviderError>>()?;
+        if text.is_empty() && actions.is_empty() {
+            return Err(ProviderError::Failed("the answer contained no text".into()));
+        }
+        Ok(Reply { text, actions })
+    }
+}
+
+/// A Conversation entry in the protocol's own shape.
+fn wire_message(message: &Message) -> Value {
+    match message {
+        Message::Owner(text) => json!({ "role": "user", "content": text }),
+        Message::Agent { text, actions } if actions.is_empty() => {
+            json!({ "role": "assistant", "content": text })
+        }
+        Message::Agent { text, actions } => {
+            let calls: Vec<Value> = actions
+                .iter()
+                .map(|action| {
+                    json!({
+                        "id": action.id,
+                        "type": "function",
+                        "function": { "name": action.name, "arguments": action.input.to_string() },
+                    })
+                })
+                .collect();
+            json!({ "role": "assistant", "content": text, "tool_calls": calls })
+        }
+        Message::Outcome { action, text } => {
+            json!({ "role": "tool", "tool_call_id": action, "content": text })
+        }
     }
 }
 
@@ -91,6 +151,20 @@ struct Choice {
 #[derive(Deserialize)]
 struct ChoiceMessage {
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCall>,
+}
+
+#[derive(Deserialize)]
+struct ToolCall {
+    id: String,
+    function: CalledFunction,
+}
+
+#[derive(Deserialize)]
+struct CalledFunction {
+    name: String,
+    arguments: String,
 }
 
 /// The Provider's own explanation when the body carries one, else the body.

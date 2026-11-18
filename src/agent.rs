@@ -1,6 +1,12 @@
 use std::time::Duration;
 
-use crate::{Channel, Message, Provider, ProviderError, Speaker, Store, StoreError};
+use crate::{Channel, Message, Provider, ProviderError, Request, Store, StoreError};
+
+/// Who the Agent is, told to the model on every turn.
+const INSTRUCTIONS: &str = "\
+You are a personal AI agent running on a machine that belongs to your Owner, \
+the only person you talk to and work for. Answer in the language your Owner \
+writes in. Be direct and brief.";
 
 /// Channels show a working signal for a few seconds only; it is renewed at
 /// this pace while the Agent thinks.
@@ -40,13 +46,7 @@ impl<P: Provider> Agent<P> {
     fn owes_an_answer(&self) -> bool {
         matches!(
             self.store.conversation().as_deref(),
-            Ok([
-                ..,
-                Message {
-                    speaker: Speaker::Owner,
-                    ..
-                }
-            ])
+            Ok([.., Message::Owner(_)])
         )
     }
 
@@ -62,7 +62,11 @@ impl<P: Provider> Agent<P> {
     async fn answer(&mut self, channel: &mut impl Channel) -> Result<String, StoreError> {
         let conversation = self.store.conversation()?;
         let reply = {
-            let thinking = self.provider.reply(&conversation);
+            let thinking = self.provider.reply(Request {
+                instructions: INSTRUCTIONS,
+                conversation: &conversation,
+                actions: &[],
+            });
             tokio::pin!(thinking);
             loop {
                 channel.working().await;
@@ -73,9 +77,10 @@ impl<P: Provider> Agent<P> {
             }
         };
         match reply {
-            Ok(answer) => {
-                self.store.append(&Message::from_agent(answer.clone()))?;
-                Ok(answer)
+            Ok(reply) => {
+                self.store
+                    .append(&Message::from_agent(reply.text.clone()))?;
+                Ok(reply.text)
             }
             Err(error) => {
                 // The Owner will say it again: a message the Provider failed

@@ -1,41 +1,76 @@
 use std::future::Future;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Speaker {
-    Owner,
-    Agent,
-}
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-/// One thing said in the Conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Message {
-    pub speaker: Speaker,
-    pub text: String,
+/// One entry of the Conversation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Message {
+    /// Something the Owner said.
+    Owner(String),
+    /// Something the Agent said, and the Actions it asked for while saying it.
+    Agent {
+        text: String,
+        actions: Vec<ActionRequest>,
+    },
+    /// What came of the Action whose id is `action`.
+    Outcome { action: String, text: String },
 }
 
 impl Message {
     pub fn from_owner(text: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::Owner,
-            text: text.into(),
-        }
+        Self::Owner(text.into())
     }
 
     pub fn from_agent(text: impl Into<String>) -> Self {
-        Self {
-            speaker: Speaker::Agent,
+        Self::Agent {
             text: text.into(),
+            actions: Vec::new(),
         }
     }
 }
 
+/// An Action the model asks the Agent to carry out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActionRequest {
+    /// Chosen by the Provider; ties the request to its Outcome.
+    pub id: String,
+    pub name: String,
+    pub input: Value,
+}
+
+/// An Action the model may ask for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActionSpec {
+    pub name: String,
+    /// Tells the model what the Action does and when to use it.
+    pub description: String,
+    /// JSON Schema of the Action's input.
+    pub input: Value,
+}
+
+/// What a Provider is asked on each turn.
+#[derive(Debug, Clone, Copy)]
+pub struct Request<'a> {
+    /// Who the Agent is and how it should behave.
+    pub instructions: &'a str,
+    pub conversation: &'a [Message],
+    pub actions: &'a [ActionSpec],
+}
+
+/// What the model says next, and the Actions it asks for.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reply {
+    pub text: String,
+    pub actions: Vec<ActionRequest>,
+}
+
 /// Something that runs AI models for the Agent.
 pub trait Provider: Send + Sync {
-    /// What the model says next, given the Conversation so far.
     fn reply(
         &self,
-        conversation: &[Message],
-    ) -> impl Future<Output = Result<String, ProviderError>> + Send;
+        request: Request<'_>,
+    ) -> impl Future<Output = Result<Reply, ProviderError>> + Send;
 }
 
 /// Why a Provider gave no answer. The text is the Provider's own explanation.
