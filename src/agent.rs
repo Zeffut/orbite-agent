@@ -1,4 +1,10 @@
+use std::time::Duration;
+
 use crate::{Channel, Message, Provider, ProviderError, Speaker, Store, StoreError};
+
+/// Channels show a working signal for a few seconds only; it is renewed at
+/// this pace while the Agent thinks.
+const WORKING_SIGNAL_EVERY: Duration = Duration::from_secs(4);
 
 /// The single persistent AI worker of an installation.
 pub struct Agent<P> {
@@ -47,15 +53,26 @@ impl<P: Provider> Agent<P> {
     /// Answers the Owner's latest message; false once the Channel is closed.
     async fn answer_on(&mut self, channel: &mut impl Channel) -> bool {
         let answer = self
-            .answer()
+            .answer(channel)
             .await
             .unwrap_or_else(|error| explain_storage(&error));
         channel.send(&answer).await.is_ok()
     }
 
-    async fn answer(&mut self) -> Result<String, StoreError> {
+    async fn answer(&mut self, channel: &mut impl Channel) -> Result<String, StoreError> {
         let conversation = self.store.conversation()?;
-        match self.provider.reply(&conversation).await {
+        let reply = {
+            let thinking = self.provider.reply(&conversation);
+            tokio::pin!(thinking);
+            loop {
+                channel.working().await;
+                tokio::select! {
+                    reply = &mut thinking => break reply,
+                    () = tokio::time::sleep(WORKING_SIGNAL_EVERY) => {}
+                }
+            }
+        };
+        match reply {
             Ok(answer) => {
                 self.store.append(&Message::from_agent(answer.clone()))?;
                 Ok(answer)
