@@ -224,6 +224,10 @@ impl Channel for Telegram {
         Ok(allowed)
     }
 
+    async fn interruption(&mut self) -> Option<String> {
+        self.receive().await
+    }
+
     async fn working(&mut self) {
         let body = json!({ "chat_id": self.owner, "action": "typing" });
         let _ = self.call::<Value>("sendChatAction", body).await;

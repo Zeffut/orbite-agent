@@ -26,6 +26,13 @@ pub trait Channel: Send {
         async { Ok(false) }
     }
 
+    /// What the Owner writes while the Agent is working, so that they can
+    /// stop or redirect it. Must be safe to abandon half-way. A Channel that
+    /// cannot listen while the Agent works never yields anything.
+    fn interruption(&mut self) -> impl Future<Output = Option<String>> + Send {
+        std::future::pending()
+    }
+
     /// Shows the Owner that the Agent is busy. Called again every few seconds
     /// for as long as it is; a Channel with no way to show it does nothing.
     fn working(&mut self) -> impl Future<Output = ()> + Send {

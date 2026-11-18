@@ -166,6 +166,10 @@ impl Channel for MemoryChannel {
         self.to_owner.send(text.to_string()).map_err(std::io::Error::other)
     }
 
+    async fn interruption(&mut self) -> Option<String> {
+        self.from_owner.recv().await
+    }
+
     async fn ask(&mut self, approval: &Approval) -> std::io::Result<bool> {
         self.asks.send(approval.clone()).map_err(std::io::Error::other)?;
         self.answers.recv().await.ok_or_else(|| std::io::Error::other("the Owner is gone"))

@@ -432,6 +432,9 @@ impl Host {
             Err(error) => return format!("Could not start the command: {error}."),
         };
         let group = child.id();
+        // Should the Agent be stopped while the command runs, everything it
+        // started goes with it.
+        let mut running = StopGroup(group);
         let printed = tokio::spawn(keep_start(child.stdout.take().expect("stdout is piped")));
         let complained = tokio::spawn(keep_start(child.stderr.take().expect("stderr is piped")));
 
@@ -443,6 +446,11 @@ impl Host {
             // group created for this command just above.
             unsafe { libc::killpg(group as libc::pid_t, libc::SIGKILL) };
             let _ = child.wait().await;
+        }
+
+        // It ended by itself: what it deliberately left running stays.
+        if status.is_ok() {
+            running.0 = None;
         }
 
         let mut outcome = String::new();
@@ -582,4 +590,17 @@ async fn keep_start(mut stream: impl AsyncRead + Unpin) -> (Vec<u8>, usize) {
         missing += read.saturating_sub(room);
     }
     (kept, missing)
+}
+
+/// Stops a command's whole process group when dropped.
+struct StopGroup(Option<u32>);
+
+impl Drop for StopGroup {
+    fn drop(&mut self) {
+        if let Some(group) = self.0 {
+            // SAFETY: `killpg` only sends a signal; `group` is the process
+            // group created for the command this guard was made for.
+            unsafe { libc::killpg(group as libc::pid_t, libc::SIGKILL) };
+        }
+    }
 }

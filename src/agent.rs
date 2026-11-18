@@ -250,9 +250,19 @@ impl<P: Provider> Agent<P> {
                 conversation: &conversation,
                 actions: &actions,
             };
-            let reply = match showing_work(channel, patiently(&self.provider, request)).await {
-                Ok(reply) => reply,
-                Err(error) => {
+            let mut said = Vec::new();
+            let thinking = patiently(&self.provider, request);
+            let reply = match attending(channel, thinking, &mut said, true).await {
+                Attended::Stopped => return self.stopped(channel).await,
+                Attended::Interrupted => {
+                    // The Owner added something: think again with it.
+                    for text in said {
+                        self.store.append(&Message::from_owner(text))?;
+                    }
+                    continue;
+                }
+                Attended::Done(Ok(reply)) => reply,
+                Attended::Done(Err(error)) => {
                     // The Owner will say it again: a message the Provider
                     // failed on must not stay and be answered twice.
                     if matches!(conversation.last(), Some(Message::Owner(_))) {
@@ -271,22 +281,58 @@ impl<P: Provider> Agent<P> {
             if reply.actions.is_empty() {
                 return Ok(true);
             }
+            // Once the Owner stops or redirects the work, the Actions not yet
+            // started are left out, each with an Outcome saying why.
+            let mut left_out: Option<&str> = None;
+            let mut stopped = false;
             for action in &reply.actions {
-                if action.name == "search_conversation" {
-                    let text = self.search(action);
-                    self.store.append(&Message::Outcome { action: action.id.clone(), text })?;
+                let outcome = |text: String| Message::Outcome { action: action.id.clone(), text };
+                if let Some(why) = left_out {
+                    self.store.append(&outcome(why.into()))?;
                     continue;
                 }
-                let text = match self.host.review(action) {
-                    Review::Refuse(problem) => problem,
-                    Review::Free => showing_work(channel, self.host.carry_out(action)).await,
+                if action.name == "search_conversation" {
+                    self.store.append(&outcome(self.search(action)))?;
+                    continue;
+                }
+                let allowed = match self.host.review(action) {
+                    Review::Refuse(problem) => Err(problem),
+                    Review::Free => Ok(()),
                     Review::Ask(approval) => match channel.ask(&approval).await {
-                        Ok(true) => showing_work(channel, self.host.carry_out(action)).await,
-                        Ok(false) => "The Owner denied this action. It was not carried out.".into(),
+                        Ok(true) => Ok(()),
+                        Ok(false) => {
+                            Err("The Owner denied this action. It was not carried out.".into())
+                        }
                         Err(_) => return Ok(false),
                     },
                 };
-                self.store.append(&Message::Outcome { action: action.id.clone(), text })?;
+                let text = match allowed {
+                    Err(why_not) => why_not,
+                    Ok(()) => {
+                        let acting = self.host.carry_out(action);
+                        match attending(channel, acting, &mut said, false).await {
+                            Attended::Done(text) => text,
+                            Attended::Stopped | Attended::Interrupted => {
+                                stopped = true;
+                                left_out = Some(
+                                    "The Owner stopped the work: this action was not carried out.",
+                                );
+                                "The Owner stopped this action before it finished.".into()
+                            }
+                        }
+                    }
+                };
+                self.store.append(&outcome(text))?;
+                if !said.is_empty() && left_out.is_none() {
+                    left_out =
+                        Some("Your Owner wrote to you meanwhile: this action was not carried out.");
+                }
+            }
+            if stopped {
+                return self.stopped(channel).await;
+            }
+            for text in said {
+                self.store.append(&Message::from_owner(text))?;
             }
         }
         let stopped = format!(
@@ -450,6 +496,60 @@ async fn patiently(
         }
     }
     provider.reply(request).await
+}
+
+impl<P: Provider> Agent<P> {
+    /// Tells the Owner, and the model for later, that the work was stopped.
+    async fn stopped(&mut self, channel: &mut impl Channel) -> Result<bool, StoreError> {
+        self.store.append(&Message::from_agent("Stopped."))?;
+        Ok(channel.send("Stopped.").await.is_ok())
+    }
+}
+
+/// How work ended while the Owner could interrupt it.
+enum Attended<T> {
+    Done(T),
+    /// The Owner said to stop; the work was abandoned.
+    Stopped,
+    /// The Owner said something else and the work was abandoned for it.
+    Interrupted,
+}
+
+/// Runs `work` while showing the Owner that the Agent is busy and listening
+/// to them. "Stop" abandons the work. Anything else is added to `said`, and
+/// abandons the work too when `yields` is set; otherwise the work goes on.
+async fn attending<T>(
+    channel: &mut impl Channel,
+    work: impl Future<Output = T>,
+    said: &mut Vec<String>,
+    yields: bool,
+) -> Attended<T> {
+    tokio::pin!(work);
+    let mut listening = true;
+    loop {
+        channel.working().await;
+        tokio::select! {
+            done = &mut work => return Attended::Done(done),
+            written = channel.interruption(), if listening => match written {
+                // The Channel closed: the work still gets to finish.
+                None => listening = false,
+                Some(text) if means_stop(&text) => return Attended::Stopped,
+                Some(text) => {
+                    said.push(text);
+                    if yields {
+                        return Attended::Interrupted;
+                    }
+                }
+            },
+            () = tokio::time::sleep(WORKING_SIGNAL_EVERY) => {}
+        }
+    }
+}
+
+/// True when what the Owner wrote is the order to stop.
+fn means_stop(text: &str) -> bool {
+    let word = text.trim().trim_end_matches(['!', '.']).to_lowercase();
+    word == "stop" || word == "/stop"
 }
 
 /// Runs `work` to its end while showing the Owner that the Agent is busy.
