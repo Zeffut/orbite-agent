@@ -27,6 +27,14 @@ const MIGRATIONS: &[&str] = &[
         END
         FROM conversation ORDER BY id;
     DROP TABLE conversation;",
+    // A long Conversation is summarised: the model is shown the summary and
+    // only what came after it. Everything said is still kept, with its date,
+    // so that it can be searched.
+    "ALTER TABLE messages ADD COLUMN at INTEGER;
+    CREATE TABLE settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    ) STRICT;",
 ];
 
 /// Where an installation keeps what must survive a restart.
@@ -82,17 +90,99 @@ impl Store {
         Ok(Self { database: Mutex::new(connection) })
     }
 
-    /// The Conversation so far, oldest first.
+    /// The part of the Conversation the model is shown, oldest first: what
+    /// was said since the latest summary.
     pub(crate) fn conversation(&self) -> Result<Vec<Message>, StoreError> {
+        Ok(self.shown()?.into_iter().map(|(_, message)| message).collect())
+    }
+
+    /// As [`Store::conversation`], each entry with its identifier.
+    pub(crate) fn shown(&self) -> Result<Vec<(i64, Message)>, StoreError> {
         let database = self.database.lock().expect("the Store is not poisoned");
-        let mut statement = database.prepare("SELECT body FROM messages ORDER BY id")?;
-        let bodies = statement
-            .query_map([], |row| row.get::<_, String>(0))?
+        let mut statement = database.prepare(
+            "SELECT id, body FROM messages
+             WHERE id > COALESCE((SELECT CAST(value AS INTEGER) FROM settings
+                                  WHERE key = 'summarised_through'), 0)
+             ORDER BY id",
+        )?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
-        bodies
-            .iter()
-            .map(|body| serde_json::from_str(body).map_err(|error| StoreError(error.to_string())))
-            .collect()
+        rows.into_iter().map(|(id, body)| Ok((id, read(&body)?))).collect()
+    }
+
+    /// The summary of everything the model is no longer shown.
+    pub(crate) fn summary(&self) -> Result<Option<String>, StoreError> {
+        let database = self.database.lock().expect("the Store is not poisoned");
+        let mut statement = database.prepare("SELECT value FROM settings WHERE key = 'summary'")?;
+        let mut rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Stops showing the model the entries up to `through`. `summary`, when
+    /// given, replaces the summary; otherwise the earlier one is kept.
+    pub(crate) fn summarise_through(
+        &self,
+        through: i64,
+        summary: Option<&str>,
+    ) -> Result<(), StoreError> {
+        let mut database = self.database.lock().expect("the Store is not poisoned");
+        let transaction = database.transaction()?;
+        let set = "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                   ON CONFLICT (key) DO UPDATE SET value = excluded.value";
+        transaction.execute(set, ("summarised_through", through.to_string()))?;
+        if let Some(summary) = summary {
+            transaction.execute(set, ("summary", summary))?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// What was said that matches `query`, most relevant first, each with its
+    /// date. Everything ever said is searched, summarised or not.
+    pub(crate) fn search(&self, query: &str) -> Result<Vec<(String, Message)>, StoreError> {
+        let words: Vec<String> = query
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| word.chars().count() >= 3)
+            .map(str::to_lowercase)
+            .collect();
+        if words.is_empty() {
+            return Ok(Vec::new());
+        }
+        let database = self.database.lock().expect("the Store is not poisoned");
+        let mut statement = database.prepare(
+            "SELECT id, COALESCE(date(at, 'unixepoch'), ''), body FROM messages ORDER BY id DESC",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut found = Vec::new();
+        for (id, date, body) in rows {
+            let message = read(&body)?;
+            let text = match &message {
+                Message::Owner(text) => text,
+                Message::Agent { text, .. } if !text.is_empty() => text,
+                _ => continue,
+            };
+            let text = text.to_lowercase();
+            let matched = words.iter().filter(|word| text.contains(word.as_str())).count();
+            if matched > 0 {
+                found.push((matched, id, date, message));
+            }
+        }
+        found.sort_by_key(|entry| std::cmp::Reverse((entry.0, entry.1)));
+        Ok(found.into_iter().take(8).map(|(_, _, date, message)| (date, message)).collect())
+    }
+
+    /// Erases the Conversation and its summary.
+    pub(crate) fn reset(&self) -> Result<(), StoreError> {
+        self.database.lock().expect("the Store is not poisoned").execute_batch(
+            "DELETE FROM messages;
+             DELETE FROM settings WHERE key IN ('summary', 'summarised_through');",
+        )?;
+        Ok(())
     }
 
     /// Adds `message` to the end of the Conversation.
@@ -101,7 +191,7 @@ impl Store {
         self.database
             .lock()
             .expect("the Store is not poisoned")
-            .execute("INSERT INTO messages (body) VALUES (?1)", [body])?;
+            .execute("INSERT INTO messages (body, at) VALUES (?1, unixepoch())", [body])?;
         Ok(())
     }
 
@@ -113,4 +203,8 @@ impl Store {
             .execute("DELETE FROM messages WHERE id = (SELECT MAX(id) FROM messages)", ())?;
         Ok(())
     }
+}
+
+fn read(body: &str) -> Result<Message, StoreError> {
+    serde_json::from_str(body).map_err(|error| StoreError(error.to_string()))
 }

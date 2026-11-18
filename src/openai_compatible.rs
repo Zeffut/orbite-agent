@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -63,11 +65,24 @@ impl Provider for OpenAiCompatible {
             .map_err(|error| ProviderError::Unreachable(root_cause(&error)))?;
 
         let status = response.status();
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok()?.trim().parse::<f64>().ok())
+            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            .map(Duration::from_secs_f64);
         let body =
             response.text().await.map_err(|error| ProviderError::Failed(root_cause(&error)))?;
 
         if status.as_u16() == 401 || status.as_u16() == 403 {
             return Err(ProviderError::Rejected(error_message(&body)));
+        }
+        if status.as_u16() == 429 {
+            return Err(ProviderError::Busy { reason: error_message(&body), retry_after });
+        }
+        if status.is_server_error() {
+            let reason = format!("HTTP {}: {}", status.as_u16(), error_message(&body));
+            return Err(ProviderError::Busy { reason, retry_after });
         }
         if !status.is_success() {
             return Err(ProviderError::Failed(format!(

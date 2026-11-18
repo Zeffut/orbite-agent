@@ -22,7 +22,10 @@ pub struct ScriptedProvider {
     asked: Arc<Mutex<Vec<Vec<Message>>>>,
     instructed: Arc<Mutex<Vec<String>>>,
     offered: Arc<Mutex<Vec<Vec<String>>>>,
+    otherwise: Arc<Mutex<Option<Responder>>>,
 }
+
+type Responder = Box<dyn Fn(&str, &[Message]) -> Result<String, ProviderError> + Send>;
 
 impl ScriptedProvider {
     pub fn answering<const N: usize>(answers: [&str; N]) -> Self {
@@ -63,6 +66,22 @@ impl ScriptedProvider {
         self
     }
 
+    /// Once the script is used up, answers are computed from the
+    /// instructions and Conversation of each call.
+    pub fn otherwise(
+        &self,
+        respond: impl Fn(&str, &[Message]) -> Result<String, ProviderError> + Send + 'static,
+    ) -> &Self {
+        *self.otherwise.lock().unwrap() = Some(Box::new(respond));
+        self
+    }
+
+    /// Everything the Provider was asked, call after call: (instructions, Conversation).
+    pub fn every_call(&self) -> Vec<(String, Vec<Message>)> {
+        let instructed = self.instructed.lock().unwrap().clone();
+        instructed.into_iter().zip(self.asked.lock().unwrap().clone()).collect()
+    }
+
     /// The next call never returns, as when Orbite is stopped mid-answer.
     pub fn then_never_answers(&self) -> &Self {
         self.script.lock().unwrap().push_back(Outcome::Never);
@@ -97,8 +116,13 @@ impl Provider for ScriptedProvider {
             .lock()
             .unwrap()
             .push(request.actions.iter().map(|action| action.name.clone()).collect());
-        let outcome =
-            self.script.lock().unwrap().pop_front().expect("the script ran out of answers");
+        let scripted = self.script.lock().unwrap().pop_front();
+        let Some(outcome) = scripted else {
+            let otherwise = self.otherwise.lock().unwrap();
+            let respond = otherwise.as_ref().expect("the script ran out of answers");
+            return respond(request.instructions, request.conversation)
+                .map(|text| Reply { text, actions: Vec::new() });
+        };
         match outcome {
             Outcome::Now(outcome) => outcome,
             Outcome::Never => std::future::pending().await,

@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -74,6 +75,9 @@ pub enum ProviderError {
     Rejected(String),
     /// The Provider could not be reached at all.
     Unreachable(String),
+    /// The Provider cannot answer right now but may shortly: a rate limit or
+    /// an overload. `retry_after` is the wait it asked for, when it said.
+    Busy { reason: String, retry_after: Option<Duration> },
     /// The Provider was reached but failed to answer.
     Failed(String),
 }

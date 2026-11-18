@@ -1,5 +1,7 @@
 mod support;
 
+use std::time::Duration;
+
 use orbite::{Agent, Message, ProviderError, Store};
 use support::{ScriptedProvider, memory_channel};
 
@@ -71,4 +73,64 @@ async fn an_unreachable_provider_is_explained() {
 
     let explanation = owner.hears().await;
     assert!(explanation.contains("couldn't reach"), "{explanation}");
+}
+
+#[tokio::test]
+async fn a_busy_provider_is_waited_for_without_troubling_the_owner() {
+    let provider = ScriptedProvider::default();
+    let busy = || ProviderError::Busy {
+        reason: "rate limit".into(),
+        retry_after: Some(Duration::from_millis(10)),
+    };
+    provider.then(Err(busy())).then(Err(busy())).then(Ok("Here I am.".into()));
+    let (mut channel, mut owner) = memory_channel();
+    tokio::spawn(
+        async move { Agent::new(provider, Store::in_memory()).converse(&mut channel).await },
+    );
+
+    owner.says("Hi");
+
+    assert_eq!(owner.hears().await, "Here I am.");
+}
+
+#[tokio::test]
+async fn a_provider_that_stays_busy_is_explained_and_the_message_can_be_sent_again() {
+    let provider = ScriptedProvider::default();
+    for _ in 0..20 {
+        provider.then(Err(ProviderError::Busy {
+            reason: "rate limit".into(),
+            retry_after: Some(Duration::from_millis(5)),
+        }));
+    }
+    let asked = provider.clone();
+    let (mut channel, mut owner) = memory_channel();
+    tokio::spawn(
+        async move { Agent::new(provider, Store::in_memory()).converse(&mut channel).await },
+    );
+
+    owner.says("Hi");
+
+    let explanation = owner.hears().await;
+    assert!(explanation.contains("busy"), "{explanation}");
+    assert!(asked.times_asked() < 20, "the Agent must give up at some point");
+}
+
+#[tokio::test]
+async fn a_provider_asking_for_a_long_wait_is_not_waited_for() {
+    let provider = ScriptedProvider::default();
+    provider.then(Err(ProviderError::Busy {
+        reason: "daily limit reached".into(),
+        retry_after: Some(Duration::from_secs(3600)),
+    }));
+    let asked = provider.clone();
+    let (mut channel, mut owner) = memory_channel();
+    tokio::spawn(
+        async move { Agent::new(provider, Store::in_memory()).converse(&mut channel).await },
+    );
+
+    owner.says("Hi");
+
+    let explanation = owner.hears().await;
+    assert!(explanation.contains("daily limit reached"), "{explanation}");
+    assert_eq!(asked.times_asked(), 1);
 }

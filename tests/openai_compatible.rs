@@ -77,7 +77,31 @@ async fn a_refused_key_is_reported_with_the_providers_explanation() {
 }
 
 #[tokio::test]
-async fn a_server_error_is_reported_as_a_failure() {
+async fn a_rate_limit_is_reported_as_busy_with_the_wait_the_provider_asks_for() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("retry-after", "2.5")
+                .set_body_json(json!({ "error": { "message": "Rate limit reached." } })),
+        )
+        .mount(&server)
+        .await;
+    let provider = OpenAiCompatible::new(server.uri(), "sk-test", "some-model");
+
+    let reply = provider.reply(hi()).await;
+
+    assert_eq!(
+        reply,
+        Err(ProviderError::Busy {
+            reason: "Rate limit reached.".into(),
+            retry_after: Some(std::time::Duration::from_millis(2500)),
+        })
+    );
+}
+
+#[tokio::test]
+async fn an_overloaded_provider_is_reported_as_busy() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(503).set_body_string("upstream overloaded"))
@@ -87,7 +111,29 @@ async fn a_server_error_is_reported_as_a_failure() {
 
     let reply = provider.reply(hi()).await;
 
-    assert_eq!(reply, Err(ProviderError::Failed("HTTP 503: upstream overloaded".into())));
+    assert_eq!(
+        reply,
+        Err(ProviderError::Busy {
+            reason: "HTTP 503: upstream overloaded".into(),
+            retry_after: None
+        })
+    );
+}
+
+#[tokio::test]
+async fn a_request_the_provider_cannot_accept_is_reported_as_a_failure() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": { "message": "Unknown model." }
+        })))
+        .mount(&server)
+        .await;
+    let provider = OpenAiCompatible::new(server.uri(), "sk-test", "some-model");
+
+    let reply = provider.reply(hi()).await;
+
+    assert_eq!(reply, Err(ProviderError::Failed("HTTP 400: Unknown model.".into())));
 }
 
 #[tokio::test]
