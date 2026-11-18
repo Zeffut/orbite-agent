@@ -273,3 +273,20 @@ async fn the_model_is_told_the_quiet_hours_and_whether_it_is_quiet_now() {
     assert!(instructions.contains("22:00") && instructions.contains("07:00"), "{instructions}");
     assert!(instructions.contains("quiet hours now"), "{instructions}");
 }
+
+#[tokio::test]
+async fn the_marks_meant_for_orbite_never_reach_the_owner() {
+    let clock = Clock::at("2026-11-19 10:00");
+    let workspace = tempfile::tempdir().unwrap();
+    let provider =
+        ScriptedProvider::answering(["The file is created.[silent]", "[urgent] Done.", "[silent]"]);
+    let mut owner = agent_with(&provider, Store::in_memory(), &clock, workspace.path());
+
+    owner.says("Create it.");
+    assert_eq!(owner.hears().await, "The file is created.");
+    owner.says("And this?");
+    assert_eq!(owner.hears().await, "Done.");
+    // Asked directly, the Agent owes an answer: silence is not one.
+    owner.says("Hello?");
+    assert!(!owner.hears().await.contains("[silent]"));
+}

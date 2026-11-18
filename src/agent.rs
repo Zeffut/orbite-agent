@@ -856,17 +856,20 @@ impl<P: Provider + 'static> Agent<P> {
         text: &str,
         initiated: bool,
     ) -> Result<bool, StoreError> {
+        // The marks are for Orbite: whatever the model does with them, the
+        // Owner never sees one.
+        let urgent = text.contains(URGENT);
+        let silent = text.trim() == SILENT;
+        let said = text.replace(SILENT, "").replace(URGENT, "");
+        let text = said.trim();
         if !initiated {
+            // Asked directly, the Agent owes an answer.
+            let text = if text.is_empty() { "(nothing to add)" } else { text };
             return Ok(channel.send(text).await.is_ok());
         }
-        let text = text.trim();
-        if text.is_empty() || text == SILENT {
+        if text.is_empty() || silent {
             return Ok(true);
         }
-        let (urgent, text) = match text.strip_prefix(URGENT) {
-            Some(rest) => (true, rest.trim()),
-            None => (false, text),
-        };
         if !urgent && self.quiet_now() {
             let mut held = self.held()?;
             held.push(text.to_owned());
