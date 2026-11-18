@@ -1,0 +1,16 @@
+[package]
+name = "orbite"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "An open-source, self-hosted personal AI agent that lives on your own machine."
+repository = "https://github.com/Zeffut/orbite-agent"
+
+[dependencies]
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "http2"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "io-std", "time"] }
+
+[dev-dependencies]
+wiremock = "0.6.5"
