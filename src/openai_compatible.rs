@@ -138,6 +138,10 @@ fn wire_message(message: &Message) -> Value {
                 .collect();
             json!({ "role": "assistant", "content": text, "tool_calls": calls })
         }
+        Message::Notice(text) => json!({
+            "role": "user",
+            "content": format!("[Notice for you, not written by your Owner]\n{text}"),
+        }),
         Message::Outcome { action, text } => {
             json!({ "role": "tool", "tool_call_id": action, "content": text })
         }

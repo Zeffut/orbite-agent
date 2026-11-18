@@ -147,7 +147,7 @@ async fn the_model_never_sees_an_action_without_what_came_of_it_or_the_reverse()
                     assert!(open.contains(action), "an Outcome arrived without its Action");
                     open.retain(|id| id != action);
                 }
-                Message::Owner(_) => {}
+                Message::Owner(_) | Message::Notice(_) => {}
             }
         }
         // Actions of the very last entry are the ones being carried out now.

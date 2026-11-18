@@ -1,10 +1,14 @@
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::sync::mpsc;
 
 use crate::actions::{Host, Review};
 use crate::memory::Memory;
 use crate::skills::Skills;
+use crate::subagents::Subagents;
 use crate::web::Web;
 use crate::{
     ActionRequest, ActionSpec, Channel, Message, Provider, ProviderError, Request, Store,
@@ -22,6 +26,10 @@ Some actions need your Owner's approval. Never ask for that permission in \
 words: request the action directly, and your Owner is shown exactly what it \
 would do, with buttons to allow or deny it. When an action is denied, do not \
 try to reach the same end another way.
+
+A notice is something you are told that your Owner did not write, such as \
+the report of a sub-agent you started: your Owner has not seen it, so tell \
+them what matters in it.
 
 Answer in the language your Owner writes in. Be direct and brief.";
 
@@ -88,14 +96,17 @@ const STEPS_BEFORE_STOPPING: usize = 50;
 
 /// The single persistent AI worker of an installation.
 pub struct Agent<P> {
-    provider: P,
+    provider: Arc<P>,
     store: Store,
-    host: Host,
+    host: Arc<Host>,
     /// The most the model is sent on a turn, in tokens (estimated).
     context_budget: usize,
+    subagents: Subagents,
+    /// Where the reports of Sub-agents arrive.
+    reports: mpsc::UnboundedReceiver<String>,
 }
 
-impl<P: Provider> Agent<P> {
+impl<P: Provider + 'static> Agent<P> {
     pub fn new(provider: P, store: Store) -> Self {
         let host = Host {
             workspace: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
@@ -104,24 +115,43 @@ impl<P: Provider> Agent<P> {
             skills: None,
             web: Web::new(),
         };
-        Self { provider, store, host, context_budget: 60_000 }
+        let (subagents, reports) = Subagents::new();
+        Self {
+            provider: Arc::new(provider),
+            store,
+            host: Arc::new(host),
+            context_budget: 60_000,
+            subagents,
+            reports,
+        }
+    }
+
+    /// The Host, while the Agent is still being set up.
+    fn host_mut(&mut self) -> &mut Host {
+        Arc::get_mut(&mut self.host).expect("the Agent is set up before it starts working")
+    }
+
+    /// How many turns a Sub-agent gets before it must report.
+    pub fn giving_subagents_steps(mut self, steps: usize) -> Self {
+        self.subagents.steps = steps;
+        self
     }
 
     /// The folder where the Agent's commands run and its relative paths start.
     pub fn working_in(mut self, workspace: impl Into<PathBuf>) -> Self {
-        self.host.workspace = workspace.into();
+        self.host_mut().workspace = workspace.into();
         self
     }
 
     /// The folder where the Agent keeps its Memory, one file per entry.
     pub fn remembering_in(mut self, folder: impl Into<PathBuf>) -> Self {
-        self.host.memory = Some(Memory::kept_in(folder.into()));
+        self.host_mut().memory = Some(Memory::kept_in(folder.into()));
         self
     }
 
     /// The folder where the Agent keeps its Skills, one folder per Skill.
     pub fn learning_in(mut self, folder: impl Into<PathBuf>) -> Self {
-        self.host.skills = Some(Skills::kept_in(folder.into()));
+        self.host_mut().skills = Some(Skills::kept_in(folder.into()));
         self
     }
 
@@ -135,13 +165,13 @@ impl<P: Provider> Agent<P> {
 
     /// The address of the search engine's results page.
     pub fn searching_at(mut self, address: impl Into<String>) -> Self {
-        self.host.web.search_at = address.into();
+        self.host_mut().web.search_at = address.into();
         self
     }
 
     /// A command still running after `limit` is stopped.
     pub fn stopping_commands_after(mut self, limit: Duration) -> Self {
-        self.host.command_timeout = limit;
+        self.host_mut().command_timeout = limit;
         self
     }
 
@@ -151,7 +181,20 @@ impl<P: Provider> Agent<P> {
         if self.unfinished().unwrap_or(false) && !self.respond_on(channel).await {
             return;
         }
-        while let Some(text) = channel.receive().await {
+        loop {
+            let text = tokio::select! {
+                written = channel.receive() => match written {
+                    Some(text) => text,
+                    None => return,
+                },
+                Some(report) = self.reports.recv() => {
+                    let noted = self.store.append(&Message::Notice(report));
+                    if noted.is_ok() && !self.respond_on(channel).await {
+                        return;
+                    }
+                    continue;
+                }
+            };
             if text.trim() == "/reset" {
                 let said = match self.store.reset() {
                     Ok(()) => "Started afresh. What I remember about you is unchanged.".to_owned(),
@@ -229,7 +272,10 @@ impl<P: Provider> Agent<P> {
             }
         }
         Ok(cut_short
-            || matches!(conversation.last(), Some(Message::Owner(_) | Message::Outcome { .. })))
+            || matches!(
+                conversation.last(),
+                Some(Message::Owner(_) | Message::Outcome { .. } | Message::Notice(_))
+            ))
     }
 
     /// Responds to the latest of the Conversation; false once the Channel is closed.
@@ -244,11 +290,15 @@ impl<P: Provider> Agent<P> {
     async fn respond(&mut self, channel: &mut impl Channel) -> Result<bool, StoreError> {
         let mut actions = self.host.specs();
         actions.push(search_spec());
+        actions.extend(Subagents::specs());
         for _ in 0..STEPS_BEFORE_STOPPING {
             self.fit(channel, &actions).await?;
             let mut conversation = self.store.conversation()?;
             // Every protocol expects the Owner to speak first.
-            let opened = !matches!(conversation.first(), Some(Message::Owner(_)) | None);
+            let opened = !matches!(
+                conversation.first(),
+                Some(Message::Owner(_) | Message::Notice(_)) | None
+            );
             if opened {
                 conversation.insert(0, Message::from_owner(SUMMARISED_NOTE));
             }
@@ -259,7 +309,7 @@ impl<P: Provider> Agent<P> {
                 actions: &actions,
             };
             let mut said = Vec::new();
-            let thinking = patiently(&self.provider, request);
+            let thinking = patiently(&*self.provider, request);
             let reply = match attending(channel, thinking, &mut said, true).await {
                 Attended::Stopped => return self.stopped(channel).await,
                 Attended::Interrupted => {
@@ -301,6 +351,22 @@ impl<P: Provider> Agent<P> {
                 }
                 if action.name == "search_conversation" {
                     self.store.append(&outcome(self.search(action)))?;
+                    continue;
+                }
+                let named = |field: &str| action.input[field].as_str().unwrap_or_default();
+                let own = match action.name.as_str() {
+                    "delegate" => Some(self.subagents.start(
+                        named("name"),
+                        named("task"),
+                        self.provider.clone(),
+                        self.host.clone(),
+                    )),
+                    "list_subagents" => Some(self.subagents.list()),
+                    "stop_subagent" => Some(self.subagents.stop(named("name"))),
+                    _ => None,
+                };
+                if let Some(text) = own {
+                    self.store.append(&outcome(text))?;
                     continue;
                 }
                 let allowed = match self.host.review(action) {
@@ -352,7 +418,7 @@ impl<P: Provider> Agent<P> {
     }
 }
 
-impl<P: Provider> Agent<P> {
+impl<P: Provider + 'static> Agent<P> {
     /// Keeps what the model is sent within the budget: when the Conversation
     /// has outgrown it, its oldest part is summarised and no longer shown.
     async fn fit(
@@ -420,6 +486,7 @@ impl<P: Provider> Agent<P> {
                     format!("Agent: {text} {}", acted.join(" "))
                 }
                 Message::Outcome { text, .. } => format!("Result: {text}"),
+                Message::Notice(text) => format!("Notice: {text}"),
             };
             material.push_str(clip(&line, 800));
             material.push('\n');
@@ -431,7 +498,7 @@ impl<P: Provider> Agent<P> {
             conversation: &conversation,
             actions: &[],
         };
-        let reply = showing_work(channel, patiently(&self.provider, request)).await.ok()?;
+        let reply = showing_work(channel, patiently(&*self.provider, request)).await.ok()?;
         Some(clip(reply.text.trim(), summary_limit).to_owned())
     }
 
@@ -450,7 +517,9 @@ impl<P: Provider> Agent<P> {
                 .map(|(date, message)| match message {
                     Message::Owner(text) => format!("{date} Owner: {}", clip(text, 600)),
                     Message::Agent { text, .. } => format!("{date} Agent: {}", clip(text, 600)),
-                    Message::Outcome { text, .. } => format!("{date} {}", clip(text, 600)),
+                    Message::Outcome { text, .. } | Message::Notice(text) => {
+                        format!("{date} {}", clip(text, 600))
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
@@ -464,7 +533,7 @@ fn weight(value: &impl serde::Serialize) -> usize {
 }
 
 /// The start of `text` that fits in `limit` bytes.
-fn clip(text: &str, limit: usize) -> &str {
+pub(crate) fn clip(text: &str, limit: usize) -> &str {
     let mut end = text.len().min(limit);
     while !text.is_char_boundary(end) {
         end -= 1;
@@ -487,7 +556,7 @@ fn search_spec() -> ActionSpec {
 }
 
 /// Asks the Provider, waiting and asking again while it is only busy.
-async fn patiently(
+pub(crate) async fn patiently(
     provider: &impl Provider,
     request: Request<'_>,
 ) -> Result<crate::Reply, ProviderError> {
@@ -506,7 +575,7 @@ async fn patiently(
     provider.reply(request).await
 }
 
-impl<P: Provider> Agent<P> {
+impl<P: Provider + 'static> Agent<P> {
     /// `outcome`, cut when it alone would take too much of the budget: no
     /// later summary could make room for it.
     fn sized(&self, outcome: String) -> String {
@@ -589,7 +658,7 @@ fn explain_storage(error: &StoreError) -> String {
 }
 
 /// A Provider failure, in words for the Owner.
-fn explain(error: &ProviderError) -> String {
+pub(crate) fn explain(error: &ProviderError) -> String {
     match error {
         ProviderError::Rejected(reason) => {
             format!(

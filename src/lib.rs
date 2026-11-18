@@ -10,6 +10,7 @@ mod provider;
 mod skills;
 mod slug;
 mod store;
+mod subagents;
 mod telegram;
 mod terminal;
 mod web;

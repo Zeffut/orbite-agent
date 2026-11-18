@@ -13,6 +13,9 @@ pub enum Message {
     Agent { text: String, actions: Vec<ActionRequest> },
     /// What came of the Action whose id is `action`.
     Outcome { action: String, text: String },
+    /// Something the Agent is told that its Owner did not say: a Sub-agent's
+    /// report, for instance.
+    Notice(String),
 }
 
 impl Message {

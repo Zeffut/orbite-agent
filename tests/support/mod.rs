@@ -23,9 +23,26 @@ pub struct ScriptedProvider {
     instructed: Arc<Mutex<Vec<String>>>,
     offered: Arc<Mutex<Vec<Vec<String>>>>,
     otherwise: Arc<Mutex<Option<Responder>>>,
+    held: Arc<Mutex<Option<Hold>>>,
 }
 
-type Responder = Box<dyn Fn(&str, &[Message]) -> Result<String, ProviderError> + Send>;
+/// Calls whose instructions contain the text wait for the signal.
+type Hold = (String, tokio::sync::watch::Receiver<bool>);
+
+type Responder = Box<dyn Fn(&str, &[Message]) -> Result<Reply, ProviderError> + Send>;
+
+/// A Reply that only says `text`.
+pub fn saying(text: &str) -> Reply {
+    Reply { text: text.to_string(), actions: Vec::new() }
+}
+
+/// A Reply that asks for one Action.
+pub fn acting(name: &str, input: Value) -> Reply {
+    Reply {
+        text: String::new(),
+        actions: vec![ActionRequest { id: format!("{name}-0"), name: name.to_string(), input }],
+    }
+}
 
 impl ScriptedProvider {
     pub fn answering<const N: usize>(answers: [&str; N]) -> Self {
@@ -72,8 +89,32 @@ impl ScriptedProvider {
         &self,
         respond: impl Fn(&str, &[Message]) -> Result<String, ProviderError> + Send + 'static,
     ) -> &Self {
+        self.replying_otherwise(move |instructions, conversation| {
+            respond(instructions, conversation).map(|text| saying(&text))
+        })
+    }
+
+    /// As [`ScriptedProvider::otherwise`], for answers that may ask for Actions.
+    pub fn replying_otherwise(
+        &self,
+        respond: impl Fn(&str, &[Message]) -> Result<Reply, ProviderError> + Send + 'static,
+    ) -> &Self {
         *self.otherwise.lock().unwrap() = Some(Box::new(respond));
         self
+    }
+
+    /// Calls whose instructions contain `marker` wait until the returned
+    /// handle is told `true`.
+    pub fn holding(&self, marker: &str) -> tokio::sync::watch::Sender<bool> {
+        let (release, released) = tokio::sync::watch::channel(false);
+        *self.held.lock().unwrap() = Some((marker.to_string(), released));
+        release
+    }
+
+    /// The names of the Actions on offer, call after call, with the instructions.
+    pub fn every_offer(&self) -> Vec<(String, Vec<String>)> {
+        let instructed = self.instructed.lock().unwrap().clone();
+        instructed.into_iter().zip(self.offered.lock().unwrap().clone()).collect()
     }
 
     /// Everything the Provider was asked, call after call: (instructions, Conversation).
@@ -116,12 +157,17 @@ impl Provider for ScriptedProvider {
             .lock()
             .unwrap()
             .push(request.actions.iter().map(|action| action.name.clone()).collect());
+        let held = self.held.lock().unwrap().clone();
+        if let Some((marker, mut released)) = held
+            && request.instructions.contains(&marker)
+        {
+            let _ = released.wait_for(|released| *released).await;
+        }
         let scripted = self.script.lock().unwrap().pop_front();
         let Some(outcome) = scripted else {
             let otherwise = self.otherwise.lock().unwrap();
             let respond = otherwise.as_ref().expect("the script ran out of answers");
-            return respond(request.instructions, request.conversation)
-                .map(|text| Reply { text, actions: Vec::new() });
+            return respond(request.instructions, request.conversation);
         };
         match outcome {
             Outcome::Now(outcome) => outcome,
