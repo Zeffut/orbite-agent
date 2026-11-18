@@ -1,0 +1,3 @@
+# Nothing leaves the Host uninvited, and nothing is learned in secret
+
+Orbite sends no telemetry: the only outbound traffic it starts on its own is to the Owner's chosen Providers, connected services and the update check. Everything the Agent learns is stored as plain files the Owner can read, edit and delete (Skills in the open Agent Skills format), and the Agent asks for an Approval before creating anything lasting such as an Extension. Opaque memory and unreadable usage are the main complaints about the hosted products Orbite is compared to; being inspectable is a deliberate difference, not an omission.
