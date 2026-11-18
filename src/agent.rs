@@ -3,15 +3,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, FixedOffset, Local};
 use tokio::sync::mpsc;
 
 use crate::actions::{Host, Review};
 use crate::memory::Memory;
+use crate::routines::{self, Routine};
 use crate::skills::Skills;
-use crate::subagents::Subagents;
+use crate::slug::slug;
+use crate::subagents::{Report, Subagents};
 use crate::web::Web;
 use crate::{
-    ActionRequest, ActionSpec, Channel, Message, Provider, ProviderError, Request, Store,
+    ActionRequest, ActionSpec, Approval, Channel, Message, Provider, ProviderError, Request, Store,
     StoreError,
 };
 
@@ -27,8 +30,12 @@ words: request the action directly, and your Owner is shown exactly what it \
 would do, with buttons to allow or deny it. When an action is denied, do not \
 try to reach the same end another way.
 
+With `schedule_routine` you set work for later: a reminder or a follow-up \
+once, or something recurring. Use it whenever your Owner asks to be reminded \
+or wants something done regularly, rather than promising to remember.
+
 A notice is something you are told that your Owner did not write, such as \
-the report of a sub-agent you started: your Owner has not seen it, so tell \
+the report of a sub-agent or of a routine's run: your Owner has not seen it, so tell \
 them what matters in it.
 
 Answer in the language your Owner writes in. Be direct and brief.";
@@ -84,6 +91,9 @@ few short paragraphs at most. Reply with the summary only.";
 /// this pace while the Agent works.
 const WORKING_SIGNAL_EVERY: Duration = Duration::from_secs(4);
 
+/// A Routine started this long after it was due is announced as late.
+const LATE_AFTER: Duration = Duration::from_secs(300);
+
 /// How many times a busy Provider is asked before the Owner is told.
 const TRIES_WHILE_BUSY: usize = 5;
 
@@ -102,8 +112,14 @@ pub struct Agent<P> {
     /// The most the model is sent on a turn, in tokens (estimated).
     context_budget: usize,
     subagents: Subagents,
-    /// Where the reports of Sub-agents arrive.
-    reports: mpsc::UnboundedReceiver<String>,
+    /// Where the reports of Sub-agents and of Routine runs arrive.
+    reports: mpsc::UnboundedReceiver<Report>,
+    /// Tells the date and time where the Owner is.
+    clock: Arc<dyn Fn() -> DateTime<FixedOffset> + Send + Sync>,
+    /// How often the Agent looks at the time for Routines that are due.
+    time_check: Duration,
+    /// True when a notice was added that the Agent has yet to respond to.
+    owed: bool,
 }
 
 impl<P: Provider + 'static> Agent<P> {
@@ -123,12 +139,30 @@ impl<P: Provider + 'static> Agent<P> {
             context_budget: 60_000,
             subagents,
             reports,
+            clock: Arc::new(|| Local::now().fixed_offset()),
+            time_check: Duration::from_secs(20),
+            owed: false,
         }
     }
 
     /// The Host, while the Agent is still being set up.
     fn host_mut(&mut self) -> &mut Host {
         Arc::get_mut(&mut self.host).expect("the Agent is set up before it starts working")
+    }
+
+    /// Where the Agent reads the date and time from.
+    pub fn telling_time_with(
+        mut self,
+        clock: impl Fn() -> DateTime<FixedOffset> + Send + Sync + 'static,
+    ) -> Self {
+        self.clock = Arc::new(clock);
+        self
+    }
+
+    /// How often the Agent looks at the time for Routines that are due.
+    pub fn checking_time_every(mut self, pace: Duration) -> Self {
+        self.time_check = pace;
+        self
     }
 
     /// How many turns a Sub-agent gets before it must report.
@@ -181,6 +215,8 @@ impl<P: Provider + 'static> Agent<P> {
         if self.unfinished().unwrap_or(false) && !self.respond_on(channel).await {
             return;
         }
+        let mut time_check = tokio::time::interval(self.time_check);
+        time_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             let text = tokio::select! {
                 written = channel.receive() => match written {
@@ -188,8 +224,14 @@ impl<P: Provider + 'static> Agent<P> {
                     None => return,
                 },
                 Some(report) = self.reports.recv() => {
-                    let noted = self.store.append(&Message::Notice(report));
-                    if noted.is_ok() && !self.respond_on(channel).await {
+                    if self.note(report).is_ok() && !self.respond_on(channel).await {
+                        return;
+                    }
+                    continue;
+                }
+                _ = time_check.tick() => {
+                    let _ = self.run_due_routines();
+                    if std::mem::take(&mut self.owed) && !self.respond_on(channel).await {
                         return;
                     }
                     continue;
@@ -244,6 +286,10 @@ impl<P: Provider + 'static> Agent<P> {
                 instructions.push_str(&format!("\n- {}: {}", skill.name, skill.description));
             }
         }
+        instructions.push_str(&format!(
+            "\n\n## Now\n\nWhere your Owner is, it is {}.",
+            (self.clock)().format("%A %Y-%m-%d %H:%M (UTC%:z)")
+        ));
         instructions
     }
 
@@ -291,6 +337,7 @@ impl<P: Provider + 'static> Agent<P> {
         let mut actions = self.host.specs();
         actions.push(search_spec());
         actions.extend(Subagents::specs());
+        actions.extend(routines::specs());
         for _ in 0..STEPS_BEFORE_STOPPING {
             self.fit(channel, &actions).await?;
             let mut conversation = self.store.conversation()?;
@@ -369,7 +416,11 @@ impl<P: Provider + 'static> Agent<P> {
                     self.store.append(&outcome(text))?;
                     continue;
                 }
-                let allowed = match self.host.review(action) {
+                let review = match self.review_routine(action) {
+                    Some(review) => review,
+                    None => self.host.review(action),
+                };
+                let allowed = match review {
                     Review::Refuse(problem) => Err(problem),
                     Review::Free => Ok(()),
                     Review::Ask(approval) => match channel.ask(&approval).await {
@@ -382,6 +433,9 @@ impl<P: Provider + 'static> Agent<P> {
                 };
                 let text = match allowed {
                     Err(why_not) => why_not,
+                    Ok(()) if self.review_routine(action).is_some() => {
+                        self.carry_out_routine(action)
+                    }
                     Ok(()) => {
                         let acting = self.host.carry_out(action);
                         match attending(channel, acting, &mut said, false).await {
@@ -593,6 +647,274 @@ impl<P: Provider + 'static> Agent<P> {
         self.store.append(&Message::from_agent("Stopped."))?;
         Ok(channel.send("Stopped.").await.is_ok())
     }
+}
+
+impl<P: Provider + 'static> Agent<P> {
+    /// Tells the model what a Sub-agent or a Routine run ended with, and
+    /// keeps a Routine's result with it.
+    fn note(&mut self, report: Report) -> Result<(), StoreError> {
+        if let Some(name) = &report.routine {
+            let routines = self.store.routines()?;
+            if let Some(mut routine) = routines.into_iter().find(|routine| &routine.name == name) {
+                routine.last_result = Some(one_line(clip(&report.ended, 300)));
+                self.store.save_routine(&routine)?;
+            }
+        }
+        self.store.append(&Message::Notice(format!("{} {}", report.who, report.ended)))
+    }
+
+    /// Starts every Routine whose time has come, and moves each to its next.
+    fn run_due_routines(&mut self) -> Result<(), StoreError> {
+        let now = (self.clock)();
+        for mut routine in self.store.routines()? {
+            if routine.paused || routine.next_run > now.timestamp() {
+                continue;
+            }
+            // A single reminder goes straight to the Agent, who has the whole
+            // Conversation to make sense of it: nothing to work out afresh.
+            if routine.cron.is_none() {
+                self.store.remove_routine(&routine.name)?;
+                self.store.append(&Message::Notice(format!(
+                    "It is time for \"{}\", which you scheduled: {}",
+                    routine.name, routine.instruction
+                )))?;
+                self.owed = true;
+                continue;
+            }
+            let due = routines::written(routine.next_run, now);
+            // Orbite was stopped, or busy, when it should have run.
+            let late = now.timestamp() - routine.next_run > LATE_AFTER.as_secs() as i64;
+            let who = if late {
+                format!("Routine \"{}\" (run late: it was due at {due})", routine.name)
+            } else {
+                format!("Routine \"{}\"", routine.name)
+            };
+            let task = format!(
+                "{}\n\n(This is a run of the routine \"{}\". It is now {}.)",
+                routine.instruction,
+                routine.name,
+                now.format(routines::MOMENT)
+            );
+            let started = self.subagents.run_routine(
+                &routine.name,
+                who,
+                &task,
+                self.provider.clone(),
+                self.host.clone(),
+            );
+            if !started {
+                // Too much is going on: try again at the next look at the time.
+                continue;
+            }
+            // However many occurrences were missed, it runs once and moves on.
+            match routine.cron.as_deref().map(|cron| routines::next_after(cron, now)) {
+                Some(Ok(next)) => {
+                    routine.next_run = next.timestamp();
+                    routine.last_run = Some(now.timestamp());
+                    self.store.save_routine(&routine)?;
+                }
+                // It ran its one time, or can never come up again.
+                None | Some(Err(_)) => {
+                    self.store.remove_routine(&routine.name)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The Routine a `schedule_routine` request describes, or what is wrong with it.
+    fn planned(&self, request: &ActionRequest) -> Result<Routine, String> {
+        let now = (self.clock)();
+        let field = |name: &str| {
+            request.input[name].as_str().map(str::trim).filter(|text| !text.is_empty())
+        };
+        let name = slug(field("name").unwrap_or_default())
+            .map_err(|error| format!("The routine cannot be named that: {error}."))?;
+        let instruction = field("instruction").ok_or("A routine needs an instruction.")?.to_owned();
+        let (cron, next) = match (field("cron"), field("at")) {
+            (Some(_), Some(_)) => return Err("Give `cron` or `at`, not both.".into()),
+            (None, None) => {
+                return Err("A routine needs `cron` (to recur) or `at` (to run once).".into());
+            }
+            (Some(cron), None) => (Some(cron.to_owned()), routines::next_after(cron, now)?),
+            (None, Some(at)) => (None, routines::moment(at, now)?),
+        };
+        Ok(Routine {
+            name,
+            instruction,
+            cron,
+            next_run: next.timestamp(),
+            paused: false,
+            last_run: None,
+            last_result: None,
+        })
+    }
+
+    /// The Routine a request names, or what to tell the model when there is none.
+    fn routine_named(&self, request: &ActionRequest) -> Result<Routine, String> {
+        let asked = request.input["name"].as_str().unwrap_or_default();
+        let name = slug(asked).unwrap_or_default();
+        let routines = self.store.routines().map_err(|error| explain_storage(&error))?;
+        let names: Vec<String> = routines.iter().map(|routine| routine.name.clone()).collect();
+        routines.into_iter().find(|routine| routine.name == name).ok_or_else(|| {
+            format!(
+                "There is no routine called \"{asked}\". The routines are: {}.",
+                names.join(", ")
+            )
+        })
+    }
+
+    /// What the gate decides about an Action on Routines; `None` for any
+    /// other Action.
+    fn review_routine(&self, request: &ActionRequest) -> Option<Review> {
+        let now = (self.clock)();
+        Some(match request.name.as_str() {
+            "list_routines" => Review::Free,
+            "schedule_routine" => match self.planned(request) {
+                Err(problem) => Review::Refuse(problem),
+                // A single reminder is not worth interrupting the Owner for.
+                Ok(Routine { cron: None, .. }) => Review::Free,
+                Ok(routine) => {
+                    let cron = routine.cron.as_deref().unwrap_or_default();
+                    let replaces = self
+                        .store
+                        .routines()
+                        .is_ok_and(|all| all.iter().any(|other| other.name == routine.name));
+                    Review::Ask(Approval {
+                        summary: if replaces { "Replace a routine" } else { "Schedule a routine" }
+                            .into(),
+                        detail: format!(
+                            "{}\n\n{}\n\nSchedule: {cron} ({})\nNext run: {}",
+                            routine.name,
+                            routine.instruction,
+                            routines::in_words(cron),
+                            routines::written(routine.next_run, now)
+                        ),
+                        irreversible: replaces,
+                    })
+                }
+            },
+            "pause_routine" | "resume_routine" | "run_routine" => match self.routine_named(request)
+            {
+                Err(problem) => Review::Refuse(problem),
+                Ok(_) => Review::Free,
+            },
+            "remove_routine" => match self.routine_named(request) {
+                Err(problem) => Review::Refuse(problem),
+                Ok(routine) => Review::Ask(Approval {
+                    summary: "Remove a routine".into(),
+                    detail: format!("{}\n\n{}", routine.name, routine.instruction),
+                    irreversible: true,
+                }),
+            },
+            _ => return None,
+        })
+    }
+
+    /// Carries out an Action on Routines the gate let through.
+    fn carry_out_routine(&mut self, request: &ActionRequest) -> String {
+        let now = (self.clock)();
+        let done = match request.name.as_str() {
+            "list_routines" => self.store.routines().map(|routines| {
+                if routines.is_empty() {
+                    return "No routine is scheduled.".to_owned();
+                }
+                routines.iter().map(|routine| describe(routine, now)).collect::<Vec<_>>().join("\n")
+            }),
+            "schedule_routine" => match self.planned(request) {
+                Err(problem) => return problem,
+                Ok(routine) => self.store.save_routine(&routine).map(|()| {
+                    format!(
+                        "Scheduled \"{}\". Next run: {}.",
+                        routine.name,
+                        routines::written(routine.next_run, now)
+                    )
+                }),
+            },
+            _ => match self.routine_named(request) {
+                Err(problem) => return problem,
+                Ok(mut routine) => match request.name.as_str() {
+                    "pause_routine" => {
+                        routine.paused = true;
+                        self.store
+                            .save_routine(&routine)
+                            .map(|()| format!("Paused \"{}\".", routine.name))
+                    }
+                    "resume_routine" => {
+                        routine.paused = false;
+                        // What was missed while paused is not made up.
+                        if let Some(Ok(next)) =
+                            routine.cron.as_deref().map(|cron| routines::next_after(cron, now))
+                        {
+                            routine.next_run = next.timestamp();
+                        }
+                        self.store.save_routine(&routine).map(|()| {
+                            format!(
+                                "Resumed \"{}\". Next run: {}.",
+                                routine.name,
+                                routines::written(routine.next_run, now)
+                            )
+                        })
+                    }
+                    "remove_routine" => self
+                        .store
+                        .remove_routine(&routine.name)
+                        .map(|_| format!("Removed the routine \"{}\".", routine.name)),
+                    _ => {
+                        let who = format!("Routine \"{}\" (tried out now)", routine.name);
+                        let task = format!(
+                            "{}\n\n(This is a run of the routine \"{}\". It is now {}.)",
+                            routine.instruction,
+                            routine.name,
+                            now.format(routines::MOMENT)
+                        );
+                        let started = self.subagents.run_routine(
+                            &routine.name,
+                            who,
+                            &task,
+                            self.provider.clone(),
+                            self.host.clone(),
+                        );
+                        Ok(if started {
+                            format!(
+                                "Started a run of \"{}\" now. Like every run, it can look at \
+                                 things but changes nothing by itself; its report will reach \
+                                 you as a notice. Its schedule is unchanged.",
+                                routine.name
+                            )
+                        } else {
+                            "It could not start now: a run of it is still going, or too much is."
+                                .into()
+                        })
+                    }
+                },
+            },
+        };
+        done.unwrap_or_else(|error| explain_storage(&error))
+    }
+}
+
+/// A Routine as listed to the model.
+fn describe(routine: &Routine, now: DateTime<FixedOffset>) -> String {
+    let schedule = routine.cron.as_deref().unwrap_or("once");
+    let next = if routine.paused {
+        "paused".to_owned()
+    } else {
+        format!("next: {}", routines::written(routine.next_run, now))
+    };
+    let last = match (routine.last_run, &routine.last_result) {
+        (Some(at), Some(result)) => format!("last: {} {result}", routines::written(at, now)),
+        (Some(at), None) => format!("last: {} (still running)", routines::written(at, now)),
+        _ => "never run".to_owned(),
+    };
+    format!(
+        "- {} [{schedule}] {next} · {last} · instruction: {}",
+        routine.name, routine.instruction
+    )
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// How work ended while the Owner could interrupt it.

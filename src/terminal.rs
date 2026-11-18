@@ -8,11 +8,13 @@ use crate::{Approval, Channel};
 pub struct Terminal<R, W> {
     typed: Lines<R>,
     shown: W,
+    /// True while a prompt is on screen with nothing typed after it yet.
+    prompted: bool,
 }
 
 impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Terminal<R, W> {
     pub fn new(typed: R, shown: W) -> Self {
-        Self { typed: typed.lines(), shown }
+        Self { typed: typed.lines(), shown, prompted: false }
     }
 
     async fn show(&mut self, text: &str) -> io::Result<()> {
@@ -23,17 +25,23 @@ impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Terminal<R, W
 
 impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Channel for Terminal<R, W> {
     async fn receive(&mut self) -> Option<String> {
-        self.show("> ").await.ok()?;
+        if !self.prompted {
+            self.show("> ").await.ok()?;
+            self.prompted = true;
+        }
         loop {
             let line = self.typed.next_line().await.ok()??;
             if !line.trim().is_empty() {
+                self.prompted = false;
                 return Some(line);
             }
         }
     }
 
     async fn send(&mut self, text: &str) -> io::Result<()> {
-        self.show(&format!("{text}\n\n")).await
+        // Said on its own initiative, it starts on a line of its own.
+        let start = if std::mem::take(&mut self.prompted) { "\n" } else { "" };
+        self.show(&format!("{start}{text}\n\n")).await
     }
 
     async fn ask(&mut self, approval: &Approval) -> io::Result<bool> {

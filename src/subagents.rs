@@ -42,11 +42,27 @@ approval will not be carried out, so say in your report what would need doing. \
 When you are done, reply with the report alone: what you found or did, what \
 you could not do and why. Be precise and brief.";
 
+/// What a Sub-agent, or the run of a Routine, ended with.
+pub(crate) struct Report {
+    /// The Routine this was a run of, if any.
+    pub(crate) routine: Option<String>,
+    /// How it ended and what it reported, without saying who it is.
+    pub(crate) ended: String,
+    /// Who it is, such as `Sub-agent "counter"`.
+    pub(crate) who: String,
+}
+
 pub(crate) struct Subagents {
     running: HashMap<String, Running>,
-    reports: mpsc::UnboundedSender<String>,
+    reports: mpsc::UnboundedSender<Report>,
     /// How many turns a Sub-agent gets before it must report.
     pub(crate) steps: usize,
+}
+
+/// Why a Sub-agent could not start.
+enum Busy {
+    SameName,
+    Full,
 }
 
 struct Running {
@@ -57,7 +73,7 @@ struct Running {
 
 impl Subagents {
     /// The Sub-agents, and where their reports arrive.
-    pub(crate) fn new() -> (Self, mpsc::UnboundedReceiver<String>) {
+    pub(crate) fn new() -> (Self, mpsc::UnboundedReceiver<Report>) {
         let (reports, arriving) = mpsc::unbounded_channel();
         (Self { running: HashMap::new(), reports, steps: 25 }, arriving)
     }
@@ -106,35 +122,66 @@ impl Subagents {
         provider: Arc<P>,
         host: Arc<Host>,
     ) -> String {
-        self.forget_finished();
         let name = name.trim().to_owned();
         if name.is_empty() || task.trim().is_empty() {
             return "A sub-agent needs a name and a task.".into();
         }
-        if self.running.contains_key(&name) {
-            return format!(
-                "A sub-agent called \"{name}\" is already working. Choose another name."
-            );
+        let who = format!("Sub-agent \"{name}\"");
+        match self.launch(name.clone(), who, None, task, provider, host) {
+            Ok(()) => format!(
+                "Sub-agent \"{name}\" started. Its report will reach you as a notice when it is \
+                 done; carry on meanwhile."
+            ),
+            Err(Busy::SameName) => {
+                format!("A sub-agent called \"{name}\" is already working. Choose another name.")
+            }
+            Err(Busy::Full) => {
+                format!("{AT_ONCE} sub-agents are already working. Wait for one to finish.")
+            }
+        }
+    }
+
+    /// Starts a run of the Routine `routine`, announced as `who`. False when
+    /// it could not start now: a run of it is still going, or too much is.
+    pub(crate) fn run_routine<P: Provider + 'static>(
+        &mut self,
+        routine: &str,
+        who: String,
+        task: &str,
+        provider: Arc<P>,
+        host: Arc<Host>,
+    ) -> bool {
+        let key = format!("routine: {routine}");
+        self.launch(key, who, Some(routine.to_owned()), task, provider, host).is_ok()
+    }
+
+    fn launch<P: Provider + 'static>(
+        &mut self,
+        key: String,
+        who: String,
+        routine: Option<String>,
+        task: &str,
+        provider: Arc<P>,
+        host: Arc<Host>,
+    ) -> Result<(), Busy> {
+        self.forget_finished();
+        if self.running.contains_key(&key) {
+            return Err(Busy::SameName);
         }
         if self.running.len() >= AT_ONCE {
-            return format!("{AT_ONCE} sub-agents are already working. Wait for one to finish.");
+            return Err(Busy::Full);
         }
-        let (reports, steps) = (self.reports.clone(), self.steps);
-        let (called, given) = (name.clone(), task.to_owned());
+        let (reports, steps, given) = (self.reports.clone(), self.steps, task.to_owned());
         let work = tokio::spawn(async move {
             let working = work(&*provider, &host, &given, steps);
             let ended = match tokio::time::timeout(TIME_LIMIT, working).await {
                 Ok(ended) => ended,
                 Err(_) => "ran out of time and was stopped. It reported nothing.".into(),
             };
-            let _ = reports.send(format!("Sub-agent \"{called}\" {ended}"));
+            let _ = reports.send(Report { routine, ended, who });
         });
-        self.running
-            .insert(name.clone(), Running { task: task.to_owned(), work, since: Instant::now() });
-        format!(
-            "Sub-agent \"{name}\" started. Its report will reach you as a notice when it is done; \
-             carry on meanwhile."
-        )
+        self.running.insert(key, Running { task: task.to_owned(), work, since: Instant::now() });
+        Ok(())
     }
 
     pub(crate) fn list(&mut self) -> String {

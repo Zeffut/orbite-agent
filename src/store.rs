@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use rusqlite::Connection;
 
 use crate::Message;
+use crate::routines::Routine;
 
 /// Each entry brings the database from one version to the next. Entries are
 /// only ever appended: an installation's database holds what its Owner said.
@@ -34,6 +35,15 @@ const MIGRATIONS: &[&str] = &[
     CREATE TABLE settings (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
+    ) STRICT;",
+    "CREATE TABLE routines (
+        name        TEXT PRIMARY KEY,
+        instruction TEXT NOT NULL,
+        cron        TEXT,
+        next_run    INTEGER NOT NULL,
+        paused      INTEGER NOT NULL DEFAULT 0,
+        last_run    INTEGER,
+        last_result TEXT
     ) STRICT;",
 ];
 
@@ -174,6 +184,61 @@ impl Store {
         }
         found.sort_by_key(|entry| std::cmp::Reverse((entry.0, entry.1)));
         Ok(found.into_iter().take(8).map(|(_, _, date, message)| (date, message)).collect())
+    }
+
+    /// Keeps `routine`, replacing the one of the same name.
+    pub(crate) fn save_routine(&self, routine: &Routine) -> Result<(), StoreError> {
+        self.database.lock().expect("the Store is not poisoned").execute(
+            "INSERT INTO routines (name, instruction, cron, next_run, paused, last_run, last_result)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT (name) DO UPDATE SET
+                 instruction = excluded.instruction, cron = excluded.cron,
+                 next_run = excluded.next_run, paused = excluded.paused,
+                 last_run = excluded.last_run, last_result = excluded.last_result",
+            (
+                &routine.name,
+                &routine.instruction,
+                &routine.cron,
+                routine.next_run,
+                routine.paused,
+                routine.last_run,
+                &routine.last_result,
+            ),
+        )?;
+        Ok(())
+    }
+
+    /// Every Routine, by name.
+    pub(crate) fn routines(&self) -> Result<Vec<Routine>, StoreError> {
+        let database = self.database.lock().expect("the Store is not poisoned");
+        let mut statement = database.prepare(
+            "SELECT name, instruction, cron, next_run, paused, last_run, last_result
+             FROM routines ORDER BY name",
+        )?;
+        let routines = statement
+            .query_map([], |row| {
+                Ok(Routine {
+                    name: row.get(0)?,
+                    instruction: row.get(1)?,
+                    cron: row.get(2)?,
+                    next_run: row.get(3)?,
+                    paused: row.get(4)?,
+                    last_run: row.get(5)?,
+                    last_result: row.get(6)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(routines)
+    }
+
+    /// Deletes the Routine called `name`; false when there is none.
+    pub(crate) fn remove_routine(&self, name: &str) -> Result<bool, StoreError> {
+        let removed = self
+            .database
+            .lock()
+            .expect("the Store is not poisoned")
+            .execute("DELETE FROM routines WHERE name = ?1", [name])?;
+        Ok(removed > 0)
     }
 
     /// Erases the Conversation and its summary.

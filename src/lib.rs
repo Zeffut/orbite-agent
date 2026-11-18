@@ -7,6 +7,7 @@ mod channel;
 mod memory;
 mod openai_compatible;
 mod provider;
+mod routines;
 mod skills;
 mod slug;
 mod store;

@@ -7,6 +7,8 @@ description = "An open-source, self-hosted personal AI agent that lives on your 
 repository = "https://github.com/Zeffut/orbite-agent"
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+croner = "4.0.3"
 html2text = "0.17.4"
 libc = "0.2.191"
 pulldown-cmark = { version = "0.13.6", default-features = false }

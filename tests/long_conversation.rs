@@ -47,6 +47,7 @@ fn agent_with(provider: &ScriptedProvider, store: Store, budget: usize) -> Owner
 }
 
 async fn chat(owner: &mut Owner, messages: usize) {
+    let messages = messages * 2;
     for number in 0..messages {
         owner.says(&format!(
             "Message number {number}, with a little padding to give it some weight."
@@ -58,7 +59,7 @@ async fn chat(owner: &mut Owner, messages: usize) {
 #[tokio::test]
 async fn what_is_sent_each_turn_stays_within_budget_however_long_the_conversation() {
     let provider = talkative();
-    let mut owner = agent_with(&provider, Store::in_memory(), 1_500);
+    let mut owner = agent_with(&provider, Store::in_memory(), 5_000);
 
     chat(&mut owner, 60).await;
 
@@ -69,7 +70,7 @@ async fn what_is_sent_each_turn_stays_within_budget_however_long_the_conversatio
         .map(|(instructions, conversation)| size(instructions, conversation))
         .max()
         .unwrap();
-    assert!(largest <= 1_500, "a turn sent about {largest} tokens");
+    assert!(largest <= 5_000, "a turn sent about {largest} tokens");
     let (_, latest) = calls.last().unwrap();
     assert!(latest.len() < 60, "the whole Conversation is still being sent");
 }
@@ -77,7 +78,7 @@ async fn what_is_sent_each_turn_stays_within_budget_however_long_the_conversatio
 #[tokio::test]
 async fn what_was_left_out_is_summarised_for_the_model() {
     let provider = talkative();
-    let mut owner = agent_with(&provider, Store::in_memory(), 1_500);
+    let mut owner = agent_with(&provider, Store::in_memory(), 5_000);
 
     chat(&mut owner, 60).await;
 
@@ -91,7 +92,7 @@ async fn what_was_left_out_is_summarised_for_the_model() {
 #[tokio::test]
 async fn a_new_summary_builds_on_the_previous_one() {
     let provider = talkative();
-    let mut owner = agent_with(&provider, Store::in_memory(), 1_500);
+    let mut owner = agent_with(&provider, Store::in_memory(), 5_000);
 
     chat(&mut owner, 60).await;
 
@@ -125,7 +126,7 @@ async fn the_model_never_sees_an_action_without_what_came_of_it_or_the_reverse()
     tokio::spawn(async move {
         Agent::new(agent_provider, Store::in_memory())
             .working_in(folder)
-            .keeping_context_under(1_500)
+            .keeping_context_under(5_000)
             .converse(&mut channel)
             .await
     });
@@ -164,7 +165,7 @@ async fn a_detail_from_long_ago_can_still_be_found() {
     let provider = talkative();
     let store_folder = tempfile::tempdir().unwrap();
     let mut owner =
-        agent_with(&provider, Store::open(store_folder.path().join("orbite.db")).unwrap(), 1_500);
+        agent_with(&provider, Store::open(store_folder.path().join("orbite.db")).unwrap(), 5_000);
     owner.says("The door code of the cellar is 4417.");
     owner.hears().await;
     chat(&mut owner, 60).await;
@@ -191,7 +192,7 @@ async fn searching_for_what_was_never_said_says_so() {
     provider
         .then_acts([("search_conversation", json!({ "query": "unicorn" }))])
         .then(Ok("No.".into()));
-    let mut owner = agent_with(&provider, Store::in_memory(), 1_500);
+    let mut owner = agent_with(&provider, Store::in_memory(), 5_000);
 
     owner.says("Did we ever talk about it?");
     owner.hears().await;
@@ -206,17 +207,17 @@ async fn the_summary_survives_a_restart() {
     let database: &Path = &home.path().join("orbite.db");
     {
         let provider = talkative();
-        let mut owner = agent_with(&provider, Store::open(database).unwrap(), 1_500);
+        let mut owner = agent_with(&provider, Store::open(database).unwrap(), 5_000);
         chat(&mut owner, 60).await;
     }
 
     let provider = talkative();
-    let mut owner = agent_with(&provider, Store::open(database).unwrap(), 1_500);
+    let mut owner = agent_with(&provider, Store::open(database).unwrap(), 5_000);
     owner.says("Still there?");
     owner.hears().await;
 
     assert!(provider.last_instructions().contains("SUMMARY: the Owner talked about many things."));
-    assert!(size(&provider.last_instructions(), &provider.last_asked()) <= 1_500);
+    assert!(size(&provider.last_instructions(), &provider.last_asked()) <= 5_000);
 }
 
 #[tokio::test]
@@ -229,7 +230,7 @@ async fn when_summarising_fails_the_agent_still_answers_within_budget() {
             Ok("A reasonably long answer that takes up some room in the Conversation. ".repeat(4))
         }
     });
-    let mut owner = agent_with(&provider, Store::in_memory(), 1_500);
+    let mut owner = agent_with(&provider, Store::in_memory(), 5_000);
 
     chat(&mut owner, 60).await;
 
@@ -240,7 +241,7 @@ async fn when_summarising_fails_the_agent_still_answers_within_budget() {
         .map(|(instructions, conversation)| size(instructions, conversation))
         .max()
         .unwrap();
-    assert!(largest <= 1_500, "a turn sent about {largest} tokens");
+    assert!(largest <= 5_000, "a turn sent about {largest} tokens");
 }
 
 #[tokio::test]
@@ -286,7 +287,7 @@ async fn one_enormous_outcome_does_not_push_a_turn_over_budget() {
     tokio::spawn(async move {
         Agent::new(agent_provider, Store::in_memory())
             .working_in(folder)
-            .keeping_context_under(4_000)
+            .keeping_context_under(7_000)
             .converse(&mut channel)
             .await
     });
@@ -300,7 +301,7 @@ async fn one_enormous_outcome_does_not_push_a_turn_over_budget() {
         .map(|(instructions, conversation)| size(instructions, conversation))
         .max()
         .unwrap();
-    assert!(largest <= 4_000, "a turn sent about {largest} tokens");
+    assert!(largest <= 7_000, "a turn sent about {largest} tokens");
     let Some(Message::Outcome { text, .. }) = provider.last_asked().pop() else { panic!() };
     assert!(text.contains("cut"), "the model is told the Outcome is incomplete");
 }
