@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, FixedOffset, Local};
+use chrono::{DateTime, FixedOffset, Local, NaiveTime};
 use tokio::sync::mpsc;
 
 use crate::actions::{Host, Review};
@@ -36,7 +36,10 @@ or wants something done regularly, rather than promising to remember.
 
 A notice is something you are told that your Owner did not write, such as \
 the report of a sub-agent or of a routine's run: your Owner has not seen it, so tell \
-them what matters in it.
+them what matters in it. When a notice calls for no word to your Owner, reply \
+with exactly [silent]. What you write on your own initiative during your \
+Owner's quiet hours is kept until they end; start it with [urgent] only when \
+it truly cannot wait.
 
 Answer in the language your Owner writes in. Be direct and brief.";
 
@@ -90,6 +93,12 @@ few short paragraphs at most. Reply with the summary only.";
 /// Channels show a working signal for a few seconds only; it is renewed at
 /// this pace while the Agent works.
 const WORKING_SIGNAL_EVERY: Duration = Duration::from_secs(4);
+
+/// The whole answer to a notice that calls for no word to the Owner.
+const SILENT: &str = "[silent]";
+
+/// Starts what cannot wait for the end of the Owner's quiet hours.
+const URGENT: &str = "[urgent]";
 
 /// A Routine started this long after it was due is announced as late.
 const LATE_AFTER: Duration = Duration::from_secs(300);
@@ -212,7 +221,7 @@ impl<P: Provider + 'static> Agent<P> {
     /// Holds the Conversation on `channel` until the Channel closes.
     pub async fn converse(&mut self, channel: &mut impl Channel) {
         // Whatever was left unfinished when Orbite last stopped comes first.
-        if self.unfinished().unwrap_or(false) && !self.respond_on(channel).await {
+        if self.unfinished().unwrap_or(false) && !self.respond_on(channel, false).await {
             return;
         }
         let mut time_check = tokio::time::interval(self.time_check);
@@ -224,14 +233,17 @@ impl<P: Provider + 'static> Agent<P> {
                     None => return,
                 },
                 Some(report) = self.reports.recv() => {
-                    if self.note(report).is_ok() && !self.respond_on(channel).await {
+                    if self.note(report).is_ok() && !self.respond_on(channel, true).await {
                         return;
                     }
                     continue;
                 }
                 _ = time_check.tick() => {
                     let _ = self.run_due_routines();
-                    if std::mem::take(&mut self.owed) && !self.respond_on(channel).await {
+                    if std::mem::take(&mut self.owed) && !self.respond_on(channel, true).await {
+                        return;
+                    }
+                    if !self.quiet_now() && !self.release_held(channel).await {
                         return;
                     }
                     continue;
@@ -247,13 +259,17 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 continue;
             }
+            // The Owner is there after all: what was kept for later is due.
+            if !self.release_held(channel).await {
+                return;
+            }
             if let Err(error) = self.store.append(&Message::from_owner(text)) {
                 if channel.send(&explain_storage(&error)).await.is_err() {
                     return;
                 }
                 continue;
             }
-            if !self.respond_on(channel).await {
+            if !self.respond_on(channel, false).await {
                 return;
             }
         }
@@ -290,6 +306,15 @@ impl<P: Provider + 'static> Agent<P> {
             "\n\n## Now\n\nWhere your Owner is, it is {}.",
             (self.clock)().format("%A %Y-%m-%d %H:%M (UTC%:z)")
         ));
+        if let Some((from, until)) = self.quiet_hours() {
+            let now = if self.quiet_now() {
+                "it is quiet hours now"
+            } else {
+                "it is not quiet hours now"
+            };
+            instructions
+                .push_str(&format!(" Your Owner's quiet hours are {from} to {until}: {now}."));
+        }
         instructions
     }
 
@@ -325,19 +350,26 @@ impl<P: Provider + 'static> Agent<P> {
     }
 
     /// Responds to the latest of the Conversation; false once the Channel is closed.
-    async fn respond_on(&mut self, channel: &mut impl Channel) -> bool {
-        match self.respond(channel).await {
+    async fn respond_on(&mut self, channel: &mut impl Channel, initiated: bool) -> bool {
+        match self.respond(channel, initiated).await {
             Ok(open) => open,
             Err(error) => channel.send(&explain_storage(&error)).await.is_ok(),
         }
     }
 
-    /// Thinks and acts, turn after turn, until the model has nothing left to do.
-    async fn respond(&mut self, channel: &mut impl Channel) -> Result<bool, StoreError> {
+    /// Thinks and acts, turn after turn, until the model has nothing left to
+    /// do. `initiated` is true when the Agent acts on its own initiative
+    /// rather than in answer to its Owner.
+    async fn respond(
+        &mut self,
+        channel: &mut impl Channel,
+        initiated: bool,
+    ) -> Result<bool, StoreError> {
         let mut actions = self.host.specs();
         actions.push(search_spec());
         actions.extend(Subagents::specs());
         actions.extend(routines::specs());
+        actions.push(quiet_hours_spec());
         for _ in 0..STEPS_BEFORE_STOPPING {
             self.fit(channel, &actions).await?;
             let mut conversation = self.store.conversation()?;
@@ -380,7 +412,7 @@ impl<P: Provider + 'static> Agent<P> {
                 text: reply.text.clone(),
                 actions: reply.actions.clone(),
             })?;
-            if !reply.text.is_empty() && channel.send(&reply.text).await.is_err() {
+            if !reply.text.is_empty() && !self.deliver(channel, &reply.text, initiated).await? {
                 return Ok(false);
             }
             if reply.actions.is_empty() {
@@ -410,6 +442,7 @@ impl<P: Provider + 'static> Agent<P> {
                     )),
                     "list_subagents" => Some(self.subagents.list()),
                     "stop_subagent" => Some(self.subagents.stop(named("name"))),
+                    "set_quiet_hours" => Some(self.set_quiet_hours(named("from"), named("until"))),
                     _ => None,
                 };
                 if let Some(text) = own {
@@ -423,6 +456,15 @@ impl<P: Provider + 'static> Agent<P> {
                 let allowed = match review {
                     Review::Refuse(problem) => Err(problem),
                     Review::Free => Ok(()),
+                    // On its own initiative the Agent does not disturb its Owner's rest.
+                    Review::Ask(_) if initiated && self.quiet_now() => Err(format!(
+                        "This needs your Owner's approval, and it is their quiet hours ({}): it \
+                         was not asked for and not carried out. If it still matters, schedule it \
+                         for after they end.",
+                        self.quiet_hours()
+                            .map(|(from, until)| format!("{from} to {until}"))
+                            .unwrap_or_default()
+                    )),
                     Review::Ask(approval) => match channel.ask(&approval).await {
                         Ok(Answer::Allowed) => Ok(()),
                         Ok(Answer::Denied) => {
@@ -609,6 +651,24 @@ pub(crate) fn clip(text: &str, limit: usize) -> &str {
     &text[..end]
 }
 
+fn quiet_hours_spec() -> ActionSpec {
+    ActionSpec {
+        name: "set_quiet_hours".into(),
+        description: "Sets the hours during which you do not write to your Owner on your own \
+                      initiative; what you would have said is delivered when they end. Give \
+                      both times empty to turn them off."
+            .into(),
+        input: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "from": { "type": "string", "description": "When they start, as HH:MM in your Owner's time." },
+                "until": { "type": "string", "description": "When they end, as HH:MM in your Owner's time." },
+            },
+            "required": ["from", "until"],
+        }),
+    }
+}
+
 fn search_spec() -> ActionSpec {
     ActionSpec {
         name: "search_conversation".into(),
@@ -664,6 +724,94 @@ impl<P: Provider + 'static> Agent<P> {
 }
 
 impl<P: Provider + 'static> Agent<P> {
+    /// Says `text` to the Owner. What the Agent says on its own initiative
+    /// may be left unsaid, or kept until the Owner's quiet hours end. False
+    /// once the Channel is closed.
+    async fn deliver(
+        &mut self,
+        channel: &mut impl Channel,
+        text: &str,
+        initiated: bool,
+    ) -> Result<bool, StoreError> {
+        if !initiated {
+            return Ok(channel.send(text).await.is_ok());
+        }
+        let text = text.trim();
+        if text.is_empty() || text == SILENT {
+            return Ok(true);
+        }
+        let (urgent, text) = match text.strip_prefix(URGENT) {
+            Some(rest) => (true, rest.trim()),
+            None => (false, text),
+        };
+        if !urgent && self.quiet_now() {
+            let mut held = self.held()?;
+            held.push(text.to_owned());
+            let kept = serde_json::to_string(&held).unwrap_or_default();
+            self.store.set_setting("held", Some(&kept))?;
+            return Ok(true);
+        }
+        Ok(channel.send(text).await.is_ok())
+    }
+
+    /// What was kept for after the Owner's quiet hours.
+    fn held(&self) -> Result<Vec<String>, StoreError> {
+        let kept = self.store.setting("held")?;
+        Ok(kept.and_then(|kept| serde_json::from_str(&kept).ok()).unwrap_or_default())
+    }
+
+    /// Says what was kept for later, all at once. False once the Channel is closed.
+    async fn release_held(&mut self, channel: &mut impl Channel) -> bool {
+        let Ok(held) = self.held() else { return true };
+        if held.is_empty() {
+            return true;
+        }
+        if channel.send(&held.join("\n\n")).await.is_err() {
+            return false;
+        }
+        let _ = self.store.set_setting("held", None);
+        true
+    }
+
+    /// The Owner's quiet hours as (from, until), each written HH:MM.
+    fn quiet_hours(&self) -> Option<(String, String)> {
+        let kept = self.store.setting("quiet_hours").ok()??;
+        let (from, until) = kept.split_once('-')?;
+        Some((from.to_owned(), until.to_owned()))
+    }
+
+    /// True during the Owner's quiet hours.
+    fn quiet_now(&self) -> bool {
+        let Some((from, until)) = self.quiet_hours() else { return false };
+        let (Ok(from), Ok(until)) =
+            (NaiveTime::parse_from_str(&from, "%H:%M"), NaiveTime::parse_from_str(&until, "%H:%M"))
+        else {
+            return false;
+        };
+        let now = (self.clock)().time();
+        if from <= until { from <= now && now < until } else { now >= from || now < until }
+    }
+
+    fn set_quiet_hours(&mut self, from: &str, until: &str) -> String {
+        let (from, until) = (from.trim(), until.trim());
+        if from.is_empty() && until.is_empty() {
+            return match self.store.set_setting("quiet_hours", None) {
+                Ok(()) => "Quiet hours are off.".into(),
+                Err(error) => explain_storage(&error),
+            };
+        }
+        let read = |time: &str| {
+            NaiveTime::parse_from_str(time, "%H:%M").map(|time| time.format("%H:%M").to_string())
+        };
+        let (Ok(from), Ok(until)) = (read(from), read(until)) else {
+            return "Give both times as HH:MM, or both empty to turn quiet hours off.".into();
+        };
+        match self.store.set_setting("quiet_hours", Some(&format!("{from}-{until}"))) {
+            Ok(()) => format!("Quiet hours are now {from} to {until}."),
+            Err(error) => explain_storage(&error),
+        }
+    }
+
     /// Tells the model what a Sub-agent or a Routine run ended with, and
     /// keeps a Routine's result with it.
     fn note(&mut self, report: Report) -> Result<(), StoreError> {

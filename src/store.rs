@@ -186,6 +186,28 @@ impl Store {
         Ok(found.into_iter().take(8).map(|(_, _, date, message)| (date, message)).collect())
     }
 
+    /// The value kept under `key`, if any.
+    pub(crate) fn setting(&self, key: &str) -> Result<Option<String>, StoreError> {
+        let database = self.database.lock().expect("the Store is not poisoned");
+        let mut statement = database.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        let mut rows = statement.query_map([key], |row| row.get::<_, String>(0))?;
+        Ok(rows.next().transpose()?)
+    }
+
+    /// Keeps `value` under `key`, or removes it when there is none.
+    pub(crate) fn set_setting(&self, key: &str, value: Option<&str>) -> Result<(), StoreError> {
+        let database = self.database.lock().expect("the Store is not poisoned");
+        match value {
+            Some(value) => database.execute(
+                "INSERT INTO settings (key, value) VALUES (?1, ?2)
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )?,
+            None => database.execute("DELETE FROM settings WHERE key = ?1", [key])?,
+        };
+        Ok(())
+    }
+
     /// Keeps `routine`, replacing the one of the same name.
     pub(crate) fn save_routine(&self, routine: &Routine) -> Result<(), StoreError> {
         self.database.lock().expect("the Store is not poisoned").execute(
