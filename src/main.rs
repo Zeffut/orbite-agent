@@ -73,7 +73,8 @@ fn agent() -> Result<Agent<OpenAiCompatible>, Failure> {
     let provider = OpenAiCompatible::new(base_url, api_key, model);
     Ok(Agent::new(provider, store)
         .working_in(home.join("workspace"))
-        .remembering_in(home.join("memory")))
+        .remembering_in(home.join("memory"))
+        .learning_in(home.join("skills")))
 }
 
 fn required(name: &str) -> Result<String, Failure> {

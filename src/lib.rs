@@ -7,6 +7,8 @@ mod channel;
 mod memory;
 mod openai_compatible;
 mod provider;
+mod skills;
+mod slug;
 mod store;
 mod telegram;
 mod terminal;

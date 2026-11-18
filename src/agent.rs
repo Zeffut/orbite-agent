@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::actions::{Host, Review};
 use crate::memory::Memory;
+use crate::skills::Skills;
 use crate::{Channel, Message, Provider, ProviderError, Request, Store, StoreError};
 
 /// Who the Agent is, told to the model on every turn.
@@ -36,6 +37,17 @@ you remember when asked.
 
 What you remember now, as name: text.";
 
+const SKILLS_INSTRUCTIONS: &str = "\
+## Your skills
+
+A skill is a way of doing something that you keep for later. Before doing \
+anything one of your skills covers, load it with `use_skill` and follow it. \
+When you have worked out how to do something your Owner will want again, \
+offer to keep it with `save_skill`; when a skill turned out wrong or \
+incomplete, save it again improved.
+
+Your skills now, as name: what it is for.";
+
 /// Channels show a working signal for a few seconds only; it is renewed at
 /// this pace while the Agent works.
 const WORKING_SIGNAL_EVERY: Duration = Duration::from_secs(4);
@@ -57,6 +69,7 @@ impl<P: Provider> Agent<P> {
             workspace: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             command_timeout: Duration::from_secs(120),
             memory: None,
+            skills: None,
         };
         Self { provider, store, host }
     }
@@ -70,6 +83,12 @@ impl<P: Provider> Agent<P> {
     /// The folder where the Agent keeps its Memory, one file per entry.
     pub fn remembering_in(mut self, folder: impl Into<PathBuf>) -> Self {
         self.host.memory = Some(Memory::kept_in(folder.into()));
+        self
+    }
+
+    /// The folder where the Agent keeps its Skills, one folder per Skill.
+    pub fn learning_in(mut self, folder: impl Into<PathBuf>) -> Self {
+        self.host.skills = Some(Skills::kept_in(folder.into()));
         self
     }
 
@@ -98,16 +117,29 @@ impl<P: Provider> Agent<P> {
         }
     }
 
-    /// Who the Agent is and what it remembers, as told to the model.
+    /// Who the Agent is, what it remembers and what it knows how to do, as
+    /// told to the model.
     fn instructions(&self) -> String {
-        let Some(memory) = &self.host.memory else { return INSTRUCTIONS.to_owned() };
-        let mut instructions = format!("{INSTRUCTIONS}\n\n{MEMORY_INSTRUCTIONS}\n");
-        let entries = memory.entries();
-        if entries.is_empty() {
-            instructions.push_str("\n(nothing yet)");
+        let mut instructions = INSTRUCTIONS.to_owned();
+        if let Some(memory) = &self.host.memory {
+            instructions.push_str(&format!("\n\n{MEMORY_INSTRUCTIONS}\n"));
+            let entries = memory.entries();
+            if entries.is_empty() {
+                instructions.push_str("\n(nothing yet)");
+            }
+            for (name, text) in entries {
+                instructions.push_str(&format!("\n- {name}: {text}"));
+            }
         }
-        for (name, text) in entries {
-            instructions.push_str(&format!("\n- {name}: {text}"));
+        if let Some(skills) = &self.host.skills {
+            instructions.push_str(&format!("\n\n{SKILLS_INSTRUCTIONS}\n"));
+            let skills = skills.all();
+            if skills.is_empty() {
+                instructions.push_str("\n(none yet)");
+            }
+            for skill in skills {
+                instructions.push_str(&format!("\n- {}: {}", skill.name, skill.description));
+            }
         }
         instructions
     }

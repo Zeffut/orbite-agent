@@ -12,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::memory::Memory;
+use crate::skills::{Skill, Skills};
 use crate::{ActionRequest, ActionSpec, Approval};
 
 /// How much of a command's output, per stream, is passed on to the model.
@@ -20,6 +21,8 @@ const OUTPUT_KEPT: usize = 16_000;
 const FILE_KEPT: usize = 100_000;
 /// How much of a text is shown to the Owner in an Approval.
 const PREVIEW_KEPT: usize = 1_500;
+
+const NO_SKILLS: &str = "There is nowhere to keep skills.";
 
 /// What the gate decided about an Action.
 pub(crate) enum Review {
@@ -39,6 +42,20 @@ pub(crate) struct Host {
     pub(crate) command_timeout: Duration,
     /// Where the Agent keeps its Memory, when it has somewhere to.
     pub(crate) memory: Option<Memory>,
+    /// Where the Agent keeps its Skills, when it has somewhere to.
+    pub(crate) skills: Option<Skills>,
+}
+
+#[derive(Deserialize)]
+struct NamedSkill {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct SaveSkill {
+    name: String,
+    description: String,
+    instructions: String,
 }
 
 #[derive(Deserialize)]
@@ -82,6 +99,9 @@ enum Action {
     EditFile(EditFile),
     Remember(Remember),
     Forget(Forget),
+    UseSkill(NamedSkill),
+    SaveSkill(SaveSkill),
+    RemoveSkill(NamedSkill),
 }
 
 impl Host {
@@ -145,6 +165,32 @@ impl Host {
                 json!({ "name": text("The entry's name, as listed in your memory.") }),
             ));
         }
+        if self.skills.is_some() {
+            specs.push(spec(
+                "use_skill",
+                "Gives you the instructions of one of your skills. Use it before doing anything \
+                 a skill covers.",
+                json!({ "name": text("The skill's name, as listed in your skills.") }),
+            ));
+            specs.push(spec(
+                "save_skill",
+                "Keeps a way of doing something as a skill for later conversations, or improves \
+                 an existing one saved under the same name. Needs the Owner's approval.",
+                json!({
+                    "name": text("A few lowercase words joined by dashes, such as \"weekly-report\"."),
+                    "description": text(
+                        "One or two sentences: what the skill does, and when to use it. This is \
+                         all you will see of it until you use it."
+                    ),
+                    "instructions": text("The steps to follow, in Markdown."),
+                }),
+            ));
+            specs.push(spec(
+                "remove_skill",
+                "Deletes a skill and its files. Needs the Owner's approval.",
+                json!({ "name": text("The skill's name, as listed in your skills.") }),
+            ));
+        }
         specs
     }
 
@@ -190,6 +236,33 @@ impl Host {
                     irreversible: replaces,
                 })
             }
+            Action::UseSkill(_) => Review::Free,
+            Action::SaveSkill(skill) => {
+                let Some(skills) = &self.skills else { return Review::Refuse(NO_SKILLS.into()) };
+                if let Err(error) = crate::slug::slug(&skill.name) {
+                    return Review::Refuse(format!("Could not save the skill: {error}."));
+                }
+                let replaces = skills.has(&skill.name);
+                let summary = if replaces { "Replace a skill" } else { "Save a skill" };
+                Review::Ask(Approval {
+                    summary: summary.into(),
+                    detail: format!(
+                        "{}\n\n{}\n\n{}",
+                        skill.name,
+                        skill.description,
+                        preview(&skill.instructions)
+                    ),
+                    irreversible: replaces,
+                })
+            }
+            Action::RemoveSkill(skill) => match self.skill(&skill.name) {
+                Err(problem) => Review::Refuse(problem),
+                Ok(found) => Review::Ask(Approval {
+                    summary: "Remove a skill".into(),
+                    detail: format!("{}\n\n{}", found.name, found.description),
+                    irreversible: true,
+                }),
+            },
             // Memory is the Agent's own, and its Owner can read and undo all of it.
             Action::Remember(_) | Action::Forget(_) => Review::Free,
             Action::EditFile(edit) => match self.edited(&edit) {
@@ -217,6 +290,31 @@ impl Host {
             Ok(Action::ReadFile(read)) => self.read(&read.path),
             Ok(Action::WriteFile(write)) => self.write(&write.path, &write.content),
             Ok(Action::Remember(entry)) => self.remember(&entry),
+            Ok(Action::UseSkill(skill)) => match self.skill(&skill.name) {
+                Err(problem) => problem,
+                Ok(skill) => format!(
+                    "{}\n\n[This skill's files are in {}]",
+                    skill.instructions,
+                    skill.folder.display()
+                ),
+            },
+            Ok(Action::SaveSkill(skill)) => match &self.skills {
+                None => NO_SKILLS.into(),
+                Some(skills) => {
+                    match skills.save(&skill.name, &skill.description, &skill.instructions) {
+                        Ok(name) => format!("Saved the skill \"{name}\"."),
+                        Err(error) => format!("Could not save the skill: {error}."),
+                    }
+                }
+            },
+            Ok(Action::RemoveSkill(skill)) => match &self.skills {
+                None => NO_SKILLS.into(),
+                Some(skills) => match skills.remove(&skill.name) {
+                    Ok(true) => format!("Removed the skill \"{}\".", skill.name),
+                    Ok(false) => format!("There is no skill called \"{}\".", skill.name),
+                    Err(error) => format!("Could not remove the skill: {error}."),
+                },
+            },
             Ok(Action::Forget(entry)) => self.forget(&entry.name),
             Ok(Action::EditFile(edit)) => match self.edited(&edit) {
                 Err(problem) => problem,
@@ -226,6 +324,15 @@ impl Host {
                 },
             },
         }
+    }
+
+    /// The Skill called `name`, or what to tell the model when there is none.
+    fn skill(&self, name: &str) -> Result<Skill, String> {
+        let Some(skills) = &self.skills else { return Err(NO_SKILLS.into()) };
+        skills.find(name).ok_or_else(|| {
+            let names: Vec<String> = skills.all().into_iter().map(|skill| skill.name).collect();
+            format!("There is no skill called \"{name}\". The skills are: {}.", names.join(", "))
+        })
     }
 
     fn remember(&self, entry: &Remember) -> String {
@@ -383,6 +490,9 @@ fn understand(request: &ActionRequest) -> Result<Action, String> {
         "edit_file" => input(request).map(Action::EditFile),
         "remember" => input(request).map(Action::Remember),
         "forget" => input(request).map(Action::Forget),
+        "use_skill" => input(request).map(Action::UseSkill),
+        "save_skill" => input(request).map(Action::SaveSkill),
+        "remove_skill" => input(request).map(Action::RemoveSkill),
         other => Err(format!("There is no Action called {other}.")),
     }
 }
