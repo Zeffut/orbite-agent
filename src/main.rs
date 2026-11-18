@@ -19,6 +19,7 @@ Read from the environment:
   ORBITE_BASE_URL        Provider's API root (default: https://api.openai.com/v1)
   ORBITE_HOME            folder where the Agent keeps its data (default: ~/.orbite)
   ORBITE_CONTEXT_TOKENS  most tokens sent to the model per turn (default: 60000)
+  ORBITE_WAKE_UP_MINUTES minutes between the Agent's own wake-ups, 0 for never (default: 240)
   ORBITE_TELEGRAM_TOKEN  token of the Owner's Telegram bot (run)
   ORBITE_TELEGRAM_OWNER  numeric id of the Owner's Telegram account (run)";
 
@@ -72,6 +73,10 @@ fn agent() -> Result<Agent<OpenAiCompatible>, Failure> {
         .map_err(|error| format!("Could not open the Agent's data: {error}"))?;
 
     let provider = OpenAiCompatible::new(base_url, api_key, model);
+    let wake_ups: u32 = match setting("ORBITE_WAKE_UP_MINUTES") {
+        Some(minutes) => minutes.parse().map_err(|_| "ORBITE_WAKE_UP_MINUTES must be a number.")?,
+        None => 240,
+    };
     let context: usize = match setting("ORBITE_CONTEXT_TOKENS") {
         Some(tokens) => tokens.parse().map_err(|_| "ORBITE_CONTEXT_TOKENS must be a number.")?,
         None => 60_000,
@@ -80,7 +85,8 @@ fn agent() -> Result<Agent<OpenAiCompatible>, Failure> {
         .working_in(home.join("workspace"))
         .remembering_in(home.join("memory"))
         .learning_in(home.join("skills"))
-        .keeping_context_under(context))
+        .keeping_context_under(context)
+        .waking_up_every_minutes(wake_ups))
 }
 
 fn required(name: &str) -> Result<String, Failure> {

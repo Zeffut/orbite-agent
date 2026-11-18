@@ -92,17 +92,12 @@ impl Subagents {
         vec![
             spec(
                 "delegate",
-                "Starts a sub-agent on a task and returns at once: you and your Owner carry on \
-                 while it works, and its report reaches you later as a notice. Use it for long \
-                 research or for several pieces of work that can go on at the same time, not \
-                 for something quick. A sub-agent knows nothing of your conversation and can \
-                 look at things but not change them.",
+                "Starts a sub-agent on a long or parallel task and returns at once; its report \
+                 reaches you later as a notice. It knows nothing of your conversation and only \
+                 looks at things.",
                 serde_json::json!({
-                    "name": text("A short name to tell this sub-agent from others."),
-                    "task": text(
-                        "Everything it needs to know: what to do, with what, and what its report \
-                         should contain."
-                    ),
+                    "name": text("A short name for it."),
+                    "task": text("Everything it needs: what to do and what to report."),
                 }),
             ),
             spec("list_subagents", "Lists the sub-agents now working.", serde_json::json!({})),

@@ -94,6 +94,22 @@ few short paragraphs at most. Reply with the summary only.";
 /// this pace while the Agent works.
 const WORKING_SIGNAL_EVERY: Duration = Duration::from_secs(4);
 
+/// How many of the latest entries of the Conversation a Wake-up is shown.
+const WAKE_UP_SEES: usize = 12;
+
+const WAKE_UP_INSTRUCTIONS: &str = "\
+You are a personal AI agent waking up by yourself, with nobody asking, to \
+review what is pending with your Owner. You are shown what you remember, what \
+is already scheduled, and the end of your conversation. Is there something \
+that should happen now and will not happen by itself: a promise of yours \
+coming due, a follow-up your Owner is waiting for, something they said they \
+had to do and may have forgotten, a habit you could offer to take over? What \
+is already scheduled takes care of itself, and what you have already brought \
+up and your Owner has not answered must not be brought up again: once is \
+enough, they will come back to it. If nothing calls for action now, \
+which is the usual case, reply with exactly [silent]. Otherwise say in one or \
+two sentences what should be done and why now.";
+
 /// The whole answer to a notice that calls for no word to the Owner.
 const SILENT: &str = "[silent]";
 
@@ -129,6 +145,11 @@ pub struct Agent<P> {
     time_check: Duration,
     /// True when a notice was added that the Agent has yet to respond to.
     owed: bool,
+    /// How often the Agent wakes up when its Owner has set no pace, in
+    /// minutes; zero for never.
+    wake_up_pace: u32,
+    /// When the Owner last wrote or the Agent last woke up, in seconds since 1970.
+    last_active: i64,
 }
 
 impl<P: Provider + 'static> Agent<P> {
@@ -152,6 +173,8 @@ impl<P: Provider + 'static> Agent<P> {
             clock: Arc::new(|| Local::now().fixed_offset()),
             time_check: Duration::from_secs(20),
             owed: false,
+            wake_up_pace: 0,
+            last_active: 0,
         }
     }
 
@@ -166,6 +189,13 @@ impl<P: Provider + 'static> Agent<P> {
         clock: impl Fn() -> DateTime<FixedOffset> + Send + Sync + 'static,
     ) -> Self {
         self.clock = Arc::new(clock);
+        self
+    }
+
+    /// How often the Agent wakes up by itself to review what is pending,
+    /// unless its Owner has set another pace; zero for never.
+    pub fn waking_up_every_minutes(mut self, minutes: u32) -> Self {
+        self.wake_up_pace = minutes;
         self
     }
 
@@ -232,6 +262,7 @@ impl<P: Provider + 'static> Agent<P> {
         if self.unfinished().unwrap_or(false) && !self.respond_on(channel, false).await {
             return;
         }
+        self.last_active = (self.clock)().timestamp();
         let mut time_check = tokio::time::interval(self.time_check);
         time_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -254,6 +285,12 @@ impl<P: Provider + 'static> Agent<P> {
                     if !self.quiet_now() && !self.release_held(channel).await {
                         return;
                     }
+                    if self.wake_up_is_due() {
+                        self.wake_up().await;
+                        if std::mem::take(&mut self.owed) && !self.respond_on(channel, true).await {
+                            return;
+                        }
+                    }
                     continue;
                 }
             };
@@ -267,6 +304,7 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 continue;
             }
+            self.last_active = (self.clock)().timestamp();
             // The Owner is there after all: what was kept for later is due.
             if !self.release_held(channel).await {
                 return;
@@ -380,6 +418,7 @@ impl<P: Provider + 'static> Agent<P> {
         actions.extend(Subagents::specs());
         actions.extend(routines::specs());
         actions.push(quiet_hours_spec());
+        actions.push(wake_ups_spec());
         for _ in 0..STEPS_BEFORE_STOPPING {
             self.fit(channel, &actions).await?;
             let mut conversation = self.store.conversation()?;
@@ -454,6 +493,7 @@ impl<P: Provider + 'static> Agent<P> {
                     "list_subagents" => Some(self.subagents.list()),
                     "stop_subagent" => Some(self.subagents.stop(named("name"))),
                     "set_quiet_hours" => Some(self.set_quiet_hours(named("from"), named("until"))),
+                    "set_wake_ups" => Some(self.set_wake_ups(&action.input["every_minutes"])),
                     _ => None,
                 };
                 if let Some(text) = own {
@@ -668,6 +708,22 @@ pub(crate) fn clip(text: &str, limit: usize) -> &str {
     &text[..end]
 }
 
+fn wake_ups_spec() -> ActionSpec {
+    ActionSpec {
+        name: "set_wake_ups".into(),
+        description: "Sets how often you, the agent, review by yourself what is pending with \
+                      your Owner when nothing else is going on (your own check-ins, not an \
+                      alarm or reminder for your Owner: use schedule_routine for those). 0 \
+                      turns them off."
+            .into(),
+        input: serde_json::json!({
+            "type": "object",
+            "properties": { "every_minutes": { "type": "integer", "description": "Minutes between wake-ups; 0 for never." } },
+            "required": ["every_minutes"],
+        }),
+    }
+}
+
 fn quiet_hours_spec() -> ActionSpec {
     ActionSpec {
         name: "set_quiet_hours".into(),
@@ -791,6 +847,94 @@ impl<P: Provider + 'static> Agent<P> {
         }
         let _ = self.store.set_setting("held", None);
         true
+    }
+
+    /// How often the Agent wakes up, in minutes; zero for never.
+    fn wake_up_minutes(&self) -> u32 {
+        let set = self.store.setting("wake_up_minutes").ok().flatten();
+        set.and_then(|minutes| minutes.parse().ok()).unwrap_or(self.wake_up_pace)
+    }
+
+    fn set_wake_ups(&mut self, every_minutes: &serde_json::Value) -> String {
+        let Some(minutes) = every_minutes.as_u64().filter(|minutes| *minutes <= 7 * 24 * 60) else {
+            return "Give `every_minutes` as a number of minutes, or 0 to turn wake-ups off."
+                .into();
+        };
+        match self.store.set_setting("wake_up_minutes", Some(&minutes.to_string())) {
+            Err(error) => explain_storage(&error),
+            Ok(()) if minutes == 0 => "Wake-ups are off.".into(),
+            Ok(()) => {
+                format!("I now wake up every {minutes} minutes when nothing else is going on.")
+            }
+        }
+    }
+
+    /// True when it is time for the Agent to review what is pending.
+    fn wake_up_is_due(&self) -> bool {
+        let minutes = i64::from(self.wake_up_minutes());
+        minutes > 0
+            && !self.quiet_now()
+            && (self.clock)().timestamp() - self.last_active >= minutes * 60
+    }
+
+    /// Reviews what is pending, on little: the model is shown only the end of
+    /// the Conversation and decides whether anything is worth bringing up.
+    /// What it brings up becomes a notice; nothing else leaves a trace.
+    async fn wake_up(&mut self) {
+        let now = (self.clock)();
+        self.last_active = now.timestamp();
+        let mut material = String::new();
+        if let Ok(Some(summary)) = self.store.summary() {
+            material.push_str(&format!("Earlier: {}\n\n", clip(&summary, 1_200)));
+        }
+        if let Some(memory) = &self.host.memory {
+            let entries: Vec<String> =
+                memory.entries().iter().map(|(name, text)| format!("{name}: {text}")).collect();
+            if !entries.is_empty() {
+                material.push_str(&format!(
+                    "What you remember: {}\n\n",
+                    clip(&entries.join("; "), 1_200)
+                ));
+            }
+        }
+        if let Ok(routines) = self.store.routines()
+            && !routines.is_empty()
+        {
+            let scheduled: Vec<String> = routines
+                .iter()
+                .map(|routine| clip(&describe(routine, now), 200).to_owned())
+                .collect();
+            material.push_str(&format!("Already scheduled:\n{}\n\n", scheduled.join("\n")));
+        }
+        material.push_str("The end of your conversation with your Owner:\n");
+        let conversation = self.store.conversation().unwrap_or_default();
+        for message in &conversation[conversation.len().saturating_sub(WAKE_UP_SEES)..] {
+            let line = match message {
+                Message::Owner(text) => format!("Owner: {text}"),
+                Message::Agent { text, .. } if text.is_empty() => continue,
+                Message::Agent { text, .. } => format!("You: {text}"),
+                Message::Outcome { text, .. } => format!("Result: {text}"),
+                Message::Notice(text) => format!("Notice: {text}"),
+            };
+            material.push_str(clip(&line, 300));
+            material.push('\n');
+        }
+        let instructions =
+            format!("{WAKE_UP_INSTRUCTIONS}\n\nIt is {}.", now.format("%A %Y-%m-%d %H:%M"));
+        let asked = [Message::Owner(material)];
+        let request = Request { instructions: &instructions, conversation: &asked, actions: &[] };
+        let Ok(reply) = patiently(&*self.provider, request, self.host.busy_wait).await else {
+            return;
+        };
+        let thought = reply.text.trim();
+        if thought.is_empty() || thought.contains(SILENT) {
+            return;
+        }
+        let noted = self.store.append(&Message::Notice(format!(
+            "Waking up by yourself to review what is pending, you noted this, which your Owner \
+             has not seen: {thought}"
+        )));
+        self.owed = noted.is_ok();
     }
 
     /// The Owner's quiet hours as (from, until), each written HH:MM.

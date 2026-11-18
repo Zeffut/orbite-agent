@@ -90,23 +90,16 @@ pub(crate) fn specs() -> Vec<ActionSpec> {
     vec![
         spec(
             "schedule_routine",
-            "Schedules something for later. With `at`, once: at that moment you are given the \
-             instruction back as a notice and carry it out yourself, which suits reminders and \
-             follow-ups. With `cron`, recurring: each run happens in a fresh context that knows \
-             nothing of your conversation and can look at things but not change them, and its \
-             report reaches you as a notice; this needs the Owner's approval. Scheduling under \
-             an existing name replaces that routine.",
+            "Schedules something for later. With `at`, once: at that moment the instruction \
+             comes back to you as a notice and you carry it out (reminders, follow-ups). With \
+             `cron`, recurring: each run is done in a fresh context that knows nothing of your \
+             conversation and only looks at things; its report reaches you as a notice. An \
+             existing name is replaced.",
             json!({
-                "name": text("A few words naming the routine."),
-                "instruction": text(
-                    "What to do at each run, written to be understood on its own, including \
-                     what the report should contain."
-                ),
-                "cron": text(
-                    "For a recurring routine: five fields (minute hour day-of-month month \
-                     day-of-week) in your Owner's time, such as \"0 9 * * 1-5\"."
-                ),
-                "at": text("For a routine that runs once: the moment, as YYYY-MM-DD HH:MM in your Owner's time."),
+                "name": text("A few words naming it."),
+                "instruction": text("What to do, written to be understood on its own."),
+                "cron": text("Recurring: minute hour day-of-month month day-of-week, in your Owner's time."),
+                "at": text("Once: YYYY-MM-DD HH:MM in your Owner's time."),
             }),
             &["name", "instruction"],
         ),
