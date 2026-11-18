@@ -325,6 +325,15 @@ impl<P: Provider + 'static> Agent<P> {
     /// told to the model.
     fn instructions(&self) -> String {
         let mut instructions = INSTRUCTIONS.to_owned();
+        let level = self.level();
+        instructions.push_str(&format!(
+            "\n\nYour permission level is {}: {}",
+            level.name(),
+            level
+                .meaning()
+                .replace("the Agent", "you")
+                .replace(" it always asks", " you always ask")
+        ));
         if let Some(memory) = &self.host.memory {
             instructions.push_str(&format!("\n\n{MEMORY_INSTRUCTIONS}\n"));
             let entries = memory.entries();
@@ -419,6 +428,7 @@ impl<P: Provider + 'static> Agent<P> {
         actions.extend(routines::specs());
         actions.push(quiet_hours_spec());
         actions.push(wake_ups_spec());
+        actions.extend(permission_specs());
         for _ in 0..STEPS_BEFORE_STOPPING {
             self.fit(channel, &actions).await?;
             let mut conversation = self.store.conversation()?;
@@ -508,6 +518,7 @@ impl<P: Provider + 'static> Agent<P> {
                 let allowed = match review {
                     Review::Refuse(problem) => Err(problem),
                     Review::Free => Ok(()),
+                    Review::Ask(approval) if self.already_allowed(&approval, action) => Ok(()),
                     // On its own initiative the Agent does not disturb its Owner's rest.
                     Review::Ask(_) if initiated && self.quiet_now() => Err(format!(
                         "This needs your Owner's approval, and it is their quiet hours ({}): it \
@@ -519,6 +530,13 @@ impl<P: Provider + 'static> Agent<P> {
                     )),
                     Review::Ask(approval) => match channel.ask(&approval).await {
                         Ok(Answer::Allowed) => Ok(()),
+                        Ok(Answer::AlwaysAllowed) => {
+                            // A Critical Action is only ever allowed the once.
+                            if !approval.critical {
+                                self.always_allow(action)?;
+                            }
+                            Ok(())
+                        }
                         Ok(Answer::Denied) => {
                             Err("The Owner denied this action. It was not carried out.".into())
                         }
@@ -706,6 +724,35 @@ pub(crate) fn clip(text: &str, limit: usize) -> &str {
         end -= 1;
     }
     &text[..end]
+}
+
+fn permission_specs() -> Vec<ActionSpec> {
+    let spec = |name: &str, description: &str, properties: serde_json::Value| {
+        let required: Vec<&String> = properties.as_object().unwrap().keys().collect();
+        ActionSpec {
+            name: name.into(),
+            description: description.into(),
+            input: serde_json::json!({ "type": "object", "properties": properties, "required": required }),
+        }
+    };
+    vec![
+        spec(
+            "set_permission_level",
+            "Changes how much you do without asking your Owner, only when they ask you to. \
+             Loosening it needs their approval.",
+            serde_json::json!({ "level": { "type": "string", "enum": ["careful", "balanced", "free"] } }),
+        ),
+        spec(
+            "list_always_allowed",
+            "Lists what your Owner allowed once and for all.",
+            serde_json::json!({}),
+        ),
+        spec(
+            "revoke_always_allowed",
+            "Takes back something your Owner allowed once and for all.",
+            serde_json::json!({ "what": { "type": "string", "description": "Words of the entry to take back." } }),
+        ),
+    ]
 }
 
 fn wake_ups_spec() -> ActionSpec {
@@ -1051,6 +1098,46 @@ impl<P: Provider + 'static> Agent<P> {
         Ok(())
     }
 
+    /// The Owner's Permission Level.
+    fn level(&self) -> Level {
+        let set = self.store.setting("permission_level").ok().flatten();
+        set.and_then(|name| Level::named(&name)).unwrap_or(Level::Careful)
+    }
+
+    /// What the Owner has allowed once and for all.
+    fn always_allowed(&self) -> Result<Vec<String>, StoreError> {
+        let stored = self.store.setting("always_allowed")?;
+        Ok(stored.and_then(|stored| serde_json::from_str(&stored).ok()).unwrap_or_default())
+    }
+
+    fn always_allow(&mut self, action: &ActionRequest) -> Result<(), StoreError> {
+        let mut allowed = self.always_allowed()?;
+        let what = covered_by_always(action);
+        if !allowed.contains(&what) {
+            allowed.push(what);
+        }
+        self.store.set_setting(
+            "always_allowed",
+            Some(&serde_json::to_string(&allowed).unwrap_or_default()),
+        )
+    }
+
+    /// True when an Action that would otherwise be asked about needs no
+    /// Approval: the Permission Level lets it through, or the Owner allowed
+    /// it once and for all. Never true of a Critical Action.
+    fn already_allowed(&self, approval: &Approval, action: &ActionRequest) -> bool {
+        if approval.critical {
+            return false;
+        }
+        match self.level() {
+            Level::Free => true,
+            Level::Balanced if approval.contained => true,
+            _ => self
+                .always_allowed()
+                .is_ok_and(|allowed| allowed.contains(&covered_by_always(action))),
+        }
+    }
+
     /// The Routine a `schedule_routine` request describes, or what is wrong with it.
     fn planned(&self, request: &ActionRequest) -> Result<Routine, String> {
         let now = (self.clock)();
@@ -1098,6 +1185,28 @@ impl<P: Provider + 'static> Agent<P> {
     fn review_routine(&self, request: &ActionRequest) -> Option<Review> {
         let now = (self.clock)();
         Some(match request.name.as_str() {
+            "list_always_allowed" | "revoke_always_allowed" => Review::Free,
+            "set_permission_level" => {
+                let asked = request.input["level"].as_str().unwrap_or_default();
+                match Level::named(asked) {
+                    // Refused when carried out, with the levels that exist.
+                    None => Review::Free,
+                    Some(level) if level <= self.level() => Review::Free,
+                    // Nobody but the Owner may loosen the Agent: whatever
+                    // the model was told, this is always asked.
+                    Some(level) => Review::Ask(Approval {
+                        summary: "Loosen the Agent's permissions".into(),
+                        detail: format!(
+                            "From {} to {}.\n\n{}",
+                            self.level().name(),
+                            level.name(),
+                            level.meaning()
+                        ),
+                        critical: true,
+                        ..Approval::default()
+                    }),
+                }
+            }
             "list_routines" => Review::Free,
             "schedule_routine" => match self.planned(request) {
                 Err(problem) => Review::Refuse(problem),
@@ -1120,6 +1229,7 @@ impl<P: Provider + 'static> Agent<P> {
                             routines::written(routine.next_run, now)
                         ),
                         irreversible: replaces,
+                        ..Approval::default()
                     })
                 }
             },
@@ -1134,6 +1244,7 @@ impl<P: Provider + 'static> Agent<P> {
                     summary: "Remove a routine".into(),
                     detail: format!("{}\n\n{}", routine.name, routine.instruction),
                     irreversible: true,
+                    ..Approval::default()
                 }),
             },
             _ => return None,
@@ -1144,6 +1255,38 @@ impl<P: Provider + 'static> Agent<P> {
     fn carry_out_routine(&mut self, request: &ActionRequest) -> String {
         let now = (self.clock)();
         let done = match request.name.as_str() {
+            "set_permission_level" => {
+                let asked = request.input["level"].as_str().unwrap_or_default();
+                let Some(level) = Level::named(asked) else {
+                    return format!(
+                        "There is no level called \"{asked}\". The levels are: careful, balanced, free."
+                    );
+                };
+                self.store.set_setting("permission_level", Some(level.name())).map(|()| {
+                    format!("The permission level is now {}: {}", level.name(), level.meaning())
+                })
+            }
+            "list_always_allowed" => self.always_allowed().map(|allowed| {
+                if allowed.is_empty() {
+                    return "Nothing is always allowed.".to_owned();
+                }
+                allowed.iter().map(|what| format!("- {what}")).collect::<Vec<_>>().join("\n")
+            }),
+            "revoke_always_allowed" => {
+                let what = request.input["what"].as_str().unwrap_or_default().trim().to_owned();
+                self.always_allowed().and_then(|allowed| {
+                    let (taken_back, kept): (Vec<String>, Vec<String>) = allowed
+                        .into_iter()
+                        .partition(|entry| !what.is_empty() && entry.contains(&what));
+                    let stored = serde_json::to_string(&kept).unwrap_or_default();
+                    self.store.set_setting("always_allowed", Some(&stored))?;
+                    Ok(if taken_back.is_empty() {
+                        format!("Nothing always allowed matches \"{what}\".")
+                    } else {
+                        format!("No longer always allowed: {}.", taken_back.join("; "))
+                    })
+                })
+            }
             "list_routines" => self.store.routines().map(|routines| {
                 if routines.is_empty() {
                     return "No routine is scheduled.".to_owned();
@@ -1221,6 +1364,57 @@ impl<P: Provider + 'static> Agent<P> {
         };
         done.unwrap_or_else(|error| explain_storage(&error))
     }
+}
+
+/// How much the Agent does without asking, from least to most.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Level {
+    Careful,
+    Balanced,
+    Free,
+}
+
+impl Level {
+    fn named(name: &str) -> Option<Self> {
+        match name.trim().to_lowercase().as_str() {
+            "careful" => Some(Self::Careful),
+            "balanced" => Some(Self::Balanced),
+            "free" => Some(Self::Free),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Careful => "careful",
+            Self::Balanced => "balanced",
+            Self::Free => "free",
+        }
+    }
+
+    fn meaning(self) -> &'static str {
+        match self {
+            Self::Careful => "the Agent asks before anything that changes something.",
+            Self::Balanced => {
+                "the Agent acts without asking inside its own folders, and asks for everything else \
+                 that changes something."
+            }
+            Self::Free => {
+                "the Agent acts without asking, except for critical actions (administrator \
+                 rights, wiping, secrets, spending money), which it always asks about."
+            }
+        }
+    }
+}
+
+/// What an "always allow" answered for `action` covers: this very command,
+/// this file, this name. Nothing broader.
+fn covered_by_always(action: &ActionRequest) -> String {
+    let what = ["command", "path", "url", "name"]
+        .iter()
+        .find_map(|field| action.input[*field].as_str())
+        .unwrap_or_default();
+    format!("{}: {}", action.name, what.trim())
 }
 
 /// A Routine as listed to the model.

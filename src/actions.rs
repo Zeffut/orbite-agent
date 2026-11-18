@@ -239,9 +239,11 @@ impl Host {
                 }
                 Review::Ask(Approval {
                     summary: "Run a command".into(),
+                    critical: reveals || is_critical(&detail),
                     detail,
                     // Orbite has no way to undo what a command did.
                     irreversible: true,
+                    ..Approval::default()
                 })
             }
             Action::ReadFile(ReadFile { path }) => {
@@ -250,8 +252,10 @@ impl Host {
                 }
                 Review::Ask(Approval {
                     summary: "Read a file".into(),
+                    critical: true,
                     detail: format!("{path}\n\nThis may show a secret to the AI provider."),
                     irreversible: true,
+                    ..Approval::default()
                 })
             }
             Action::WriteFile(WriteFile { path, content }) => {
@@ -259,8 +263,10 @@ impl Host {
                 let summary = if replaces { "Replace a file" } else { "Create a file" };
                 Review::Ask(Approval {
                     summary: summary.into(),
+                    contained: self.contains(&path),
                     detail: format!("{path}\n\n{}", preview(&content)),
                     irreversible: replaces,
+                    ..Approval::default()
                 })
             }
             Action::SearchWeb(_) => Review::Free,
@@ -274,6 +280,7 @@ impl Host {
                         page.url
                     ),
                     irreversible: false,
+                    ..Approval::default()
                 }),
             },
             Action::UseSkill(_) => Review::Free,
@@ -285,6 +292,7 @@ impl Host {
                 let replaces = skills.has(&skill.name);
                 let summary = if replaces { "Replace a skill" } else { "Save a skill" };
                 Review::Ask(Approval {
+                    contained: true,
                     summary: summary.into(),
                     detail: format!(
                         "{}\n\n{}\n\n{}",
@@ -293,14 +301,17 @@ impl Host {
                         preview(&skill.instructions)
                     ),
                     irreversible: replaces,
+                    ..Approval::default()
                 })
             }
             Action::RemoveSkill(skill) => match self.skill(&skill.name) {
                 Err(problem) => Review::Refuse(problem),
                 Ok(found) => Review::Ask(Approval {
+                    contained: true,
                     summary: "Remove a skill".into(),
                     detail: format!("{}\n\n{}", found.name, found.description),
                     irreversible: true,
+                    ..Approval::default()
                 }),
             },
             // Memory is the Agent's own, and its Owner can read and undo all of it.
@@ -309,6 +320,7 @@ impl Host {
                 Err(problem) => Review::Refuse(problem),
                 Ok(_) => Review::Ask(Approval {
                     summary: "Edit a file".into(),
+                    contained: self.contains(&edit.path),
                     detail: format!(
                         "{}\n\nReplace:\n{}\n\nWith:\n{}",
                         edit.path,
@@ -317,6 +329,7 @@ impl Host {
                     ),
                     // The replaced passage stays in the Conversation.
                     irreversible: false,
+                    ..Approval::default()
                 }),
             },
         }
@@ -402,6 +415,22 @@ impl Host {
             }
             Err(error) => format!("Could not forget it: {error}."),
         }
+    }
+
+    /// True when `path` lies inside the Agent's workspace, wherever its
+    /// `..` parts lead.
+    fn contains(&self, path: &str) -> bool {
+        let mut resolved = PathBuf::new();
+        for part in self.locate(path).components() {
+            match part {
+                std::path::Component::ParentDir => {
+                    resolved.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => resolved.push(other),
+            }
+        }
+        resolved.starts_with(&self.workspace)
     }
 
     /// `path` as the Host sees it: `~` is the home folder, and a relative
@@ -588,6 +617,57 @@ fn only_looks(command: &str) -> bool {
             && words.all(|word| !CHANGING.contains(&word))
             && (program != "hostname" || stage.split_whitespace().count() == 1)
     })
+}
+
+/// True when `command` could do damage no Permission Level should let
+/// through unasked: taking administrator rights, wiping, shutting down,
+/// running what was just downloaded. A list of known dangers, not a proof.
+fn is_critical(command: &str) -> bool {
+    const DANGEROUS: &[&str] = &[
+        "sudo",
+        "su",
+        "doas",
+        "pkexec",
+        "shutdown",
+        "reboot",
+        "poweroff",
+        "halt",
+        "passwd",
+        "useradd",
+        "userdel",
+        "usermod",
+        "visudo",
+        "fdisk",
+        "parted",
+        "wipefs",
+        "iptables",
+        "ufw",
+        "crontab",
+        "systemctl",
+        "service",
+        "chown",
+        "mount",
+        "umount",
+    ];
+    let command = command.to_lowercase();
+    let words: Vec<&str> = command
+        .split(|c: char| c.is_whitespace() || ";|&()".contains(c))
+        .filter(|word| !word.is_empty())
+        .collect();
+    let runs = |program: &str| {
+        words.iter().any(|word| *word == program || word.ends_with(&format!("/{program}")))
+    };
+    let outside =
+        |word: &&str| word.starts_with('/') || word.starts_with('~') || word.starts_with("$home");
+    DANGEROUS.iter().any(|program| runs(program))
+        || words.iter().any(|word| word.starts_with("mkfs"))
+        || (runs("rm") && words.iter().any(outside))
+        || (runs("dd") && command.contains("of=/dev"))
+        || (runs("chmod") && words.iter().any(outside))
+        || command.contains("/dev/sd")
+        || command.contains(":(){")
+        // What was just downloaded, run without being read.
+        || ["| sh", "|sh", "| bash", "|bash", "| zsh", "|zsh"].iter().any(|pipe| command.contains(pipe))
 }
 
 /// True when `text` names something that is probably a secret.

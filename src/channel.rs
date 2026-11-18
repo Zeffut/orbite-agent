@@ -4,7 +4,7 @@ use std::io;
 use crate::Step;
 
 /// What the Owner is shown when the Agent asks permission before an Action.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Approval {
     /// The Action in a few words, such as "Run a command".
     pub summary: String,
@@ -12,12 +12,19 @@ pub struct Approval {
     pub detail: String,
     /// True when the Action cannot be undone once carried out.
     pub irreversible: bool,
+    /// True for a Critical Action: it is asked about at every Permission
+    /// Level and cannot be allowed once and for all.
+    pub critical: bool,
+    /// True when the Action only touches the Agent's own folders.
+    pub contained: bool,
 }
 
 /// How the Owner answered an [`Approval`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     Allowed,
+    /// Allowed, and not to be asked about again.
+    AlwaysAllowed,
     Denied,
     /// The Owner wrote this instead of answering: the Action is not allowed,
     /// and what they wrote is to be heard.

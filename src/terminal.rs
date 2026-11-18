@@ -46,11 +46,16 @@ impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Channel for T
 
     async fn ask(&mut self, approval: &Approval) -> io::Result<Answer> {
         let warning = if approval.irreversible { "This cannot be undone.\n" } else { "" };
-        self.show(&format!("[{}]\n{}\n{warning}Allow? [y/N] ", approval.summary, approval.detail))
-            .await?;
+        let choices = if approval.critical { "[y/N]" } else { "[y/N/a(lways)]" };
+        self.show(&format!(
+            "[{}]\n{}\n{warning}Allow? {choices} ",
+            approval.summary, approval.detail
+        ))
+        .await?;
         let typed = self.typed.next_line().await?.unwrap_or_default();
         Ok(match typed.trim() {
             "y" | "Y" | "yes" => Answer::Allowed,
+            "a" | "A" | "always" if !approval.critical => Answer::AlwaysAllowed,
             "" | "n" | "N" | "no" => Answer::Denied,
             other => Answer::Wrote(other.to_owned()),
         })

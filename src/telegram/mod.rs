@@ -285,6 +285,11 @@ impl Channel for Telegram {
         if approval.irreversible {
             text.push_str("\n\n⚠️ This cannot be undone.");
         }
+        let mut buttons = vec![json!({ "text": "Allow", "callback_data": "allow" })];
+        if !approval.critical {
+            buttons.push(json!({ "text": "Always", "callback_data": "always" }));
+        }
+        buttons.push(json!({ "text": "Deny", "callback_data": "deny" }));
         let asked: Message = self
             .bot
             .call(
@@ -293,10 +298,7 @@ impl Channel for Telegram {
                     "chat_id": self.bot.owner,
                     "text": text,
                     "parse_mode": "HTML",
-                    "reply_markup": { "inline_keyboard": [[
-                        { "text": "Allow", "callback_data": "allow" },
-                        { "text": "Deny", "callback_data": "deny" },
-                    ]] },
+                    "reply_markup": { "inline_keyboard": [buttons] },
                 }),
             )
             .await?;
@@ -313,7 +315,11 @@ impl Channel for Telegram {
             };
             if tap.message == asked.message_id {
                 self.acknowledge(&tap, "").await;
-                break if tap.choice == "allow" { Answer::Allowed } else { Answer::Denied };
+                break match tap.choice.as_str() {
+                    "allow" => Answer::Allowed,
+                    "always" if !approval.critical => Answer::AlwaysAllowed,
+                    _ => Answer::Denied,
+                };
             }
             self.acknowledge(&tap, "This request is no longer open.").await;
         };
@@ -322,6 +328,7 @@ impl Channel for Telegram {
         // record of what was allowed.
         let decision = match answer {
             Answer::Allowed => "✅ Allowed",
+            Answer::AlwaysAllowed => "✅ Always allowed",
             Answer::Denied => "❌ Denied",
             Answer::Wrote(_) => "✍️ Not answered",
         };

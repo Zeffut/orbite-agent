@@ -356,6 +356,7 @@ fn removal() -> Approval {
         summary: "Run a command".into(),
         detail: "rm -rf <old> && echo done".into(),
         irreversible: true,
+        ..Approval::default()
     }
 }
 
@@ -389,6 +390,7 @@ async fn an_approval_is_asked_with_buttons_and_says_what_cannot_be_undone() {
         asked["reply_markup"]["inline_keyboard"],
         json!([[
             { "text": "Allow", "callback_data": "allow" },
+            { "text": "Always", "callback_data": "always" },
             { "text": "Deny", "callback_data": "deny" },
         ]])
     );
@@ -553,4 +555,34 @@ async fn a_long_piece_of_work_shows_only_its_latest_steps() {
     let text = shown.last().unwrap().1["text"].as_str().unwrap();
     assert_eq!(text.lines().count(), 5, "{text}");
     assert!(text.ends_with("📄 Reading file 9…") && !text.contains("file 4"), "{text}");
+}
+
+#[tokio::test]
+async fn always_is_an_answer_of_its_own() {
+    let server = telegram_asking(vec![tap(100, OWNER, 7, "always")]).await;
+    let mut channel = telegram(&server);
+
+    assert_eq!(answer(&mut channel, &removal()).await, Answer::AlwaysAllowed);
+
+    let calls = calls(&server).await;
+    let (_, edited) = calls.iter().find(|(called, _)| called == "editMessageText").unwrap();
+    assert!(edited["text"].as_str().unwrap().contains("Always allowed"), "{edited}");
+}
+
+#[tokio::test]
+async fn a_critical_action_cannot_be_allowed_for_always() {
+    let server = telegram_asking(vec![tap(100, OWNER, 7, "allow")]).await;
+    let mut channel = telegram(&server);
+    let approval = Approval { critical: true, ..removal() };
+
+    ask(&mut channel, &approval).await;
+
+    let calls = calls(&server).await;
+    assert_eq!(
+        calls[0].1["reply_markup"]["inline_keyboard"],
+        json!([[
+            { "text": "Allow", "callback_data": "allow" },
+            { "text": "Deny", "callback_data": "deny" },
+        ]])
+    );
 }

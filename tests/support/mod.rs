@@ -184,7 +184,7 @@ pub struct MemoryChannel {
     from_owner: mpsc::UnboundedReceiver<String>,
     to_owner: mpsc::UnboundedSender<String>,
     asks: mpsc::UnboundedSender<Approval>,
-    answers: mpsc::UnboundedReceiver<bool>,
+    answers: mpsc::UnboundedReceiver<Answer>,
     shown: Arc<Mutex<Vec<String>>>,
 }
 
@@ -193,7 +193,7 @@ pub struct Owner {
     to_agent: mpsc::UnboundedSender<String>,
     from_agent: mpsc::UnboundedReceiver<String>,
     asked: mpsc::UnboundedReceiver<Approval>,
-    answers: mpsc::UnboundedSender<bool>,
+    answers: mpsc::UnboundedSender<Answer>,
     shown: Arc<Mutex<Vec<String>>>,
 }
 
@@ -233,11 +233,9 @@ impl Channel for MemoryChannel {
     async fn ask(&mut self, approval: &Approval) -> std::io::Result<Answer> {
         self.asks.send(approval.clone()).map_err(std::io::Error::other)?;
         tokio::select! {
-            answer = self.answers.recv() => match answer {
-                Some(true) => Ok(Answer::Allowed),
-                Some(false) => Ok(Answer::Denied),
-                None => Err(std::io::Error::other("the Owner is gone")),
-            },
+            answer = self.answers.recv() => {
+                answer.ok_or_else(|| std::io::Error::other("the Owner is gone"))
+            }
             Some(text) = self.from_owner.recv() => Ok(Answer::Wrote(text)),
         }
     }
@@ -279,10 +277,14 @@ impl Owner {
     }
 
     pub fn allows(&self) {
-        self.answers.send(true).expect("the Agent is gone");
+        self.answers.send(Answer::Allowed).expect("the Agent is gone");
+    }
+
+    pub fn allows_always(&self) {
+        self.answers.send(Answer::AlwaysAllowed).expect("the Agent is gone");
     }
 
     pub fn denies(&self) {
-        self.answers.send(false).expect("the Agent is gone");
+        self.answers.send(Answer::Denied).expect("the Agent is gone");
     }
 }
