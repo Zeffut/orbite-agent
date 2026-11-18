@@ -243,6 +243,14 @@ impl Channel for MemoryChannel {
             .map_err(std::io::Error::other)
     }
 
+    async fn echo(&mut self, text: &str) {
+        let _ = self.to_owner.send(format!("(you, elsewhere) {text}"));
+    }
+
+    async fn settle(&mut self, _approval: &Approval, answer: &Answer) {
+        let _ = self.to_owner.send(format!("(answered elsewhere) {answer:?}"));
+    }
+
     async fn doing(&mut self, step: &Step) {
         self.shown.lock().unwrap().push(format!("{} {}", step.icon, step.text));
     }

@@ -52,6 +52,16 @@ pub struct Store {
     database: Mutex<Connection>,
 }
 
+/// One entry of the Conversation as kept: what was said, when, and the
+/// identifier a place uses to ask for what came after it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    pub id: i64,
+    /// When it was said, in seconds since 1970.
+    pub at: i64,
+    pub message: Message,
+}
+
 /// Why the Store could not be opened, read or written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreError(String);
@@ -119,6 +129,29 @@ impl Store {
             .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter().map(|(id, body)| Ok((id, read(&body)?))).collect()
+    }
+
+    /// The Conversation as said, for a place that shows it: the entries
+    /// after `after`, oldest first, or without it the latest ones; never more
+    /// than `limit`. Everything is there, summarised for the model or not.
+    pub fn history(&self, after: Option<i64>, limit: usize) -> Result<Vec<Entry>, StoreError> {
+        let database = self.database.lock().expect("the Store is not poisoned");
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut statement = database.prepare(match after {
+            Some(_) => {
+                "SELECT id, COALESCE(at, 0), body FROM messages WHERE id > ?1 ORDER BY id LIMIT ?2"
+            }
+            None => {
+                "SELECT id, COALESCE(at, 0), body FROM
+                     (SELECT * FROM messages WHERE id > ?1 ORDER BY id DESC LIMIT ?2) ORDER BY id"
+            }
+        })?;
+        let rows = statement
+            .query_map((after.unwrap_or(0), limit), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter().map(|(id, at, body)| Ok(Entry { id, at, message: read(&body)? })).collect()
     }
 
     /// The summary of everything the model is no longer shown.

@@ -224,3 +224,22 @@ async fn writing_instead_of_answering_an_approval_leaves_the_action_out_and_is_h
     let Message::Outcome { text, .. } = &seen[seen.len() - 2] else { panic!("{seen:?}") };
     assert!(text.contains("not carried out"), "{text}");
 }
+
+#[tokio::test]
+async fn reset_asked_while_the_agent_works_stops_it_and_starts_afresh() {
+    let workspace = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider.then_never_answers().then(Ok("Hello.".into()));
+    let mut owner = agent_in(workspace.path(), &provider);
+    owner.says("Think hard about this.");
+    while provider.times_asked() == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    owner.says("/reset");
+    assert!(owner.hears().await.contains("afresh"));
+
+    owner.says("Hi");
+    assert_eq!(owner.hears().await, "Hello.");
+    assert_eq!(provider.last_asked(), [Message::from_owner("Hi")]);
+}

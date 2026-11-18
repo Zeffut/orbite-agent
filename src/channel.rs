@@ -64,6 +64,20 @@ pub trait Channel: Send {
         async { Err(io::Error::other("this Channel cannot carry files")) }
     }
 
+    /// Shows the Owner something they wrote in another place where the
+    /// Conversation is open, so that every place holds all of it.
+    fn echo(&mut self, text: &str) -> impl Future<Output = ()> + Send {
+        let _ = text;
+        async {}
+    }
+
+    /// Called when an Approval asked here was answered in another place, so
+    /// that the question shown here closes with the decision.
+    fn settle(&mut self, approval: &Approval, answer: &Answer) -> impl Future<Output = ()> + Send {
+        let _ = (approval, answer);
+        async {}
+    }
+
     /// Shows the Owner what the Agent is starting to do.
     fn doing(&mut self, step: &Step) -> impl Future<Output = ()> + Send {
         let _ = step;

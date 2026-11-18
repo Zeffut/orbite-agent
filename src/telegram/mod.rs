@@ -40,6 +40,8 @@ pub struct Telegram {
     taps: VecDeque<Tap>,
     /// The message showing the steps of the work under way, and those steps.
     progress: Option<(i64, Vec<String>)>,
+    /// The Approval being asked: its message and the text shown.
+    open_approval: Option<(i64, String)>,
 }
 
 /// How to reach Telegram as the bot.
@@ -82,6 +84,7 @@ impl Telegram {
             waiting: VecDeque::new(),
             taps: VecDeque::new(),
             progress: None,
+            open_approval: None,
         }
     }
 
@@ -115,6 +118,25 @@ impl Telegram {
             (sent, tokio::spawn(listen(bot.clone(), sending)))
         });
         sent.recv().await
+    }
+
+    /// Replaces the buttons of the Approval being asked by the decision, so
+    /// that the Conversation keeps a record of what was allowed.
+    async fn close_approval(&mut self, answer: &Answer, how: &str) {
+        let Some((message, text)) = self.open_approval.take() else { return };
+        let decision = match answer {
+            Answer::Allowed => "✅ Allowed",
+            Answer::AlwaysAllowed => "✅ Always allowed",
+            Answer::Denied => "❌ Denied",
+            Answer::Wrote(_) => "✍️ Not answered",
+        };
+        let body = json!({
+            "chat_id": self.bot.owner,
+            "message_id": message,
+            "text": format!("{text}\n\n{decision}{how}"),
+            "parse_mode": "HTML",
+        });
+        let _ = self.bot.call::<Value>("editMessageText", body).await;
     }
 
     /// Removes the message showing the steps of the work, if there is one.
@@ -362,6 +384,20 @@ impl Channel for Telegram {
         self.bot.upload(file, caption).await
     }
 
+    async fn echo(&mut self, text: &str) {
+        let body = json!({
+            "chat_id": self.bot.owner,
+            "text": format!("🗣 <i>You, elsewhere:</i>\n{}", formatting::escape(text)),
+            "parse_mode": "HTML",
+            "disable_notification": true,
+        });
+        let _ = self.bot.call::<Value>("sendMessage", body).await;
+    }
+
+    async fn settle(&mut self, _approval: &Approval, answer: &Answer) {
+        self.close_approval(answer, " (elsewhere)").await;
+    }
+
     async fn doing(&mut self, step: &Step) {
         let line = formatting::escape(&format!("{} {}", step.icon, step.text));
         let (message, mut steps) = self.progress.take().unzip();
@@ -431,6 +467,7 @@ impl Channel for Telegram {
             )
             .await?;
 
+        self.open_approval = Some((asked.message_id, text.clone()));
         let answer = loop {
             let tap = match self.taps.pop_front() {
                 Some(tap) => tap,
@@ -452,26 +489,7 @@ impl Channel for Telegram {
             self.acknowledge(&tap, "This request is no longer open.").await;
         };
 
-        // The buttons give way to the decision, so the Conversation keeps a
-        // record of what was allowed.
-        let decision = match answer {
-            Answer::Allowed => "✅ Allowed",
-            Answer::AlwaysAllowed => "✅ Always allowed",
-            Answer::Denied => "❌ Denied",
-            Answer::Wrote(_) => "✍️ Not answered",
-        };
-        let _ = self
-            .bot
-            .call::<Value>(
-                "editMessageText",
-                json!({
-                    "chat_id": self.bot.owner,
-                    "message_id": asked.message_id,
-                    "text": format!("{text}\n\n{decision}"),
-                    "parse_mode": "HTML",
-                }),
-            )
-            .await;
+        self.close_approval(&answer, "").await;
         Ok(answer)
     }
 

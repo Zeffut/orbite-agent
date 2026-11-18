@@ -3,14 +3,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbite::{Agent, OpenAiCompatible, Store, Telegram, Terminal};
+use orbite::{Agent, Both, OpenAiCompatible, Store, Telegram, Terminal};
 use tokio::io::{BufReader, stdin, stdout};
 
 const USAGE: &str = "\
 Usage: orbite <command>
 
 Commands:
-  run    hold the Conversation in Telegram
+  run    hold the Conversation in Telegram (add --terminal to open it here as well)
   chat   hold the Conversation in this terminal
 
 Read from the environment:
@@ -47,8 +47,15 @@ async fn run() -> Result<(), Failure> {
         .parse()
         .map_err(|_| "ORBITE_TELEGRAM_OWNER must be a numeric Telegram account id.")?;
     let mut agent = agent()?;
-    let mut telegram = Telegram::new(token, owner).saving_files_in(home()?.join("workspace/inbox"));
-    agent.converse(&mut telegram).await;
+    let telegram = Telegram::new(token, owner).saving_files_in(home()?.join("workspace/inbox"));
+    if env::args().any(|argument| argument == "--terminal") {
+        // The same Conversation, open in this terminal as well.
+        let terminal = Terminal::new(BufReader::new(stdin()), stdout());
+        agent.converse(&mut Both::new(telegram, terminal)).await;
+    } else {
+        let mut telegram = telegram;
+        agent.converse(&mut telegram).await;
+    }
     Ok(())
 }
 

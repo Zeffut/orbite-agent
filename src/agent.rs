@@ -484,7 +484,7 @@ impl<P: Provider + 'static> Agent<P> {
             let mut said = Vec::new();
             let thinking = patiently(&*self.provider, request, self.host.busy_wait);
             let reply = match attending(channel, thinking, &mut said, true).await {
-                Attended::Stopped => return self.stopped(channel).await,
+                Attended::Stopped => return self.stopped(channel, &said).await,
                 Attended::Interrupted => {
                     // The Owner added something: think again with it.
                     for text in said {
@@ -589,6 +589,7 @@ impl<P: Provider + 'static> Agent<P> {
                             Err("The Owner denied this action. It was not carried out.".into())
                         }
                         Ok(Answer::Wrote(text)) if means_stop(&text) => {
+                            said.push(text);
                             stopped = true;
                             left_out = Some(
                                 "The Owner stopped the work: this action was not carried out.",
@@ -634,7 +635,7 @@ impl<P: Provider + 'static> Agent<P> {
                 }
             }
             if stopped {
-                return self.stopped(channel).await;
+                return self.stopped(channel, &said).await;
             }
             for text in said {
                 self.store.append(&Message::from_owner(text))?;
@@ -904,7 +905,19 @@ impl<P: Provider + 'static> Agent<P> {
     }
 
     /// Tells the Owner, and the model for later, that the work was stopped.
-    async fn stopped(&mut self, channel: &mut impl Channel) -> Result<bool, StoreError> {
+    async fn stopped(
+        &mut self,
+        channel: &mut impl Channel,
+        said: &[String],
+    ) -> Result<bool, StoreError> {
+        // Asking to start afresh stops the work too, then does as asked.
+        if said.iter().any(|word| word.trim() == "/reset") {
+            self.store.reset()?;
+            return Ok(channel
+                .send("Started afresh. What I remember about you is unchanged.")
+                .await
+                .is_ok());
+        }
         self.store.append(&Message::from_agent("Stopped."))?;
         Ok(channel.send("Stopped.").await.is_ok())
     }
@@ -1578,7 +1591,10 @@ async fn attending<T>(
             written = channel.interruption(), if listening => match written {
                 // The Channel closed: the work still gets to finish.
                 None => listening = false,
-                Some(text) if means_stop(&text) => return Attended::Stopped,
+                Some(text) if means_stop(&text) => {
+                    said.push(text);
+                    return Attended::Stopped;
+                }
                 Some(text) => {
                     said.push(text);
                     if yields {
@@ -1594,7 +1610,7 @@ async fn attending<T>(
 /// True when what the Owner wrote is the order to stop.
 fn means_stop(text: &str) -> bool {
     let word = text.trim().trim_end_matches(['!', '.']).to_lowercase();
-    word == "stop" || word == "/stop"
+    word == "stop" || word == "/stop" || word == "/reset"
 }
 
 /// Runs `work` to its end while showing the Owner that the Agent is busy.

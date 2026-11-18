@@ -49,6 +49,11 @@ impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Channel for T
         self.show(&format!("{start}[file: {}] {caption}\n\n", file.display())).await
     }
 
+    async fn echo(&mut self, text: &str) {
+        let start = if std::mem::take(&mut self.prompted) { "\n" } else { "" };
+        let _ = self.show(&format!("{start}(you, elsewhere) {text}\n")).await;
+    }
+
     async fn ask(&mut self, approval: &Approval) -> io::Result<Answer> {
         let warning = if approval.irreversible { "This cannot be undone.\n" } else { "" };
         let choices = if approval.critical { "[y/N]" } else { "[y/N/a(lways)]" };

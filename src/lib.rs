@@ -4,6 +4,7 @@
 mod actions;
 mod agent;
 mod attachments;
+mod both;
 mod channel;
 mod memory;
 mod openai_compatible;
@@ -20,10 +21,11 @@ mod web;
 
 pub use agent::Agent;
 pub use attachments::attached;
+pub use both::Both;
 pub use channel::{Answer, Approval, Channel};
 pub use openai_compatible::OpenAiCompatible;
 pub use provider::{ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request};
 pub use steps::Step;
-pub use store::{Store, StoreError};
+pub use store::{Entry, Store, StoreError};
 pub use telegram::Telegram;
 pub use terminal::Terminal;

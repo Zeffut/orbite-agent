@@ -778,3 +778,39 @@ async fn the_bot_offers_its_commands_in_telegrams_menu() {
         .collect();
     assert_eq!(commands, ["stop", "reset"]);
 }
+
+// --- One Conversation open in several places ---
+
+#[tokio::test]
+async fn what_the_owner_wrote_elsewhere_is_shown_as_theirs_without_ringing() {
+    let server = telegram_accepting().await;
+    let mut channel = telegram(&server);
+
+    channel.echo("Buy <milk> & eggs").await;
+
+    let shown = shown(&server).await;
+    assert_eq!(shown.len(), 1);
+    let (_, sent) = &shown[0];
+    assert_eq!(sent["disable_notification"], true);
+    let text = sent["text"].as_str().unwrap();
+    assert!(text.contains("Buy &lt;milk&gt; &amp; eggs"), "{text}");
+    assert!(text.contains("elsewhere"), "it is marked as written in another place: {text}");
+}
+
+#[tokio::test]
+async fn an_approval_answered_elsewhere_loses_its_buttons_and_shows_the_decision() {
+    let server = telegram_accepting().await;
+    let mut channel = telegram(&server);
+    // Asked here, then answered in another place before anyone tapped here.
+    let _ = tokio::time::timeout(Duration::from_millis(150), channel.ask(&removal())).await;
+
+    channel.settle(&removal(), &Answer::Denied).await;
+
+    let shown = shown(&server).await;
+    let (called, edited) = shown.last().unwrap();
+    assert_eq!(called, "editMessageText");
+    assert_eq!(edited["message_id"], 7);
+    assert!(edited["text"].as_str().unwrap().contains("Denied"), "{edited}");
+    assert!(edited["text"].as_str().unwrap().contains("elsewhere"), "{edited}");
+    assert!(edited.get("reply_markup").is_none(), "the buttons must go: {edited}");
+}
