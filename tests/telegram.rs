@@ -455,3 +455,102 @@ async fn writing_instead_of_tapping_cancels_the_approval_and_is_passed_on() {
     assert!(edited["text"].as_str().unwrap().contains("Not answered"), "{edited}");
     assert!(edited.get("reply_markup").is_none(), "the buttons must go: {edited}");
 }
+
+// --- The Agent's work, shown as it happens ---
+
+use orbite::Step;
+
+/// A fake Bot API whose sent messages get the id 7 and that accepts everything.
+async fn telegram_accepting() -> MockServer {
+    let server = MockServer::start().await;
+    Mock::given(path("/botTOKEN/getUpdates"))
+        .respond_with(ok(json!([])).set_delay(Duration::from_millis(20)))
+        .mount(&server)
+        .await;
+    Mock::given(path("/botTOKEN/sendMessage"))
+        .respond_with(ok(json!({ "message_id": 7 })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST")).respond_with(ok(json!(true))).mount(&server).await;
+    server
+}
+
+fn step(icon: &'static str, text: &str) -> Step {
+    Step { icon, text: text.to_string() }
+}
+
+/// The calls that show something to the Owner, in order.
+async fn shown(server: &MockServer) -> Vec<(String, Value)> {
+    calls(server)
+        .await
+        .into_iter()
+        .filter(|(called, _)| {
+            ["sendMessage", "editMessageText", "deleteMessage"].contains(&called.as_str())
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn the_steps_of_the_agents_work_are_shown_in_one_message_edited_in_place() {
+    let server = telegram_accepting().await;
+    let mut channel = telegram(&server);
+
+    channel.doing(&step("💻", "Running: ls <dir>")).await;
+    channel.doing(&step("🔎", "Searching the web: milk")).await;
+
+    let shown = shown(&server).await;
+    assert_eq!(shown.len(), 2, "{shown:?}");
+    let (first, sent) = &shown[0];
+    assert_eq!(first, "sendMessage");
+    assert_eq!(sent["chat_id"], OWNER);
+    assert_eq!(sent["disable_notification"], true, "a step must not ring the Owner's phone");
+    assert_eq!(sent["text"], "💻 Running: ls &lt;dir&gt;…");
+    let (second, edited) = &shown[1];
+    assert_eq!(second, "editMessageText");
+    assert_eq!(edited["message_id"], 7);
+    assert_eq!(edited["text"], "<i>💻 Running: ls &lt;dir&gt;</i>\n🔎 Searching the web: milk…");
+}
+
+#[tokio::test]
+async fn the_steps_give_way_to_the_answer() {
+    let server = telegram_accepting().await;
+    let mut channel = telegram(&server);
+    channel.doing(&step("💻", "Running: ls")).await;
+
+    channel.send("Here it is.").await.unwrap();
+
+    let shown = shown(&server).await;
+    let names: Vec<&str> = shown.iter().map(|(called, _)| called.as_str()).collect();
+    assert_eq!(names, ["sendMessage", "deleteMessage", "sendMessage"]);
+    assert_eq!(shown[1].1, json!({ "chat_id": OWNER, "message_id": 7 }));
+    assert_eq!(shown[2].1["text"], "Here it is.");
+}
+
+#[tokio::test]
+async fn nothing_is_left_behind_when_the_agent_ends_without_a_word() {
+    let server = telegram_accepting().await;
+    let mut channel = telegram(&server);
+    channel.doing(&step("💻", "Running: ls")).await;
+
+    channel.idle().await;
+    channel.idle().await;
+
+    let shown = shown(&server).await;
+    let names: Vec<&str> = shown.iter().map(|(called, _)| called.as_str()).collect();
+    assert_eq!(names, ["sendMessage", "deleteMessage"], "removed once, and only once");
+}
+
+#[tokio::test]
+async fn a_long_piece_of_work_shows_only_its_latest_steps() {
+    let server = telegram_accepting().await;
+    let mut channel = telegram(&server);
+
+    for number in 1..=9 {
+        channel.doing(&step("📄", &format!("Reading file {number}"))).await;
+    }
+
+    let shown = shown(&server).await;
+    let text = shown.last().unwrap().1["text"].as_str().unwrap();
+    assert_eq!(text.lines().count(), 5, "{text}");
+    assert!(text.ends_with("📄 Reading file 9…") && !text.contains("file 4"), "{text}");
+}

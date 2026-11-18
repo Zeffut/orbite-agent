@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use orbite::{
     ActionRequest, Answer, Approval, Channel, Message, Provider, ProviderError, Reply, Request,
+    Step,
 };
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -184,6 +185,7 @@ pub struct MemoryChannel {
     to_owner: mpsc::UnboundedSender<String>,
     asks: mpsc::UnboundedSender<Approval>,
     answers: mpsc::UnboundedReceiver<bool>,
+    shown: Arc<Mutex<Vec<String>>>,
 }
 
 /// The Owner's end: what a person would type, read and tap.
@@ -192,6 +194,7 @@ pub struct Owner {
     from_agent: mpsc::UnboundedReceiver<String>,
     asked: mpsc::UnboundedReceiver<Approval>,
     answers: mpsc::UnboundedSender<bool>,
+    shown: Arc<Mutex<Vec<String>>>,
 }
 
 pub fn memory_channel() -> (MemoryChannel, Owner) {
@@ -199,9 +202,10 @@ pub fn memory_channel() -> (MemoryChannel, Owner) {
     let (to_owner, from_agent) = mpsc::unbounded_channel();
     let (asks, asked) = mpsc::unbounded_channel();
     let (answers_in, answers_out) = mpsc::unbounded_channel();
+    let shown = Arc::new(Mutex::new(Vec::new()));
     (
-        MemoryChannel { from_owner, to_owner, asks, answers: answers_out },
-        Owner { to_agent, from_agent, asked, answers: answers_in },
+        MemoryChannel { from_owner, to_owner, asks, answers: answers_out, shown: shown.clone() },
+        Owner { to_agent, from_agent, asked, answers: answers_in, shown },
     )
 }
 
@@ -216,6 +220,14 @@ impl Channel for MemoryChannel {
 
     async fn interruption(&mut self) -> Option<String> {
         self.from_owner.recv().await
+    }
+
+    async fn doing(&mut self, step: &Step) {
+        self.shown.lock().unwrap().push(format!("{} {}", step.icon, step.text));
+    }
+
+    async fn idle(&mut self) {
+        self.shown.lock().unwrap().push("(idle)".to_string());
     }
 
     async fn ask(&mut self, approval: &Approval) -> std::io::Result<Answer> {
@@ -254,6 +266,12 @@ impl Owner {
             .await
             .expect("the Agent asked for nothing")
             .expect("the Agent is gone")
+    }
+
+    /// What the Owner was shown of the Agent's work, in order; "(idle)"
+    /// marks each time the Agent had nothing under way any more.
+    pub fn saw(&self) -> Vec<String> {
+        self.shown.lock().unwrap().clone()
     }
 
     pub fn was_asked_nothing(&mut self) -> bool {

@@ -1,6 +1,8 @@
 use std::future::Future;
 use std::io;
 
+use crate::Step;
+
 /// What the Owner is shown when the Agent asks permission before an Action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Approval {
@@ -41,6 +43,18 @@ pub trait Channel: Send {
     /// cannot listen while the Agent works never yields anything.
     fn interruption(&mut self) -> impl Future<Output = Option<String>> + Send {
         std::future::pending()
+    }
+
+    /// Shows the Owner what the Agent is starting to do.
+    fn doing(&mut self, step: &Step) -> impl Future<Output = ()> + Send {
+        let _ = step;
+        async {}
+    }
+
+    /// Called when the Agent has nothing under way any more, so that nothing
+    /// shown by [`Channel::doing`] is left behind.
+    fn idle(&mut self) -> impl Future<Output = ()> + Send {
+        async {}
     }
 
     /// Shows the Owner that the Agent is busy. Called again every few seconds

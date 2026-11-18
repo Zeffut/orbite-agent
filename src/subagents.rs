@@ -236,7 +236,7 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
     for _ in 0..steps {
         let request =
             Request { instructions: INSTRUCTIONS, conversation: &conversation, actions: &actions };
-        let reply = match patiently(provider, request).await {
+        let reply = match patiently(provider, request, host.busy_wait).await {
             Ok(reply) => reply,
             Err(error) => return format!("failed: {}", explain(&error)),
         };
@@ -266,7 +266,7 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
         "You are out of steps. Do nothing more: report now what you found and what is left to do.",
     ));
     let request = Request { instructions: INSTRUCTIONS, conversation: &conversation, actions: &[] };
-    match patiently(provider, request).await {
+    match patiently(provider, request, host.busy_wait).await {
         Ok(reply) => format!("ran out of steps. Its report so far:\n{}", reply.text),
         Err(error) => format!("ran out of steps, then failed: {}", explain(&error)),
     }

@@ -15,7 +15,7 @@ use crate::subagents::{Report, Subagents};
 use crate::web::Web;
 use crate::{
     ActionRequest, ActionSpec, Answer, Approval, Channel, Message, Provider, ProviderError,
-    Request, Store, StoreError,
+    Request, Step, Store, StoreError,
 };
 
 /// Who the Agent is, told to the model on every turn.
@@ -104,7 +104,7 @@ const URGENT: &str = "[urgent]";
 const LATE_AFTER: Duration = Duration::from_secs(300);
 
 /// How many times a busy Provider is asked before the Owner is told.
-const TRIES_WHILE_BUSY: usize = 5;
+const TRIES_WHILE_BUSY: usize = 7;
 
 /// The longest a busy Provider is waited for between two tries.
 const LONGEST_WAIT: Duration = Duration::from_secs(30);
@@ -139,6 +139,7 @@ impl<P: Provider + 'static> Agent<P> {
             memory: None,
             skills: None,
             web: Web::new(),
+            busy_wait: Duration::from_secs(1),
         };
         let (subagents, reports) = Subagents::new();
         Self {
@@ -209,6 +210,13 @@ impl<P: Provider + 'static> Agent<P> {
     /// The address of the search engine's results page.
     pub fn searching_at(mut self, address: impl Into<String>) -> Self {
         self.host_mut().web.search_at = address.into();
+        self
+    }
+
+    /// How long a busy Provider is first waited for; each further wait is
+    /// twice the one before.
+    pub fn waiting_for_a_busy_provider(mut self, first_wait: Duration) -> Self {
+        self.host_mut().busy_wait = first_wait;
         self
     }
 
@@ -351,10 +359,12 @@ impl<P: Provider + 'static> Agent<P> {
 
     /// Responds to the latest of the Conversation; false once the Channel is closed.
     async fn respond_on(&mut self, channel: &mut impl Channel, initiated: bool) -> bool {
-        match self.respond(channel, initiated).await {
+        let open = match self.respond(channel, initiated).await {
             Ok(open) => open,
             Err(error) => channel.send(&explain_storage(&error)).await.is_ok(),
-        }
+        };
+        channel.idle().await;
+        open
     }
 
     /// Thinks and acts, turn after turn, until the model has nothing left to
@@ -388,7 +398,7 @@ impl<P: Provider + 'static> Agent<P> {
                 actions: &actions,
             };
             let mut said = Vec::new();
-            let thinking = patiently(&*self.provider, request);
+            let thinking = patiently(&*self.provider, request, self.host.busy_wait);
             let reply = match attending(channel, thinking, &mut said, true).await {
                 Attended::Stopped => return self.stopped(channel).await,
                 Attended::Interrupted => {
@@ -429,6 +439,7 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
                 if action.name == "search_conversation" {
+                    channel.doing(&Step::of(action)).await;
                     self.store.append(&outcome(self.search(action)))?;
                     continue;
                 }
@@ -446,6 +457,7 @@ impl<P: Provider + 'static> Agent<P> {
                     _ => None,
                 };
                 if let Some(text) = own {
+                    channel.doing(&Step::of(action)).await;
                     self.store.append(&outcome(text))?;
                     continue;
                 }
@@ -487,6 +499,9 @@ impl<P: Provider + 'static> Agent<P> {
                         Err(_) => return Ok(false),
                     },
                 };
+                if allowed.is_ok() {
+                    channel.doing(&Step::of(action)).await;
+                }
                 let text = match allowed {
                     Err(why_not) => why_not,
                     Ok(()) if self.review_routine(action).is_some() => {
@@ -608,7 +623,9 @@ impl<P: Provider + 'static> Agent<P> {
             conversation: &conversation,
             actions: &[],
         };
-        let reply = showing_work(channel, patiently(&*self.provider, request)).await.ok()?;
+        let reply = showing_work(channel, patiently(&*self.provider, request, self.host.busy_wait))
+            .await
+            .ok()?;
         Some(clip(reply.text.trim(), summary_limit).to_owned())
     }
 
@@ -687,14 +704,17 @@ fn search_spec() -> ActionSpec {
 pub(crate) async fn patiently(
     provider: &impl Provider,
     request: Request<'_>,
+    first_wait: Duration,
 ) -> Result<crate::Reply, ProviderError> {
-    let mut wait = Duration::from_secs(1);
+    // Each wait is at least twice the one before: a limit counted over a
+    // minute is not lifted by the few seconds a Provider may ask for.
+    let mut wait = first_wait;
     for _ in 1..TRIES_WHILE_BUSY {
         match provider.reply(request).await {
             Err(ProviderError::Busy { retry_after, .. })
                 if retry_after.is_none_or(|asked| asked <= LONGEST_WAIT) =>
             {
-                tokio::time::sleep(retry_after.unwrap_or(wait)).await;
+                tokio::time::sleep(retry_after.unwrap_or_default().max(wait)).await;
                 wait = (wait * 2).min(LONGEST_WAIT);
             }
             outcome => return outcome,
@@ -1156,6 +1176,8 @@ pub(crate) fn explain(error: &ProviderError) -> String {
             format!("I couldn't reach my AI provider ({reason}). Try again in a moment.")
         }
         ProviderError::Busy { reason, .. } => {
+            // Providers explain rate limits at length; the start says it all.
+            let reason = clip(reason, 160);
             format!("My AI provider is too busy to answer ({reason}). Try again later.")
         }
         ProviderError::Failed(reason) => {

@@ -46,6 +46,8 @@ pub(crate) struct Host {
     /// Where the Agent keeps its Skills, when it has somewhere to.
     pub(crate) skills: Option<Skills>,
     pub(crate) web: Web,
+    /// How long a busy Provider is first waited for.
+    pub(crate) busy_wait: Duration,
 }
 
 #[derive(Deserialize)]

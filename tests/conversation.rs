@@ -104,9 +104,12 @@ async fn a_provider_that_stays_busy_is_explained_and_the_message_can_be_sent_aga
     }
     let asked = provider.clone();
     let (mut channel, mut owner) = memory_channel();
-    tokio::spawn(
-        async move { Agent::new(provider, Store::in_memory()).converse(&mut channel).await },
-    );
+    tokio::spawn(async move {
+        Agent::new(provider, Store::in_memory())
+            .waiting_for_a_busy_provider(Duration::from_millis(1))
+            .converse(&mut channel)
+            .await
+    });
 
     owner.says("Hi");
 

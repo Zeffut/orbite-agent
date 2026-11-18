@@ -11,13 +11,16 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::{Answer, Approval, Channel};
+use crate::{Answer, Approval, Channel, Step};
 
 /// How long Telegram may hold a request open waiting for a message.
 const LONG_POLL: Duration = Duration::from_secs(50);
 
 /// The longest text Telegram accepts in one message, in UTF-16 units.
 const MESSAGE_LIMIT: usize = 4096;
+
+/// How many steps of the work under way are shown at once.
+const STEPS_SHOWN: usize = 5;
 
 /// The Conversation in Telegram, through a bot the Owner created.
 ///
@@ -31,6 +34,8 @@ pub struct Telegram {
     waiting: VecDeque<String>,
     /// Taps on Approval buttons not yet matched to an Approval.
     taps: VecDeque<Tap>,
+    /// The message showing the steps of the work under way, and those steps.
+    progress: Option<(i64, Vec<String>)>,
 }
 
 /// How to reach Telegram as the bot.
@@ -69,6 +74,7 @@ impl Telegram {
             listening: None,
             waiting: VecDeque::new(),
             taps: VecDeque::new(),
+            progress: None,
         }
     }
 
@@ -96,6 +102,14 @@ impl Telegram {
             (sent, tokio::spawn(listen(bot.clone(), sending)))
         });
         sent.recv().await
+    }
+
+    /// Removes the message showing the steps of the work, if there is one.
+    async fn clear_progress(&mut self) {
+        if let Some((message, _)) = self.progress.take() {
+            let body = json!({ "chat_id": self.bot.owner, "message_id": message });
+            let _ = self.bot.call::<Value>("deleteMessage", body).await;
+        }
     }
 
     /// Tells Telegram a tap was received, so the button stops spinning.
@@ -224,10 +238,45 @@ impl Channel for Telegram {
     }
 
     async fn send(&mut self, text: &str) -> io::Result<()> {
+        self.clear_progress().await;
         self.bot.say(text).await
     }
 
+    async fn doing(&mut self, step: &Step) {
+        let line = formatting::escape(&format!("{} {}", step.icon, step.text));
+        let (message, mut steps) = self.progress.take().unzip();
+        let steps = steps.get_or_insert_with(Vec::new);
+        steps.push(line);
+        // The step under way, with the few before it shown as done.
+        let latest = &steps[steps.len().saturating_sub(STEPS_SHOWN)..];
+        let (current, done) = latest.split_last().expect("a step was just added");
+        let mut text: String = done.iter().map(|step| format!("<i>{step}</i>\n")).collect();
+        text.push_str(&format!("{current}…"));
+        let shown = match message {
+            Some(message) => {
+                let body = json!({
+                    "chat_id": self.bot.owner, "message_id": message, "text": text, "parse_mode": "HTML",
+                });
+                let _ = self.bot.call::<Value>("editMessageText", body).await;
+                Some(message)
+            }
+            None => {
+                let body = json!({
+                    "chat_id": self.bot.owner, "text": text, "parse_mode": "HTML",
+                    "disable_notification": true,
+                });
+                self.bot.call::<Message>("sendMessage", body).await.ok().map(|sent| sent.message_id)
+            }
+        };
+        self.progress = shown.map(|message| (message, std::mem::take(steps)));
+    }
+
+    async fn idle(&mut self) {
+        self.clear_progress().await;
+    }
+
     async fn ask(&mut self, approval: &Approval) -> io::Result<Answer> {
+        self.clear_progress().await;
         let mut text = format!(
             "<b>{}</b>\n\n<pre>{}</pre>",
             formatting::escape(&approval.summary),
