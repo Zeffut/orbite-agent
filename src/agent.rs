@@ -675,7 +675,10 @@ impl<P: Provider + 'static> Agent<P> {
             if routine.cron.is_none() {
                 self.store.remove_routine(&routine.name)?;
                 self.store.append(&Message::Notice(format!(
-                    "It is time for \"{}\", which you scheduled: {}",
+                    "The moment you scheduled \"{}\" for has come. Your Owner has not seen \
+                     this notice and is waiting for nothing: if it is a reminder, give them \
+                     the reminder itself now, in your own words; otherwise do what it says. \
+                     It says: {}",
                     routine.name, routine.instruction
                 )))?;
                 self.owed = true;
