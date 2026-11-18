@@ -62,11 +62,7 @@ async fn commands_run_in_the_agents_workspace() {
     owner.says("Read my notes.");
     owner.hears().await;
 
-    assert!(
-        outcome(&provider).contains("remember the milk"),
-        "{}",
-        outcome(&provider)
-    );
+    assert!(outcome(&provider).contains("remember the milk"), "{}", outcome(&provider));
 }
 
 #[tokio::test]
@@ -82,14 +78,8 @@ async fn a_command_that_changes_something_waits_for_an_approval() {
     let approval = owner.is_asked().await;
 
     assert!(approval.detail.contains("touch made.txt"), "{approval:?}");
-    assert!(
-        approval.irreversible,
-        "Orbite cannot undo a command: {approval:?}"
-    );
-    assert!(
-        !workspace.path().join("made.txt").exists(),
-        "ran before the Approval"
-    );
+    assert!(approval.irreversible, "Orbite cannot undo a command: {approval:?}");
+    assert!(!workspace.path().join("made.txt").exists(), "ran before the Approval");
 
     owner.allows();
     assert_eq!(owner.hears().await, "Created.");
@@ -111,11 +101,7 @@ async fn a_denied_action_is_not_run_and_the_agent_is_told() {
 
     assert_eq!(owner.hears().await, "Understood, I left it alone.");
     assert!(!workspace.path().join("made.txt").exists());
-    assert!(
-        outcome(&provider).contains("denied"),
-        "{}",
-        outcome(&provider)
-    );
+    assert!(outcome(&provider).contains("denied"), "{}", outcome(&provider));
 }
 
 #[tokio::test]
@@ -136,9 +122,7 @@ async fn commands_that_could_change_something_are_never_taken_for_inspection() {
         let workspace = tempfile::tempdir().unwrap();
         fs::write(workspace.path().join("notes.txt"), "keep me").unwrap();
         let provider = ScriptedProvider::default();
-        provider
-            .then_acts([("run_command", json!({ "command": command }))])
-            .then(Ok("Ok.".into()));
+        provider.then_acts([("run_command", json!({ "command": command }))]).then(Ok("Ok.".into()));
         let mut owner = agent_in(workspace.path(), &provider);
 
         owner.says("Go.");
@@ -146,10 +130,7 @@ async fn commands_that_could_change_something_are_never_taken_for_inspection() {
         owner.denies();
         owner.hears().await;
 
-        assert!(
-            workspace.path().join("notes.txt").exists(),
-            "{command:?} ran unasked"
-        );
+        assert!(workspace.path().join("notes.txt").exists(), "{command:?} ran unasked");
     }
 }
 
@@ -158,10 +139,7 @@ async fn reading_what_looks_like_a_secret_waits_for_an_approval() {
     let workspace = tempfile::tempdir().unwrap();
     for (action, input) in [
         ("run_command", json!({ "command": "cat ~/.ssh/id_ed25519" })),
-        (
-            "read_file",
-            json!({ "path": "/home/someone/.config/app/secrets.env" }),
-        ),
+        ("read_file", json!({ "path": "/home/someone/.config/app/secrets.env" })),
     ] {
         let provider = ScriptedProvider::default();
         provider.then_acts([(action, input)]).then(Ok("Ok.".into()));
@@ -181,10 +159,7 @@ async fn a_command_that_hangs_is_stopped_and_the_conversation_goes_on() {
     let workspace = tempfile::tempdir().unwrap();
     let provider = ScriptedProvider::default();
     provider
-        .then_acts([(
-            "run_command",
-            json!({ "command": "echo started; sleep 30" }),
-        )])
+        .then_acts([("run_command", json!({ "command": "echo started; sleep 30" }))])
         .then(Ok("It hung.".into()));
     let mut owner = agent_in(workspace.path(), &provider);
 
@@ -195,10 +170,7 @@ async fn a_command_that_hangs_is_stopped_and_the_conversation_goes_on() {
     assert_eq!(owner.hears().await, "It hung.");
     let outcome = outcome(&provider);
     assert!(outcome.contains("stopped"), "{outcome}");
-    assert!(
-        outcome.contains("started"),
-        "what it printed first is kept: {outcome}"
-    );
+    assert!(outcome.contains("started"), "what it printed first is kept: {outcome}");
 }
 
 #[tokio::test]
@@ -216,15 +188,8 @@ async fn a_command_that_floods_output_does_not_flood_the_model() {
 
     assert_eq!(owner.hears().await, "Noisy.");
     let outcome = outcome(&provider);
-    assert!(
-        outcome.len() < 40_000,
-        "{} bytes reached the model",
-        outcome.len()
-    );
-    assert!(
-        outcome.contains("cut"),
-        "the model is told output is missing"
-    );
+    assert!(outcome.len() < 40_000, "{} bytes reached the model", outcome.len());
+    assert!(outcome.contains("cut"), "the model is told output is missing");
 }
 
 #[tokio::test]
@@ -249,9 +214,7 @@ async fn the_agent_reads_a_file_without_asking() {
     let workspace = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("notes.txt"), "remember the milk").unwrap();
     let provider = ScriptedProvider::default();
-    provider
-        .then_acts([("read_file", json!({ "path": "notes.txt" }))])
-        .then(Ok("Milk.".into()));
+    provider.then_acts([("read_file", json!({ "path": "notes.txt" }))]).then(Ok("Milk.".into()));
     let mut owner = agent_in(workspace.path(), &provider);
 
     owner.says("What's in my notes?");
@@ -266,10 +229,7 @@ async fn creating_a_file_asks_and_says_it_can_be_undone() {
     let workspace = tempfile::tempdir().unwrap();
     let provider = ScriptedProvider::default();
     provider
-        .then_acts([(
-            "write_file",
-            json!({ "path": "sub/list.txt", "content": "milk\n" }),
-        )])
+        .then_acts([("write_file", json!({ "path": "sub/list.txt", "content": "milk\n" }))])
         .then(Ok("Saved.".into()));
     let mut owner = agent_in(workspace.path(), &provider);
 
@@ -279,10 +239,7 @@ async fn creating_a_file_asks_and_says_it_can_be_undone() {
     owner.allows();
 
     assert_eq!(owner.hears().await, "Saved.");
-    assert_eq!(
-        fs::read_to_string(workspace.path().join("sub/list.txt")).unwrap(),
-        "milk\n"
-    );
+    assert_eq!(fs::read_to_string(workspace.path().join("sub/list.txt")).unwrap(), "milk\n");
 }
 
 #[tokio::test]
@@ -291,10 +248,7 @@ async fn replacing_a_file_says_plainly_that_it_cannot_be_undone() {
     fs::write(workspace.path().join("list.txt"), "old").unwrap();
     let provider = ScriptedProvider::default();
     provider
-        .then_acts([(
-            "write_file",
-            json!({ "path": "list.txt", "content": "new" }),
-        )])
+        .then_acts([("write_file", json!({ "path": "list.txt", "content": "new" }))])
         .then(Ok("Left as it was.".into()));
     let mut owner = agent_in(workspace.path(), &provider);
 
@@ -304,10 +258,7 @@ async fn replacing_a_file_says_plainly_that_it_cannot_be_undone() {
     owner.hears().await;
 
     assert!(approval.irreversible, "{approval:?}");
-    assert_eq!(
-        fs::read_to_string(workspace.path().join("list.txt")).unwrap(),
-        "old"
-    );
+    assert_eq!(fs::read_to_string(workspace.path().join("list.txt")).unwrap(), "old");
 }
 
 #[tokio::test]
@@ -316,10 +267,7 @@ async fn editing_a_file_changes_only_the_passage_named() {
     fs::write(workspace.path().join("list.txt"), "milk\neggs\nbread\n").unwrap();
     let provider = ScriptedProvider::default();
     provider
-        .then_acts([(
-            "edit_file",
-            json!({ "path": "list.txt", "old": "eggs", "new": "six eggs" }),
-        )])
+        .then_acts([("edit_file", json!({ "path": "list.txt", "old": "eggs", "new": "six eggs" }))])
         .then(Ok("Edited.".into()));
     let mut owner = agent_in(workspace.path(), &provider);
 
@@ -345,29 +293,19 @@ async fn an_edit_whose_passage_is_missing_or_ambiguous_changes_nothing() {
         fs::write(workspace.path().join("list.txt"), "milk\neggs\nbread\n").unwrap();
         let provider = ScriptedProvider::default();
         provider
-            .then_acts([(
-                "edit_file",
-                json!({ "path": "list.txt", "old": old, "new": "x" }),
-            )])
+            .then_acts([("edit_file", json!({ "path": "list.txt", "old": old, "new": "x" }))])
             .then(Ok("Could not.".into()));
         let mut owner = agent_in(workspace.path(), &provider);
 
         owner.says("Edit.");
         assert_eq!(owner.hears().await, "Could not.");
 
-        assert!(
-            owner.was_asked_nothing(),
-            "nothing to approve when the edit cannot apply"
-        );
+        assert!(owner.was_asked_nothing(), "nothing to approve when the edit cannot apply");
         assert_eq!(
             fs::read_to_string(workspace.path().join("list.txt")).unwrap(),
             "milk\neggs\nbread\n"
         );
-        assert!(
-            outcome(&provider).contains("list.txt"),
-            "{}",
-            outcome(&provider)
-        );
+        assert!(outcome(&provider).contains("list.txt"), "{}", outcome(&provider));
     }
 }
 
@@ -379,19 +317,13 @@ async fn an_action_the_agent_does_not_have_or_cannot_understand_is_explained_to_
         ("run_command", json!({ "cmd": "ls" }), "command"),
     ] {
         let provider = ScriptedProvider::default();
-        provider
-            .then_acts([(action, input)])
-            .then(Ok("Sorry.".into()));
+        provider.then_acts([(action, input)]).then(Ok("Sorry.".into()));
         let mut owner = agent_in(workspace.path(), &provider);
 
         owner.says("Go.");
         owner.hears().await;
 
-        assert!(
-            outcome(&provider).contains(expected),
-            "{}",
-            outcome(&provider)
-        );
+        assert!(outcome(&provider).contains(expected), "{}", outcome(&provider));
     }
 }
 
@@ -400,10 +332,7 @@ async fn what_the_agent_says_while_acting_reaches_the_owner() {
     let workspace = tempfile::tempdir().unwrap();
     let provider = ScriptedProvider::default();
     provider
-        .then_says_and_acts(
-            "Let me look.",
-            [("run_command", json!({ "command": "pwd" }))],
-        )
+        .then_says_and_acts("Let me look.", [("run_command", json!({ "command": "pwd" }))])
         .then(Ok("You are in your workspace.".into()));
     let mut owner = agent_in(workspace.path(), &provider);
 
@@ -433,18 +362,10 @@ async fn an_action_cut_short_by_a_stop_is_reported_to_the_model_at_the_next_star
     let (mut channel, mut owner) = memory_channel();
     let store = Store::open(&database).unwrap();
     let agent_provider = provider.clone();
-    tokio::spawn(async move {
-        Agent::new(agent_provider, store)
-            .converse(&mut channel)
-            .await
-    });
+    tokio::spawn(async move { Agent::new(agent_provider, store).converse(&mut channel).await });
 
     assert_eq!(owner.hears().await, "I was interrupted; shall I try again?");
-    assert!(
-        outcome(&provider).contains("interrupted"),
-        "{}",
-        outcome(&provider)
-    );
+    assert!(outcome(&provider).contains("interrupted"), "{}", outcome(&provider));
 }
 
 #[tokio::test]

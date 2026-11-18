@@ -79,9 +79,7 @@ impl Store {
             transaction.pragma_update(None, "user_version", (index + 1) as u32)?;
             transaction.commit()?;
         }
-        Ok(Self {
-            database: Mutex::new(connection),
-        })
+        Ok(Self { database: Mutex::new(connection) })
     }
 
     /// The Conversation so far, oldest first.
@@ -112,10 +110,7 @@ impl Store {
         self.database
             .lock()
             .expect("the Store is not poisoned")
-            .execute(
-                "DELETE FROM messages WHERE id = (SELECT MAX(id) FROM messages)",
-                (),
-            )?;
+            .execute("DELETE FROM messages WHERE id = (SELECT MAX(id) FROM messages)", ())?;
         Ok(())
     }
 }

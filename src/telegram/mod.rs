@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::Channel;
+use crate::{Approval, Channel};
 
 /// How long Telegram may hold a request open waiting for a message.
 const LONG_POLL: Duration = Duration::from_secs(50);
@@ -29,6 +29,15 @@ pub struct Telegram {
     /// Identifier of the next update to ask Telegram for.
     next_update: i64,
     waiting: VecDeque<String>,
+    /// Taps on Approval buttons not yet matched to an Approval.
+    taps: VecDeque<Tap>,
+}
+
+/// The Owner's tap on a button under one of the bot's messages.
+struct Tap {
+    id: String,
+    message: i64,
+    choice: String,
 }
 
 impl Telegram {
@@ -42,6 +51,7 @@ impl Telegram {
             retry_after: Duration::from_secs(3),
             next_update: 0,
             waiting: VecDeque::new(),
+            taps: VecDeque::new(),
         }
     }
 
@@ -70,11 +80,15 @@ impl Telegram {
         match reply.result {
             Some(result) if reply.ok => Ok(result),
             _ => Err(io::Error::other(
-                reply
-                    .description
-                    .unwrap_or_else(|| format!("Telegram refused {method}")),
+                reply.description.unwrap_or_else(|| format!("Telegram refused {method}")),
             )),
         }
+    }
+
+    /// Tells Telegram a tap was received, so the button stops spinning.
+    async fn acknowledge(&self, tap: &Tap, note: &str) {
+        let body = json!({ "callback_query_id": tap.id, "text": note });
+        let _ = self.call::<Value>("answerCallbackQuery", body).await;
     }
 
     /// Asks Telegram for new messages and keeps the Owner's.
@@ -82,11 +96,24 @@ impl Telegram {
         let body = json!({
             "offset": self.next_update,
             "timeout": LONG_POLL.as_secs(),
-            "allowed_updates": ["message"],
+            "allowed_updates": ["message", "callback_query"],
         });
         let updates: Vec<Update> = self.call("getUpdates", body).await?;
         for update in updates {
             self.next_update = update.update_id + 1;
+            if let Some(tapped) = update.callback_query {
+                // Only the Owner's taps count; anyone else's are dropped.
+                if tapped.from.id == self.owner
+                    && let Some(message) = tapped.message
+                {
+                    self.taps.push_back(Tap {
+                        id: tapped.id,
+                        message: message.message_id,
+                        choice: tapped.data.unwrap_or_default(),
+                    });
+                }
+                continue;
+            }
             let Some(message) = update.message else {
                 continue;
             };
@@ -111,6 +138,10 @@ impl Telegram {
 impl Channel for Telegram {
     async fn receive(&mut self) -> Option<String> {
         loop {
+            // No Approval is open here, so any tap is on an old one.
+            while let Some(tap) = self.taps.pop_front() {
+                self.acknowledge(&tap, "This request is no longer open.").await;
+            }
             if let Some(text) = self.waiting.pop_front() {
                 return Some(text);
             }
@@ -137,6 +168,62 @@ impl Channel for Telegram {
         Ok(())
     }
 
+    async fn ask(&mut self, approval: &Approval) -> io::Result<bool> {
+        let mut text = format!(
+            "<b>{}</b>\n\n<pre>{}</pre>",
+            formatting::escape(&approval.summary),
+            formatting::escape(&approval.detail)
+        );
+        if approval.irreversible {
+            text.push_str("\n\n⚠️ This cannot be undone.");
+        }
+        let asked: Sent = self
+            .call(
+                "sendMessage",
+                json!({
+                    "chat_id": self.owner,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "reply_markup": { "inline_keyboard": [[
+                        { "text": "Allow", "callback_data": "allow" },
+                        { "text": "Deny", "callback_data": "deny" },
+                    ]] },
+                }),
+            )
+            .await?;
+
+        let allowed = loop {
+            match self.taps.pop_front() {
+                Some(tap) if tap.message == asked.message_id => {
+                    self.acknowledge(&tap, "").await;
+                    break tap.choice == "allow";
+                }
+                Some(tap) => self.acknowledge(&tap, "This request is no longer open.").await,
+                None => {
+                    if self.fetch().await.is_err() {
+                        tokio::time::sleep(self.retry_after).await;
+                    }
+                }
+            }
+        };
+
+        // The buttons give way to the decision, so the Conversation keeps a
+        // record of what was allowed.
+        let decision = if allowed { "✅ Allowed" } else { "❌ Denied" };
+        let _ = self
+            .call::<Value>(
+                "editMessageText",
+                json!({
+                    "chat_id": self.owner,
+                    "message_id": asked.message_id,
+                    "text": format!("{text}\n\n{decision}"),
+                    "parse_mode": "HTML",
+                }),
+            )
+            .await;
+        Ok(allowed)
+    }
+
     async fn working(&mut self) {
         let body = json!({ "chat_id": self.owner, "action": "typing" });
         let _ = self.call::<Value>("sendChatAction", body).await;
@@ -154,6 +241,21 @@ struct Reply<T> {
 struct Update {
     update_id: i64,
     message: Option<Incoming>,
+    callback_query: Option<Tapped>,
+}
+
+#[derive(Deserialize)]
+struct Tapped {
+    id: String,
+    from: Account,
+    message: Option<Sent>,
+    data: Option<String>,
+}
+
+/// A message of the bot's own.
+#[derive(Deserialize)]
+struct Sent {
+    message_id: i64,
 }
 
 #[derive(Deserialize)]

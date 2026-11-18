@@ -32,10 +32,7 @@ impl ScriptedProvider {
     }
 
     pub fn then(&self, outcome: Result<String, ProviderError>) -> &Self {
-        let outcome = outcome.map(|text| Reply {
-            text,
-            actions: Vec::new(),
-        });
+        let outcome = outcome.map(|text| Reply { text, actions: Vec::new() });
         self.script.lock().unwrap().push_back(Outcome::Now(outcome));
         self
     }
@@ -59,14 +56,8 @@ impl ScriptedProvider {
                 input,
             })
             .collect();
-        let reply = Reply {
-            text: text.to_string(),
-            actions,
-        };
-        self.script
-            .lock()
-            .unwrap()
-            .push_back(Outcome::Now(Ok(reply)));
+        let reply = Reply { text: text.to_string(), actions };
+        self.script.lock().unwrap().push_back(Outcome::Now(Ok(reply)));
         self
     }
 
@@ -82,27 +73,15 @@ impl ScriptedProvider {
 
     /// The Conversation as the Provider saw it on its latest call.
     pub fn last_asked(&self) -> Vec<Message> {
-        self.asked
-            .lock()
-            .unwrap()
-            .last()
-            .cloned()
-            .expect("the Provider was never asked")
+        self.asked.lock().unwrap().last().cloned().expect("the Provider was never asked")
     }
 }
 
 impl Provider for ScriptedProvider {
     async fn reply(&self, request: Request<'_>) -> Result<Reply, ProviderError> {
-        self.asked
-            .lock()
-            .unwrap()
-            .push(request.conversation.to_vec());
-        let outcome = self
-            .script
-            .lock()
-            .unwrap()
-            .pop_front()
-            .expect("the script ran out of answers");
+        self.asked.lock().unwrap().push(request.conversation.to_vec());
+        let outcome =
+            self.script.lock().unwrap().pop_front().expect("the script ran out of answers");
         match outcome {
             Outcome::Now(outcome) => outcome,
             Outcome::Never => std::future::pending().await,
@@ -132,18 +111,8 @@ pub fn memory_channel() -> (MemoryChannel, Owner) {
     let (asks, asked) = mpsc::unbounded_channel();
     let (answers_in, answers_out) = mpsc::unbounded_channel();
     (
-        MemoryChannel {
-            from_owner,
-            to_owner,
-            asks,
-            answers: answers_out,
-        },
-        Owner {
-            to_agent,
-            from_agent,
-            asked,
-            answers: answers_in,
-        },
+        MemoryChannel { from_owner, to_owner, asks, answers: answers_out },
+        Owner { to_agent, from_agent, asked, answers: answers_in },
     )
 }
 
@@ -153,34 +122,23 @@ impl Channel for MemoryChannel {
     }
 
     async fn send(&mut self, text: &str) -> std::io::Result<()> {
-        self.to_owner
-            .send(text.to_string())
-            .map_err(std::io::Error::other)
+        self.to_owner.send(text.to_string()).map_err(std::io::Error::other)
     }
 
     async fn ask(&mut self, approval: &Approval) -> std::io::Result<bool> {
-        self.asks
-            .send(approval.clone())
-            .map_err(std::io::Error::other)?;
-        self.answers
-            .recv()
-            .await
-            .ok_or_else(|| std::io::Error::other("the Owner is gone"))
+        self.asks.send(approval.clone()).map_err(std::io::Error::other)?;
+        self.answers.recv().await.ok_or_else(|| std::io::Error::other("the Owner is gone"))
     }
 }
 
 impl Owner {
     pub fn says(&self, text: &str) {
-        self.to_agent
-            .send(text.to_string())
-            .expect("the Agent is gone");
+        self.to_agent.send(text.to_string()).expect("the Agent is gone");
     }
 
     /// True when the Agent says nothing for a moment.
     pub async fn hears_nothing(&mut self) -> bool {
-        tokio::time::timeout(Duration::from_millis(100), self.from_agent.recv())
-            .await
-            .is_err()
+        tokio::time::timeout(Duration::from_millis(100), self.from_agent.recv()).await.is_err()
     }
 
     pub async fn hears(&mut self) -> String {

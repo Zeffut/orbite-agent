@@ -26,11 +26,7 @@ async fn after_a_restart_the_agent_still_knows_what_was_said() {
     let (mut channel, mut owner) = memory_channel();
     let store = Store::open(&database).unwrap();
     let agent_provider = provider.clone();
-    tokio::spawn(async move {
-        Agent::new(agent_provider, store)
-            .converse(&mut channel)
-            .await
-    });
+    tokio::spawn(async move { Agent::new(agent_provider, store).converse(&mut channel).await });
     owner.says("Where do I live?");
     owner.hears().await;
 
@@ -106,9 +102,7 @@ fn a_database_from_a_newer_orbite_is_refused_rather_than_damaged() {
         .pragma_update(None, "user_version", 9999)
         .unwrap();
 
-    let error = Store::open(&database)
-        .err()
-        .expect("the Store should refuse to open");
+    let error = Store::open(&database).err().expect("the Store should refuse to open");
 
     assert!(error.to_string().contains("newer Orbite"), "{error}");
 }
@@ -134,11 +128,7 @@ async fn a_conversation_from_the_first_version_of_orbite_is_kept() {
     let (mut channel, mut owner) = memory_channel();
     let store = Store::open(&database).unwrap();
     let agent_provider = provider.clone();
-    tokio::spawn(async move {
-        Agent::new(agent_provider, store)
-            .converse(&mut channel)
-            .await
-    });
+    tokio::spawn(async move { Agent::new(agent_provider, store).converse(&mut channel).await });
     owner.says("Where do I live?");
     owner.hears().await;
 

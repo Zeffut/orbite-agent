@@ -150,11 +150,7 @@ impl Host {
             }
             Action::WriteFile(WriteFile { path, content }) => {
                 let replaces = self.locate(&path).exists();
-                let summary = if replaces {
-                    "Replace a file"
-                } else {
-                    "Create a file"
-                };
+                let summary = if replaces { "Replace a file" } else { "Create a file" };
                 Review::Ask(Approval {
                     summary: summary.into(),
                     detail: format!("{path}\n\n{}", preview(&content)),
@@ -239,9 +235,7 @@ impl Host {
             .map_err(|error| format!("Could not read {path}: {error}."))?;
         match content.matches(&edit.old).count() {
             1 => Ok(content.replacen(&edit.old, &edit.new, 1)),
-            0 => Err(format!(
-                "The passage to replace does not appear in {path}; nothing changed."
-            )),
+            0 => Err(format!("The passage to replace does not appear in {path}; nothing changed.")),
             times => Err(format!(
                 "The passage to replace appears {times} times in {path}; nothing changed. \
                  Give a longer passage that appears once."

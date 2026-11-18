@@ -27,6 +27,13 @@ pub(super) fn to_html(markdown: &str) -> String {
     page.html.trim_end().to_owned()
 }
 
+/// `text` shown exactly as written, whatever characters it holds.
+pub(super) fn escape(text: &str) -> String {
+    let mut page = Page::default();
+    page.text(text);
+    page.html
+}
+
 #[derive(Default)]
 struct Page {
     html: String,
@@ -54,8 +61,7 @@ impl Page {
                 self.lists.push(first);
             }
             Tag::Item => {
-                self.html
-                    .push_str(&"  ".repeat(self.lists.len().saturating_sub(1)));
+                self.html.push_str(&"  ".repeat(self.lists.len().saturating_sub(1)));
                 match self.lists.last_mut() {
                     Some(Some(number)) => {
                         self.html.push_str(&format!("{number}. "));

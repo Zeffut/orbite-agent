@@ -21,10 +21,7 @@ impl OpenAiCompatible {
     ) -> Self {
         Self {
             http: reqwest::Client::new(),
-            endpoint: format!(
-                "{}/chat/completions",
-                base_url.as_ref().trim_end_matches('/')
-            ),
+            endpoint: format!("{}/chat/completions", base_url.as_ref().trim_end_matches('/')),
             api_key: api_key.into(),
             model: model.into(),
         }
@@ -66,10 +63,8 @@ impl Provider for OpenAiCompatible {
             .map_err(|error| ProviderError::Unreachable(root_cause(&error)))?;
 
         let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| ProviderError::Failed(root_cause(&error)))?;
+        let body =
+            response.text().await.map_err(|error| ProviderError::Failed(root_cause(&error)))?;
 
         if status.as_u16() == 401 || status.as_u16() == 403 {
             return Err(ProviderError::Rejected(error_message(&body)));
@@ -98,11 +93,7 @@ impl Provider for OpenAiCompatible {
                         call.function.name
                     ))
                 })?;
-                Ok(ActionRequest {
-                    id: call.id,
-                    name: call.function.name,
-                    input,
-                })
+                Ok(ActionRequest { id: call.id, name: call.function.name, input })
             })
             .collect::<Result<Vec<_>, ProviderError>>()?;
         if text.is_empty() && actions.is_empty() {

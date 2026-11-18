@@ -9,10 +9,7 @@ pub enum Message {
     /// Something the Owner said.
     Owner(String),
     /// Something the Agent said, and the Actions it asked for while saying it.
-    Agent {
-        text: String,
-        actions: Vec<ActionRequest>,
-    },
+    Agent { text: String, actions: Vec<ActionRequest> },
     /// What came of the Action whose id is `action`.
     Outcome { action: String, text: String },
 }
@@ -23,10 +20,7 @@ impl Message {
     }
 
     pub fn from_agent(text: impl Into<String>) -> Self {
-        Self::Agent {
-            text: text.into(),
-            actions: Vec::new(),
-        }
+        Self::Agent { text: text.into(), actions: Vec::new() }
     }
 }
 

@@ -51,9 +51,7 @@ async fn run() -> Result<(), Failure> {
 
 async fn chat() -> Result<(), Failure> {
     let mut agent = agent()?;
-    agent
-        .converse(&mut Terminal::new(BufReader::new(stdin()), stdout()))
-        .await;
+    agent.converse(&mut Terminal::new(BufReader::new(stdin()), stdout())).await;
     Ok(())
 }
 
@@ -72,10 +70,8 @@ fn agent() -> Result<Agent<OpenAiCompatible>, Failure> {
     let store = Store::open(home.join("orbite.db"))
         .map_err(|error| format!("Could not open the Agent's data: {error}"))?;
 
-    Ok(Agent::new(
-        OpenAiCompatible::new(base_url, api_key, model),
-        store,
-    ))
+    let provider = OpenAiCompatible::new(base_url, api_key, model);
+    Ok(Agent::new(provider, store).working_in(home.join("workspace")))
 }
 
 fn required(name: &str) -> Result<String, Failure> {

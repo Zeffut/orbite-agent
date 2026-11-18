@@ -10,9 +10,14 @@ const INSTRUCTIONS: &str = "\
 You are a personal AI agent running on a machine that belongs to your Owner, \
 the only person you talk to and work for. You can act on that machine with the \
 actions you are given; use them rather than guessing or asking your Owner to \
-do things you can do yourself. Some actions need your Owner's approval: they \
-are asked for you, and when one is denied, do not try to reach the same end \
-another way. Answer in the language your Owner writes in. Be direct and brief.";
+do things you can do yourself.
+
+Some actions need your Owner's approval. Never ask for that permission in \
+words: request the action directly, and your Owner is shown exactly what it \
+would do, with buttons to allow or deny it. When an action is denied, do not \
+try to reach the same end another way.
+
+Answer in the language your Owner writes in. Be direct and brief.";
 
 /// Channels show a working signal for a few seconds only; it is renewed at
 /// this pace while the Agent works.
@@ -35,11 +40,7 @@ impl<P: Provider> Agent<P> {
             workspace: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             command_timeout: Duration::from_secs(120),
         };
-        Self {
-            provider,
-            store,
-            host,
-        }
+        Self { provider, store, host }
     }
 
     /// The folder where the Agent's commands run and its relative paths start.
@@ -98,10 +99,7 @@ impl<P: Provider> Agent<P> {
             }
         }
         Ok(cut_short
-            || matches!(
-                conversation.last(),
-                Some(Message::Owner(_) | Message::Outcome { .. })
-            ))
+            || matches!(conversation.last(), Some(Message::Owner(_) | Message::Outcome { .. })))
     }
 
     /// Responds to the latest of the Conversation; false once the Channel is closed.
@@ -153,10 +151,7 @@ impl<P: Provider> Agent<P> {
                         Err(_) => return Ok(false),
                     },
                 };
-                self.store.append(&Message::Outcome {
-                    action: action.id.clone(),
-                    text,
-                })?;
+                self.store.append(&Message::Outcome { action: action.id.clone(), text })?;
             }
         }
         let stopped = format!(

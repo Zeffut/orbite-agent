@@ -8,21 +8,14 @@ use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn said(text: &str) -> Reply {
-    Reply {
-        text: text.to_string(),
-        actions: Vec::new(),
-    }
+    Reply { text: text.to_string(), actions: Vec::new() }
 }
 
 /// The smallest request: the Owner says hi.
 fn hi() -> Request<'static> {
     static HI: std::sync::LazyLock<Vec<Message>> =
         std::sync::LazyLock::new(|| vec![Message::from_owner("Hi")]);
-    Request {
-        instructions: "",
-        conversation: &HI,
-        actions: &[],
-    }
+    Request { instructions: "", conversation: &HI, actions: &[] }
 }
 
 fn answer(text: &str) -> ResponseTemplate {
@@ -80,12 +73,7 @@ async fn a_refused_key_is_reported_with_the_providers_explanation() {
 
     let reply = provider.reply(hi()).await;
 
-    assert_eq!(
-        reply,
-        Err(ProviderError::Rejected(
-            "Incorrect API key provided.".into()
-        ))
-    );
+    assert_eq!(reply, Err(ProviderError::Rejected("Incorrect API key provided.".into())));
 }
 
 #[tokio::test]
@@ -99,12 +87,7 @@ async fn a_server_error_is_reported_as_a_failure() {
 
     let reply = provider.reply(hi()).await;
 
-    assert_eq!(
-        reply,
-        Err(ProviderError::Failed(
-            "HTTP 503: upstream overloaded".into()
-        ))
-    );
+    assert_eq!(reply, Err(ProviderError::Failed("HTTP 503: upstream overloaded".into())));
 }
 
 #[tokio::test]
@@ -127,10 +110,7 @@ async fn a_provider_that_cannot_be_reached_is_reported_as_such() {
 
     let reply = provider.reply(hi()).await;
 
-    assert!(
-        matches!(reply, Err(ProviderError::Unreachable(_))),
-        "{reply:?}"
-    );
+    assert!(matches!(reply, Err(ProviderError::Unreachable(_))), "{reply:?}");
 }
 
 #[tokio::test]
