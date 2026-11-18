@@ -73,7 +73,7 @@ async fn calls(server: &MockServer) -> Vec<(String, Value)> {
             let called = request.url.path().rsplit('/').next().unwrap().to_string();
             (called, serde_json::from_slice(&request.body).unwrap_or(Value::Null))
         })
-        .filter(|(called, _)| called != "getUpdates")
+        .filter(|(called, _)| called != "getUpdates" && called != "setMyCommands")
         .collect()
 }
 
@@ -389,9 +389,9 @@ async fn an_approval_is_asked_with_buttons_and_says_what_cannot_be_undone() {
     assert_eq!(
         asked["reply_markup"]["inline_keyboard"],
         json!([[
-            { "text": "Allow", "callback_data": "allow" },
-            { "text": "Always", "callback_data": "always" },
-            { "text": "Deny", "callback_data": "deny" },
+            { "text": "✅ Allow", "callback_data": "allow" },
+            { "text": "🔁 Always", "callback_data": "always" },
+            { "text": "❌ Deny", "callback_data": "deny" },
         ]])
     );
 }
@@ -581,8 +581,8 @@ async fn a_critical_action_cannot_be_allowed_for_always() {
     assert_eq!(
         calls[0].1["reply_markup"]["inline_keyboard"],
         json!([[
-            { "text": "Allow", "callback_data": "allow" },
-            { "text": "Deny", "callback_data": "deny" },
+            { "text": "✅ Allow", "callback_data": "allow" },
+            { "text": "❌ Deny", "callback_data": "deny" },
         ]])
     );
 }
@@ -736,4 +736,45 @@ async fn the_agent_sends_a_file_as_a_document_with_its_caption() {
     assert!(body.contains("filename=\"summary.txt\""), "{body}");
     assert!(body.contains("Here it is."), "{body}");
     assert!(body.contains(&OWNER.to_string()));
+}
+
+#[tokio::test]
+async fn an_approval_shows_what_is_acted_on_apart_from_the_rest() {
+    let server = telegram_asking(vec![tap(100, OWNER, 7, "allow")]).await;
+    let mut channel = telegram(&server);
+    let approval = Approval {
+        summary: "Create a file".into(),
+        detail: "notes/list.txt\n\nmilk\neggs <fresh>".into(),
+        ..Approval::default()
+    };
+
+    ask(&mut channel, &approval).await;
+
+    let calls = calls(&server).await;
+    assert_eq!(
+        calls[0].1["text"],
+        "🛡 <b>Create a file</b>\n<code>notes/list.txt</code>\n<blockquote expandable>milk\neggs &lt;fresh&gt;</blockquote>"
+    );
+}
+
+#[tokio::test]
+async fn the_bot_offers_its_commands_in_telegrams_menu() {
+    let server = telegram_accepting().await;
+    let mut channel = telegram(&server);
+
+    let _ = tokio::time::timeout(Duration::from_millis(200), channel.receive()).await;
+
+    let asked = server.received_requests().await.unwrap();
+    let menu = asked
+        .iter()
+        .find(|request| request.url.path().ends_with("/setMyCommands"))
+        .expect("no menu was set");
+    let menu: Value = serde_json::from_slice(&menu.body).unwrap();
+    let commands: Vec<&str> = menu["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|command| command["command"].as_str().unwrap())
+        .collect();
+    assert_eq!(commands, ["stop", "reset"]);
 }

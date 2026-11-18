@@ -253,6 +253,12 @@ impl Bot {
 /// Asks Telegram for what was sent to the bot, again and again, and passes on
 /// what the Owner sent. Ends when nobody is left to pass it on to.
 async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
+    // What the Owner can always type, offered in Telegram's own menu.
+    let menu = json!({ "commands": [
+        { "command": "stop", "description": "Stop what the agent is doing" },
+        { "command": "reset", "description": "Start the conversation afresh (memory is kept)" },
+    ] });
+    let _ = bot.call::<Value>("setMyCommands", menu).await;
     // Identifier of the next update to ask Telegram for.
     let mut next_update = 0;
     loop {
@@ -391,19 +397,27 @@ impl Channel for Telegram {
 
     async fn ask(&mut self, approval: &Approval) -> io::Result<Answer> {
         self.clear_progress().await;
+        // What is acted on stands out; the rest folds away when long.
+        let (subject, rest) = approval.detail.split_once("\n\n").unwrap_or((&approval.detail, ""));
         let mut text = format!(
-            "<b>{}</b>\n\n<pre>{}</pre>",
+            "🛡 <b>{}</b>\n<code>{}</code>",
             formatting::escape(&approval.summary),
-            formatting::escape(&approval.detail)
+            formatting::escape(subject)
         );
+        if !rest.trim().is_empty() {
+            text.push_str(&format!(
+                "\n<blockquote expandable>{}</blockquote>",
+                formatting::escape(rest.trim())
+            ));
+        }
         if approval.irreversible {
             text.push_str("\n\n⚠️ This cannot be undone.");
         }
-        let mut buttons = vec![json!({ "text": "Allow", "callback_data": "allow" })];
+        let mut buttons = vec![json!({ "text": "✅ Allow", "callback_data": "allow" })];
         if !approval.critical {
-            buttons.push(json!({ "text": "Always", "callback_data": "always" }));
+            buttons.push(json!({ "text": "🔁 Always", "callback_data": "always" }));
         }
-        buttons.push(json!({ "text": "Deny", "callback_data": "deny" }));
+        buttons.push(json!({ "text": "❌ Deny", "callback_data": "deny" }));
         let asked: Message = self
             .bot
             .call(
