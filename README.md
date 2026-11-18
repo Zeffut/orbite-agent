@@ -21,6 +21,7 @@ cargo fmt && cargo clippy --all-targets      # before every commit
 
 # talk to the Agent in a terminal, with any OpenAI-compatible Provider
 ORBITE_API_KEY=... ORBITE_MODEL=... ORBITE_BASE_URL=https://api.openai.com/v1 cargo run -- chat
+# its data lives in ~/.orbite, or in the folder named by ORBITE_HOME
 ```
 
 ## Documentation

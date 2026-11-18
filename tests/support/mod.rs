@@ -9,10 +9,15 @@ use std::time::Duration;
 use orbite::{Channel, Message, Provider, ProviderError};
 use tokio::sync::mpsc;
 
+enum Outcome {
+    Now(Result<String, ProviderError>),
+    Never,
+}
+
 /// A Provider that gives the next scripted answer and records what it was asked.
 #[derive(Clone, Default)]
 pub struct ScriptedProvider {
-    script: Arc<Mutex<VecDeque<Result<String, ProviderError>>>>,
+    script: Arc<Mutex<VecDeque<Outcome>>>,
     asked: Arc<Mutex<Vec<Vec<Message>>>>,
 }
 
@@ -26,8 +31,18 @@ impl ScriptedProvider {
     }
 
     pub fn then(&self, outcome: Result<String, ProviderError>) -> &Self {
-        self.script.lock().unwrap().push_back(outcome);
+        self.script.lock().unwrap().push_back(Outcome::Now(outcome));
         self
+    }
+
+    /// The next call never returns, as when Orbite is stopped mid-answer.
+    pub fn then_never_answers(&self) -> &Self {
+        self.script.lock().unwrap().push_back(Outcome::Never);
+        self
+    }
+
+    pub fn times_asked(&self) -> usize {
+        self.asked.lock().unwrap().len()
     }
 
     /// The Conversation as the Provider saw it on its latest call.
@@ -44,11 +59,16 @@ impl ScriptedProvider {
 impl Provider for ScriptedProvider {
     async fn reply(&self, conversation: &[Message]) -> Result<String, ProviderError> {
         self.asked.lock().unwrap().push(conversation.to_vec());
-        self.script
+        let outcome = self
+            .script
             .lock()
             .unwrap()
             .pop_front()
-            .expect("the script ran out of answers")
+            .expect("the script ran out of answers");
+        match outcome {
+            Outcome::Now(outcome) => outcome,
+            Outcome::Never => std::future::pending().await,
+        }
     }
 }
 
@@ -96,6 +116,13 @@ impl Owner {
         self.to_agent
             .send(text.to_string())
             .expect("the Agent is gone");
+    }
+
+    /// True when the Agent says nothing for a moment.
+    pub async fn hears_nothing(&mut self) -> bool {
+        tokio::time::timeout(Duration::from_millis(100), self.from_agent.recv())
+            .await
+            .is_err()
     }
 
     pub async fn hears(&mut self) -> String {
