@@ -430,3 +430,48 @@ fn data_kept_from_an_earlier_installation_is_given_back_to_the_agents_account() 
         "{calls}"
     );
 }
+
+#[test]
+fn an_older_release_is_not_put_over_a_newer_orbite_unless_asked() {
+    let machine = Machine::debian();
+    // The release says which version it is, in its signed list.
+    let release = machine.path("release");
+    fs::write(release.join("VERSION"), "0.2.0\n").unwrap();
+    let run = |arguments: &[&str]| {
+        let done = Command::new(arguments[0])
+            .args(&arguments[1..])
+            .current_dir(&release)
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{arguments:?}");
+        done
+    };
+    let sums = run(&["sha256sum", "orbite-x86_64-linux", "VERSION"]);
+    fs::write(release.join("SHA256SUMS"), sums.stdout).unwrap();
+    run(&[
+        "openssl",
+        "pkeyutl",
+        "-sign",
+        "-inkey",
+        "signing.key",
+        "-rawin",
+        "-in",
+        "SHA256SUMS",
+        "-out",
+        "SHA256SUMS.sig",
+    ]);
+    // A newer Orbite runs on this machine.
+    let installed = machine.path("usr/local/bin/orbite");
+    fs::write(&installed, "#!/bin/sh\necho 'orbite 0.3.1'\n").unwrap();
+    fs::set_permissions(&installed, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let refused = machine.install();
+
+    assert!(!refused.status.success(), "{}", shown(&refused));
+    assert!(shown(&refused).contains("0.3.1") && shown(&refused).contains("older 0.2.0"));
+    assert!(fs::read_to_string(&installed).unwrap().contains("0.3.1"), "it was replaced");
+
+    let insisted = machine.install_with(&[("ORBITE_ALLOW_OLDER", "1")]);
+    assert!(insisted.status.success(), "{}", shown(&insisted));
+    assert_eq!(fs::read_to_string(&installed).unwrap(), "the orbite program");
+}

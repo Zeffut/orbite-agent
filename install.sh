@@ -94,6 +94,19 @@ openssl pkeyutl -verify -pubin -inkey "$WORK/orbite.pub" -rawin \
 (cd "$WORK" && grep " $FILE\$" SHA256SUMS | sha256sum -c - >/dev/null 2>&1) ||
     refuse "what was downloaded does not match its signed checksum."
 
+# An older release is not put over a newer Orbite: a release that was once
+# sound stays signed for ever, known defects included.
+if [ -x "$ROOT$PROGRAM" ] && [ "${ORBITE_ALLOW_OLDER:-}" != 1 ] &&
+    curl -fsSL "$RELEASE/VERSION" -o "$WORK/VERSION" 2>/dev/null &&
+    (cd "$WORK" && grep ' VERSION$' SHA256SUMS | sha256sum -c - >/dev/null 2>&1); then
+    OFFERED="$(tr -d ' \n' <"$WORK/VERSION")"
+    INSTALLED="$("$ROOT$PROGRAM" version 2>/dev/null | awk '{print $2}')"
+    if [ -n "$INSTALLED" ] && [ "$INSTALLED" != "$OFFERED" ] &&
+        [ "$(printf '%s\n%s\n' "$INSTALLED" "$OFFERED" | sort -V | tail -1)" = "$INSTALLED" ]; then
+        refuse "this machine runs Orbite $INSTALLED, and what was downloaded is the older $OFFERED. To install it all the same, set ORBITE_ALLOW_OLDER=1."
+    fi
+fi
+
 # --- Now the machine is changed ---
 
 UPDATING=no
