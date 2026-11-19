@@ -17,6 +17,7 @@ Commands:
   run    hold the Conversation in Telegram (add --terminal to open it here as well)
   chat   hold the Conversation in this terminal
   transcription  how voice messages are written down: a provider, whisper.cpp on this machine, a local server, a command of yours, or off
+  connections  every connection: the AIs and the connectors (add NAME ADDRESS, remove NAME)
   providers  list the Providers set up, in order; add one, or change them (add, first NAME, remove NAME, limit NAME TOKENS)
   version    say which version this is
   setup      set Orbite up, or one part again (language, provider, telegram, name)
@@ -77,6 +78,7 @@ async fn main() -> ExitCode {
         Some("uninstall") => uninstall(),
         Some("setup") => setup().await,
         Some("providers") => providers().await,
+        Some("connections") => connections(),
         Some("transcription") => {
             let asked: Vec<String> = env::args().skip(2).collect();
             let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
@@ -323,6 +325,45 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .speaking(Language::of(config.language.as_deref()))
         .keeping_context_under(context)
         .waking_up_every_minutes(wake_ups))
+}
+
+/// Shows every connection of this installation, or adds or removes a connector.
+fn connections() -> Result<(), Failure> {
+    let home = home()?;
+    let asked: Vec<String> = env::args().skip(2).collect();
+    match asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [] => {
+            let language = Language::of(Config::load(&home)?.language.as_deref());
+            println!(
+                "AIs, in the order they are asked:\n{}\n",
+                orbite::providers_shown(&home, language, &[])
+            );
+            let connectors = orbite::connectors(&home);
+            println!(
+                "Connectors: {}",
+                if connectors.is_empty() { "none".into() } else { connectors.join(", ") }
+            );
+            println!(
+                "\nIn the conversation, /connections shows how each stands and signs in to those that want it.\nAdd a connector: orbite connections add NAME ADDRESS | remove NAME\nAdd an AI: orbite providers add"
+            );
+            return Ok(());
+        }
+        ["add", name, address] => {
+            orbite::add_connector(&home, name, address)?;
+            println!(
+                "{name} is added. Sign in to it, if it wants that, from the conversation: /mcp connect {name}"
+            );
+        }
+        ["remove", name] => {
+            orbite::remove_connector(&home, name)?;
+            println!("{name} is removed.");
+        }
+        _ => return Err("Usage: orbite connections | add NAME ADDRESS | remove NAME".into()),
+    }
+    println!(
+        "It applies at the next start of Orbite (as a service: sudo systemctl restart orbite)."
+    );
+    Ok(())
 }
 
 /// Adds a Provider to those set up, or changes their order, limits and number.

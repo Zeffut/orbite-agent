@@ -51,6 +51,9 @@ pub use computer::{Computer, Screen};
 pub use config::{Config, ProviderChoice, Transcription};
 pub use hearing::{Advice, MODELS, Machine, Model, chosen as chosen_transcriber, transcription};
 pub use language::Language;
+pub use mcp::{
+    add_server as add_connector, listed as connectors, remove_server as remove_connector,
+};
 pub use moving::{export, restore};
 pub use openai_compatible::OpenAiCompatible;
 pub use provider::{

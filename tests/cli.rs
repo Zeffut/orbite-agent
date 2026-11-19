@@ -321,3 +321,26 @@ async fn what_the_owner_says_aloud_is_written_down_by_their_provider_that_offers
     let thought = asked.iter().find(|request| request.url.path() == "/chat/completions").unwrap();
     assert!(String::from_utf8_lossy(&thought.body).contains("Buy bread on the way home."));
 }
+
+#[test]
+fn connectors_are_listed_added_and_removed_from_the_host_too() {
+    let home = tempfile::tempdir().unwrap();
+    with_three_providers(home.path());
+
+    let added =
+        orbite(home.path(), &["connections", "add", "docs", "https://docs.example/mcp"], "");
+    assert!(added.status.success(), "{}", shown(&added));
+    let listed = shown(&orbite(home.path(), &["connections"], ""));
+    assert!(listed.contains("1. chatgpt") && listed.contains("Connectors: docs"), "{listed}");
+
+    let refused =
+        orbite(home.path(), &["connections", "add", "docs", "https://other.example/mcp"], "");
+    assert!(
+        !refused.status.success() && shown(&refused).contains("already"),
+        "{}",
+        shown(&refused)
+    );
+
+    assert!(orbite(home.path(), &["connections", "remove", "docs"], "").status.success());
+    assert!(shown(&orbite(home.path(), &["connections"], "")).contains("Connectors: none"));
+}

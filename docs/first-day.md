@@ -76,6 +76,7 @@ Everything else is said in plain words, but a few commands are always there, als
 | `/reset` | starts the conversation afresh; what it remembers about you is kept |
 | `/settings` | shows the settings, with buttons to change them |
 | `/usage` | what the agent has used, by provider and model |
+| `/connections` | every connection in one place: the AIs and the connectors, how each stands, and buttons to sign in, sign out or remove; `/connect NAME ADDRESS` adds a connector |
 | `/providers` | the AIs it thinks with, in order, with their limits; `/providers first NAME`, `limit NAME 200000`, `remove NAME`, `connect chatgpt` |
 | `/extensions` | lists the extensions; `/extensions off NAME`, `on NAME`, `remove NAME` |
 | `/mcp` | lists the MCP servers and their state |
@@ -110,7 +111,7 @@ The agent then uses it by name, in commands and extensions, and never sees its v
 
 ## MCP servers
 
-Tools from MCP servers become actions of your agent. List the servers in `/var/lib/orbite/mcp.json`, in the form other MCP clients use, then restart Orbite:
+Tools from MCP servers (connectors) become actions of your agent. The simple way: in the conversation, `/connect NAME ADDRESS`, for instance `/connect notion https://mcp.notion.com/mcp`. Orbite starts again and comes back with a link to sign in, or with the connector connected; `/connections` shows them all. For a server that is a program on the machine, or that takes a key in its headers, list it in `/var/lib/orbite/mcp.json`, in the form other MCP clients use, then restart Orbite:
 
 ```json
 { "mcpServers": {

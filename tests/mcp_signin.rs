@@ -404,3 +404,147 @@ async fn a_server_that_takes_no_newcomer_is_signed_in_to_with_a_client_the_owner
         .expect("the sign-in was not finished");
     assert!(kept.contains("access-for-the-test") && !kept.contains(&secret));
 }
+
+// --- Every connection in one place ---
+
+/// An Agent of the installation in `home`, which keeps what it is told across restarts.
+fn installed_agent(
+    home: &std::path::Path,
+    provider: &ScriptedProvider,
+) -> (Owner, tokio::task::JoinHandle<()>) {
+    let (mut channel, owner) = memory_channel();
+    let provider = provider.clone();
+    let home = home.to_owned();
+    let running = tokio::spawn(async move {
+        Agent::new(provider, Store::open(home.join("orbite.db")).unwrap())
+            .configured_in(&home)
+            .keeping_secrets_in(&home)
+            .connecting_servers_in(&home)
+            .restarted_by_its_service()
+            .converse(&mut channel)
+            .await
+    });
+    (owner, running)
+}
+
+#[tokio::test]
+async fn the_owner_sees_every_connection_in_one_place_with_what_to_do_about_each() {
+    let server = service(Arc::new(Mutex::new(String::new()))).await;
+    let home = home_with(&server).await;
+    let config = json!({
+        "language": "en",
+        "provider": { "name": "chatgpt", "model": "gpt-of-the-plan" },
+        "fallbacks": [{ "name": "groq", "model": "m-1", "key": "ORBITE_KEY_GROQ" },
+                      { "name": "ollama", "model": "m-2" }],
+    });
+    std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
+    Secrets::kept_in(home.path()).set("ORBITE_KEY_GROQ", &format!("key-{}", "of-groq")).unwrap();
+    let provider = ScriptedProvider::default();
+    let (mut owner, _running) = installed_agent(home.path(), &provider);
+
+    owner.says("/connections");
+    let shown = owner.hears().await;
+
+    // The AIs, in the order they are asked, each with its state.
+    let at = |text: &str| shown.find(text).unwrap_or_else(|| panic!("{text} in:\n{shown}"));
+    assert!(at("chatgpt") < at("groq") && at("groq") < at("ollama"), "{shown}");
+    assert!(shown.contains("/providers connect chatgpt"), "not signed in, and how to: {shown}");
+    assert!(shown[at("groq")..at("ollama")].contains("🟢"), "its key is kept: {shown}");
+    // The connectors, and the one to sign in to.
+    assert!(shown.contains("far") && shown.contains("/mcp connect far"), "{shown}");
+    // And how to add one, with nothing to edit by hand.
+    assert!(shown.contains("/connect NAME ADDRESS"), "{shown}");
+    assert_eq!(provider.times_asked(), 0, "none of this is sent to a model");
+}
+
+#[tokio::test]
+async fn a_connector_is_added_by_its_address_and_signed_in_to_once_orbite_is_back() {
+    let challenge = Arc::new(Mutex::new(String::new()));
+    let server = service(challenge.clone()).await;
+    let home = tempfile::tempdir().unwrap();
+    // Another one is there already, and stays as it was written.
+    std::fs::write(
+        home.path().join("mcp.json"),
+        json!({ "mcpServers": { "notes": { "command": "true", "args": ["--quiet"] } } })
+            .to_string(),
+    )
+    .unwrap();
+    let provider = ScriptedProvider::default();
+    let (mut owner, running) = installed_agent(home.path(), &provider);
+
+    owner.says(&format!("/connect far {}/mcp", server.uri()));
+    let said = owner.hears().await;
+    assert!(said.contains("far") && said.to_lowercase().contains("back in a moment"), "{said}");
+    tokio::time::timeout(std::time::Duration::from_secs(2), running)
+        .await
+        .expect("the Agent ends so that its service starts it again")
+        .unwrap();
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(home.path().join("mcp.json")).unwrap())
+            .unwrap();
+    assert_eq!(written["mcpServers"]["far"]["url"], format!("{}/mcp", server.uri()));
+    assert_eq!(written["mcpServers"]["notes"]["args"], json!(["--quiet"]));
+
+    // Back, it goes on by itself: this connector wants signing in, here is the link.
+    let (mut owner, _running) = installed_agent(home.path(), &provider);
+    let said = owner.hears().await;
+    assert!(said.contains("far"), "{said}");
+    let asked = carried(&said);
+    assert_eq!(asked["client_id"], "client-made-for-orbite");
+    assert_eq!(provider.times_asked(), 0);
+}
+
+#[tokio::test]
+async fn what_cannot_be_a_connector_is_refused_and_nothing_is_written() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("mcp.json"),
+        json!({ "mcpServers": { "far": { "url": "https://far.example/mcp" } } }).to_string(),
+    )
+    .unwrap();
+    let before = std::fs::read_to_string(home.path().join("mcp.json")).unwrap();
+    let provider = ScriptedProvider::default();
+    let (mut owner, _running) = installed_agent(home.path(), &provider);
+
+    for (asked, why) in [
+        ("/connect docs not-an-address", "address"),
+        ("/connect docs ftp://docs.example/mcp", "address"),
+        ("/connect far https://other.example/mcp", "already"),
+        ("/connect computer https://other.example/mcp", "name"),
+        ("/connect docs", "/connect NAME ADDRESS"),
+    ] {
+        owner.says(asked);
+        let said = owner.hears().await;
+        assert!(said.contains(why), "{asked}: {said}");
+    }
+    assert_eq!(std::fs::read_to_string(home.path().join("mcp.json")).unwrap(), before);
+}
+
+#[tokio::test]
+async fn a_connector_is_signed_out_of_or_removed_from_the_conversation() {
+    let server = service(Arc::new(Mutex::new(String::new()))).await;
+    let home = home_with(&server).await;
+    let secrets = Secrets::kept_in(home.path());
+    secrets
+        .set("ORBITE_MCP_FAR", r#"{"access":"a","client":"c","exchange":"e","resource":"r"}"#)
+        .unwrap();
+    let provider = ScriptedProvider::default();
+    let (mut owner, _running) = installed_agent(home.path(), &provider);
+
+    owner.says("/connections disconnect far");
+    let said = owner.hears().await;
+    assert!(said.contains("far"), "{said}");
+    assert_eq!(secrets.get("ORBITE_MCP_FAR").unwrap(), None);
+    assert!(std::fs::read_to_string(home.path().join("mcp.json")).unwrap().contains("far"));
+
+    owner.says("/connections remove nothing-of-that-name");
+    assert!(owner.hears().await.contains("far"), "the ones there are named");
+
+    owner.says("/connections remove far");
+    let said = owner.hears().await;
+    assert!(said.to_lowercase().contains("removed"), "{said}");
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(home.path().join("mcp.json")).unwrap())
+            .unwrap();
+    assert!(written["mcpServers"].get("far").is_none(), "{written}");
+}

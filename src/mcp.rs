@@ -158,6 +158,83 @@ fn unguessable() -> Result<String, String> {
     Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random))
 }
 
+/// What `mcp.json` in `home` holds, as it is written, and under which key
+/// its servers are.
+fn written_in(home: &Path) -> Result<(Value, &'static str), String> {
+    let written = match std::fs::read_to_string(home.join("mcp.json")) {
+        Ok(written) => serde_json::from_str::<Value>(&written)
+            .map_err(|error| format!("mcp.json could not be read: {error}"))?,
+        Err(_) => json!({}),
+    };
+    let key = if written.get("servers").is_some() && written.get("mcpServers").is_none() {
+        "servers"
+    } else {
+        "mcpServers"
+    };
+    Ok((written, key))
+}
+
+fn write_in(home: &Path, written: &Value) -> Result<(), String> {
+    let wrong = |error: std::io::Error| format!("mcp.json could not be written: {error}");
+    let text = serde_json::to_string_pretty(written).unwrap_or_default() + "\n";
+    let being_written = home.join("mcp.writing");
+    std::fs::write(&being_written, text).map_err(wrong)?;
+    std::fs::rename(being_written, home.join("mcp.json")).map_err(wrong)
+}
+
+/// The names of the servers listed in `home`, as they are written there.
+pub fn listed(home: &Path) -> Vec<String> {
+    let Ok((written, key)) = written_in(home) else { return Vec::new() };
+    written[key].as_object().map(|servers| servers.keys().cloned().collect()).unwrap_or_default()
+}
+
+/// Adds the server at `address` to those of `home`, under `name`. What was
+/// written there for the others stays as it was. The text of a failure is
+/// for the Owner.
+pub fn add_server(home: &Path, name: &str, address: &str) -> Result<(), String> {
+    let well_named = !name.is_empty()
+        && name.len() <= 32
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if !well_named || as_one_action(name) != plain(name) {
+        return Err(format!(
+            "\"{name}\" cannot be a connector's name: a name is small letters, digits, - and _, \
+             and not one the agent uses itself."
+        ));
+    }
+    let is_address = url::Url::parse(address)
+        .is_ok_and(|at| matches!(at.scheme(), "http" | "https") && at.host_str().is_some());
+    if !is_address {
+        return Err(format!("\"{address}\" is not an address: it starts with https://"));
+    }
+    let (mut written, key) = written_in(home)?;
+    if written[key].get(name).is_some() {
+        return Err(format!("A connector called {name} is already there."));
+    }
+    if !written[key].is_object() {
+        written[key] = json!({});
+    }
+    written[key][name] = json!({ "url": address });
+    write_in(home, &written)
+}
+
+/// Removes the server called `name` from those of `home`, with what a
+/// sign-in to it had obtained. The text of a failure names those there are.
+pub fn remove_server(home: &Path, name: &str) -> Result<(), String> {
+    let (mut written, key) = written_in(home)?;
+    let Some(servers) = written[key].as_object_mut() else {
+        return Err("No connector is set up.".into());
+    };
+    if servers.remove(name).is_none() {
+        let names: Vec<&str> = servers.keys().map(String::as_str).collect();
+        return Err(format!("No connector is called {name}. There: {}.", names.join(", ")));
+    }
+    write_in(home, &written)?;
+    let _ = Secrets::kept_in(home).remove(&Mcp::kept_as(name));
+    Ok(())
+}
+
 impl Mcp {
     /// The servers listed in `home`'s `mcp.json`, none of them started yet.
     pub(crate) fn configured_in(home: &Path) -> Self {
@@ -870,6 +947,21 @@ impl Mcp {
         } else {
             said
         })
+    }
+
+    /// Lets go of what a sign-in to `server` obtained; false when there was none.
+    pub(crate) async fn sign_out(&self, server: &str) -> bool {
+        let had = self.secrets.remove(&Self::kept_as(server)).unwrap_or(false);
+        if let Some(known) = self.servers.iter().find(|known| known.name == server) {
+            *known.link.lock().await = None;
+            *known.tools.lock().unwrap() = None;
+        }
+        had
+    }
+
+    /// True when a sign-in to `server` is kept.
+    pub(crate) fn is_signed_in_to(&self, server: &str) -> bool {
+        self.signed_in(server).is_some()
     }
 
     /// Each server and how many tools it offers, or why it offers none.

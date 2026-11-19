@@ -403,6 +403,15 @@ impl<P: Provider + 'static> Agent<P> {
         if self.unfinished().unwrap_or(false) && !self.respond_on(channel, false).await {
             return;
         }
+        // A connector added just before Orbite started again is gone on
+        // with: connected, or the link to sign in to it.
+        if let Ok(Some(name)) = self.store.setting("connect_after_restart") {
+            let _ = self.store.set_setting("connect_after_restart", None);
+            let said = self.sign_in_to_connector(&name).await;
+            if channel.send(&said).await.is_err() {
+                return;
+            }
+        }
         self.last_active = (self.clock)().timestamp();
         let mut time_check = tokio::time::interval(self.time_check);
         time_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -518,26 +527,26 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 continue;
             }
+            if let Some(asked) = text.trim().strip_prefix("/connections") {
+                let (said, choices, restart) = self.connections(asked).await;
+                if channel.offer(&said, &choices).await.is_err() || (restart && self.restarted) {
+                    return;
+                }
+                continue;
+            }
+            if let Some(asked) = text
+                .trim()
+                .strip_prefix("/connect")
+                .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                let (said, restart) = self.add_connector(asked);
+                if channel.send(&said).await.is_err() || (restart && self.restarted) {
+                    return;
+                }
+                continue;
+            }
             if let Some(name) = text.trim().strip_prefix("/mcp connect ") {
-                let Some(mcp) = self.host.mcp.clone() else { continue };
-                let name = name.trim();
-                let said = match mcp.sign_in(name).await {
-                    Ok(link) => format!(
-                        "{}\n\n{link}\n\n{}",
-                        self.language.say(
-                            "To connect it, open this link and sign in:",
-                            "Pour le connecter, ouvrez ce lien et connectez-vous :"
-                        ),
-                        self.language.say(
-                            "Your browser will then stop on a page that does not load, at an address starting with \
-                             http://127.0.0.1. That is expected: copy that whole address and send it to me here.",
-                            "Votre navigateur s'arrêtera ensuite sur une page qui ne se charge pas, à une adresse \
-                             commençant par http://127.0.0.1. C'est normal : copiez cette adresse entière et \
-                             envoyez-la-moi ici."
-                        )
-                    ),
-                    Err(problem) => format!("🔴 **{name}**: {problem}."),
-                };
+                let said = self.sign_in_to_connector(name.trim()).await;
                 if channel.send(&said).await.is_err() {
                     return;
                 }
@@ -1734,6 +1743,243 @@ impl<P: Provider + 'static> Agent<P> {
             }
         }
         listed
+    }
+
+    /// Connects the connector called `name`: the link to sign in to it when
+    /// it wants that, or how it stands when it does not.
+    async fn sign_in_to_connector(&self, name: &str) -> String {
+        let Some(mcp) = self.host.mcp.clone() else {
+            return self
+                .language
+                .say(
+                    "There is nowhere to list connectors.",
+                    "Il n'y a nulle part où lister des connecteurs.",
+                )
+                .into();
+        };
+        mcp.connect(false).await;
+        // One that answers without being signed in to is simply connected.
+        if let Some((_, Ok(tools))) = mcp.status().0.into_iter().find(|(known, _)| known == name) {
+            return format!(
+                "🟢 **{name}**: {} ({tools} {})",
+                self.language.say("connected", "connecté"),
+                self.language.say("tools", "outils")
+            );
+        }
+        match mcp.sign_in(name).await {
+            Ok(link) => format!(
+                "**{name}**: {}\n\n{link}\n\n{}",
+                self.language.say(
+                    "to connect it, open this link and sign in:",
+                    "pour le connecter, ouvrez ce lien et connectez-vous :"
+                ),
+                self.language.say(
+                    "Your browser will then stop on a page that does not load, at an address starting with \
+                     http://127.0.0.1. That is expected: copy that whole address and send it to me here.",
+                    "Votre navigateur s'arrêtera ensuite sur une page qui ne se charge pas, à une adresse \
+                     commençant par http://127.0.0.1. C'est normal : copiez cette adresse entière et \
+                     envoyez-la-moi ici."
+                )
+            ),
+            Err(problem) => format!("🔴 **{name}**: {problem}."),
+        }
+    }
+
+    /// Adds a connector as the Owner asked after /connect: its name, then
+    /// its address. True when Orbite must start again to take it.
+    fn add_connector(&self, asked: &str) -> (String, bool) {
+        let say = |english: &str, french: &str| self.language.say(english, french).to_owned();
+        let words: Vec<&str> = asked.split_whitespace().collect();
+        let (Some(home), [name, address]) = (&self.home, &words[..]) else {
+            return (
+                say(
+                    "To add a connector: /connect NAME ADDRESS, such as /connect notion https://mcp.notion.com/mcp",
+                    "Pour ajouter un connecteur : /connect NAME ADDRESS, par exemple /connect notion https://mcp.notion.com/mcp",
+                ),
+                false,
+            );
+        };
+        if let Err(problem) = crate::mcp::add_server(home, name, address) {
+            return (format!("🔴 {problem}"), false);
+        }
+        let _ = self.store.set_setting("connect_after_restart", Some(name));
+        let then = if self.restarted {
+            say(
+                "I restart to take it: back in a moment, with what it takes to connect it.",
+                "Je redémarre pour le prendre en compte : je reviens dans un instant, avec ce qu'il faut pour le connecter.",
+            )
+        } else {
+            say(
+                "It is taken at the next start of Orbite.",
+                "Il sera pris en compte au prochain démarrage d'Orbite.",
+            )
+        };
+        (format!("✅ **{name}** {} {then}", say("is added.", "est ajouté.")), true)
+    }
+
+    /// Every connection of the Agent in one place: the AIs it thinks with
+    /// and its connectors, each with how it stands and what to do about it;
+    /// or, after /connections, `disconnect NAME` or `remove NAME`. The
+    /// choices are offered as buttons; true when Orbite must start again.
+    async fn connections(&self, asked: &str) -> (String, Vec<(String, String)>, bool) {
+        let say = |english: &str, french: &str| self.language.say(english, french).to_owned();
+        let words: Vec<&str> = asked.split_whitespace().collect();
+        let mut first = String::new();
+        match (&words[..], &self.host.mcp, &self.home) {
+            (["disconnect", name], Some(mcp), _) => {
+                first = if mcp.sign_out(name).await {
+                    format!("✅ **{name}**: {}\n\n", say("signed out.", "déconnecté."))
+                } else {
+                    format!(
+                        "**{name}**: {}\n\n",
+                        say("nothing was signed in to.", "aucune connexion n'était en cours.")
+                    )
+                };
+            }
+            (["remove", name], _, Some(home)) => match crate::mcp::remove_server(home, name) {
+                Ok(()) => {
+                    let then = if self.restarted {
+                        say(
+                            "I restart to take it: back in a moment.",
+                            "Je redémarre pour l'appliquer : je reviens dans un instant.",
+                        )
+                    } else {
+                        say(
+                            "It applies at the next start of Orbite.",
+                            "Ce sera appliqué au prochain démarrage d'Orbite.",
+                        )
+                    };
+                    return (
+                        format!("✅ **{name}** {} {then}", say("is removed.", "est retiré.")),
+                        Vec::new(),
+                        true,
+                    );
+                }
+                Err(problem) => first = format!("🔴 {problem}\n\n"),
+            },
+            _ => {}
+        }
+        let mut shown = first;
+        let mut choices: Vec<(String, String)> = Vec::new();
+
+        shown.push_str(&format!(
+            "**{}**\n",
+            say("AIs, in the order they are asked", "IA, dans l'ordre où elles sont sollicitées")
+        ));
+        let providers = self
+            .home
+            .as_ref()
+            .and_then(|home| crate::Config::load(home).ok())
+            .map(|config| config.providers())
+            .unwrap_or_default();
+        if providers.is_empty() {
+            shown.push_str(&say("None is set up.\n", "Aucune n'est configurée.\n"));
+        }
+        let secrets = &self.host.secrets;
+        for (place, provider) in providers.iter().enumerate() {
+            let needs_key = crate::known_providers()
+                .iter()
+                .find(|known| known.name == provider.name)
+                .is_none_or(|known| known.needs_key);
+            let state = if provider.name == "chatgpt" {
+                let plan =
+                    self.home.as_ref().map(|home| crate::ChatGpt::kept_in(home, &provider.model));
+                match plan.filter(|plan| plan.is_signed_in()) {
+                    Some(plan) => format!(
+                        "🟢 {}{}",
+                        say("signed in", "connecté"),
+                        plan.account().map(|account| format!(" ({account})")).unwrap_or_default()
+                    ),
+                    None => {
+                        choices.push((
+                            say("Sign in to ChatGPT", "Se connecter à ChatGPT"),
+                            "/providers connect chatgpt".into(),
+                        ));
+                        format!(
+                            "🟡 {} → /providers connect chatgpt",
+                            say("to sign in to", "à connecter")
+                        )
+                    }
+                }
+            } else if !needs_key {
+                format!("🟢 {}", say("on this machine, no key", "sur cette machine, sans clé"))
+            } else {
+                let named = provider.key.as_deref().unwrap_or(crate::PROVIDER_KEY);
+                let kept = secrets
+                    .as_ref()
+                    .is_some_and(|secrets| secrets.get(named).ok().flatten().is_some());
+                if kept {
+                    format!("🟢 {}", say("its key is kept", "sa clé est enregistrée"))
+                } else {
+                    format!(
+                        "🔴 {}",
+                        say(
+                            "no key: on the machine, orbite setup provider",
+                            "pas de clé : sur la machine, orbite setup provider"
+                        )
+                    )
+                }
+            };
+            shown.push_str(&format!(
+                "{}. {} · {}: {state}\n",
+                place + 1,
+                provider.name,
+                provider.model
+            ));
+        }
+
+        shown.push_str(&format!("\n**{}**\n", say("Connectors", "Connecteurs")));
+        let servers = match &self.host.mcp {
+            Some(mcp) => {
+                mcp.connect(false).await;
+                let (servers, problem) = mcp.status();
+                if let Some(problem) = problem {
+                    shown.push_str(&format!("🔴 {problem}\n"));
+                }
+                servers
+            }
+            None => Vec::new(),
+        };
+        if servers.is_empty() {
+            shown.push_str(&say("None yet.\n", "Aucun pour l'instant.\n"));
+        }
+        for (name, state) in servers {
+            let signed_in = self.host.mcp.as_ref().is_some_and(|mcp| mcp.is_signed_in_to(&name));
+            match state {
+                Ok(tools) => {
+                    shown.push_str(&format!("🟢 {name}: {tools} {}\n", say("tools", "outils")));
+                    if signed_in {
+                        choices.push((
+                            format!("{} {name}", say("Sign out of", "Déconnecter")),
+                            format!("/connections disconnect {name}"),
+                        ));
+                    }
+                }
+                Err(problem) if problem.contains("signed in to") => {
+                    shown.push_str(&format!(
+                        "🟡 {name}: {} → /mcp connect {name}\n",
+                        say("to sign in to", "à connecter")
+                    ));
+                    choices.push((
+                        format!("{} {name}", say("Connect", "Connecter")),
+                        format!("/mcp connect {name}"),
+                    ));
+                }
+                Err(problem) => shown.push_str(&format!("🔴 {name}: {}\n", clip(&problem, 160))),
+            }
+            choices.push((
+                format!("{} {name}", say("Remove", "Retirer")),
+                format!("/connections remove {name}"),
+            ));
+        }
+        shown.push_str(&format!(
+            "\n{}",
+            say(
+                "Add a connector: /connect NAME ADDRESS\nAdd an AI, on the machine: orbite providers add · their order and limits: /providers",
+                "Ajouter un connecteur : /connect NAME ADDRESS\nAjouter une IA, sur la machine : orbite providers add · leur ordre et leurs limites : /providers",
+            )
+        ));
+        (shown, choices, false)
     }
 
     /// Lists the Extensions, or turns one on or off, or removes one, as the

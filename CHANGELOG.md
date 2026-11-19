@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.3.15
+
+Released on 2026-11-20.
+
+- **Every connection in one place.** `/connections` shows the AIs your agent thinks with and its connectors, each with how it stands (connected, to sign in to, or what is wrong) and buttons to act: sign in, sign out, remove.
+- **A connector is added from the conversation**: `/connect NAME ADDRESS`, with nothing to edit by hand. Orbite starts again and comes back with the link to sign in, or with the connector connected. `orbite connections` does the same on the machine.
+
 ## 0.3.14
 
 Released on 2026-11-19.
