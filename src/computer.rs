@@ -167,9 +167,112 @@ impl Screen {
         ])
     }
 
-    /// Types `text`, as on a keyboard.
+    /// Types `text`, as on a keyboard. A letter the keyboard does not have
+    /// is first given a key of its own, and programs are left the time to
+    /// learn of it before that key is pressed: pressed at once, as the usual
+    /// tools do, browsers miss it and the letter is lost.
     pub fn type_text(&self, text: &str) -> io::Result<()> {
-        self.act(&["type", "--delay", "12", "--", text])
+        use x11rb::protocol::xtest::ConnectionExt as _;
+        const PRESS: u8 = 2;
+        const RELEASE: u8 = 3;
+        let wrong = |error: &dyn std::fmt::Display| io::Error::other(error.to_string());
+        let (connection, number) = self.connect()?;
+        let setup = connection.setup();
+        let root = setup.roots[number].root;
+        let (first, last) = (setup.min_keycode, setup.max_keycode);
+        let count = last - first + 1;
+        let read = || -> io::Result<(usize, Vec<u32>)> {
+            let keyboard = connection
+                .get_keyboard_mapping(first, count)
+                .map_err(|e| wrong(&e))?
+                .reply()
+                .map_err(|e| wrong(&e))?;
+            Ok((usize::from(keyboard.keysyms_per_keycode), keyboard.keysyms))
+        };
+        // The sign a letter is known by to the screen.
+        let sign = |letter: char| -> u32 {
+            match letter {
+                '\n' | '\r' => 0xff0d,
+                '\t' => 0xff09,
+                letter if (letter as u32) < 0x100 => letter as u32,
+                letter => 0x0100_0000 + letter as u32,
+            }
+        };
+        let letters: Vec<char> = text.chars().collect();
+        let mut at = 0;
+        while at < letters.len() {
+            let (per, signs) = read()?;
+            if per == 0 {
+                return Err(io::Error::other("the screen has no keyboard"));
+            }
+            // Where a sign is on the keyboard: its key, and whether with Shift.
+            let find = |signs: &[u32], wanted: u32| -> Option<(u8, bool)> {
+                signs.chunks(per).enumerate().find_map(|(key, levels)| {
+                    let level = levels.iter().take(2).position(|sign| *sign == wanted)?;
+                    Some((first + key as u8, level == 1))
+                })
+            };
+            let shift = find(&signs, 0xffe1).map(|(key, _)| key);
+            let mut free: Vec<u8> = signs
+                .chunks(per)
+                .enumerate()
+                .filter(|(_, levels)| levels.iter().all(|sign| *sign == 0))
+                .map(|(key, _)| first + key as u8)
+                .collect();
+            // As many letters as can be typed with the keys there are.
+            let mut lent: Vec<(u8, u32)> = Vec::new();
+            let mut upto = at;
+            while upto < letters.len() {
+                let wanted = sign(letters[upto]);
+                if find(&signs, wanted).is_none() && !lent.iter().any(|(_, sign)| *sign == wanted) {
+                    let Some(key) = free.pop() else { break };
+                    lent.push((key, wanted));
+                }
+                upto += 1;
+            }
+            if upto == at {
+                return Err(io::Error::other("the screen's keyboard has no key to spare"));
+            }
+            for (key, wanted) in &lent {
+                connection
+                    .change_keyboard_mapping(1, *key, per as u8, &vec![*wanted; per])
+                    .map_err(|e| wrong(&e))?;
+            }
+            connection.flush().map_err(|e| wrong(&e))?;
+            if !lent.is_empty() {
+                std::thread::sleep(Duration::from_millis(350));
+            }
+            let (_, signs) = read()?;
+            for letter in &letters[at..upto] {
+                let Some((key, shifted)) = find(&signs, sign(*letter)) else { continue };
+                let shift = shift.filter(|_| shifted);
+                let mut strokes = Vec::new();
+                strokes.extend(shift.map(|shift| (PRESS, shift)));
+                strokes.extend([(PRESS, key), (RELEASE, key)]);
+                strokes.extend(shift.map(|shift| (RELEASE, shift)));
+                for (kind, key) in strokes {
+                    connection
+                        .xtest_fake_input(kind, key, 0, root, 0, 0, 0)
+                        .map_err(|e| wrong(&e))?;
+                }
+                connection.flush().map_err(|e| wrong(&e))?;
+                std::thread::sleep(Duration::from_millis(12));
+            }
+            // The keys lent go back once what they typed has been taken in.
+            if !lent.is_empty() {
+                std::thread::sleep(Duration::from_millis(350));
+                for (key, _) in &lent {
+                    connection
+                        .change_keyboard_mapping(1, *key, per as u8, &vec![0; per])
+                        .map_err(|e| wrong(&e))?;
+                }
+                connection.flush().map_err(|e| wrong(&e))?;
+            }
+            at = upto;
+        }
+        // Everything asked of the screen has been done before this returns.
+        connection.get_input_focus().map_err(|e| wrong(&e))?.reply().map_err(|e| wrong(&e))?;
+        Ok(())
     }
 
     /// Presses a key or a combination, such as `Return` or `ctrl+l`.
