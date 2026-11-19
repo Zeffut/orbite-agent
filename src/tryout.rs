@@ -2,7 +2,6 @@
 //! expect of it before they rely on it. What the model does is reported as
 //! it is; nothing here tries to get a model to do what it declines.
 
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -399,28 +398,7 @@ const FILLER: &str = "The tomatoes along the south wall are setting fruit earlie
 /// A small picture, all red, as a PNG file.
 fn red_square() -> Vec<u8> {
     const SIDE: u32 = 64;
-    // Each row: no filter, then its pixels.
-    let mut row = vec![0];
-    row.extend([220, 20, 30].repeat(SIDE as usize));
-    let rows = row.repeat(SIDE as usize);
-    let mut packed = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    let _ = packed.write_all(&rows);
-    let packed = packed.finish().unwrap_or_default();
-    let mut header = Vec::new();
-    header.extend_from_slice(&SIDE.to_be_bytes());
-    header.extend_from_slice(&SIDE.to_be_bytes());
-    header.extend_from_slice(&[8, 2, 0, 0, 0]); // 8 bits a channel, red green blue
-    let mut file = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-    for (kind, data) in [(b"IHDR", &header[..]), (b"IDAT", &packed[..]), (b"IEND", &[][..])] {
-        file.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        let mut check = flate2::Crc::new();
-        check.update(kind);
-        check.update(data);
-        file.extend_from_slice(kind);
-        file.extend_from_slice(data);
-        file.extend_from_slice(&check.sum().to_be_bytes());
-    }
-    file
+    crate::png::encode(SIDE, SIDE, &[220, 20, 30].repeat((SIDE * SIDE) as usize))
 }
 
 /// What trying models out showed, by Provider then model: the catalogue

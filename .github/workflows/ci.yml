@@ -17,4 +17,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
+      # The Agent's Computer is tested on a screen of its own.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb xdotool
       - run: cargo test --locked
+        env:
+          ORBITE_TESTS_NEED_A_SCREEN: "1"
