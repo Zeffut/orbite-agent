@@ -162,7 +162,7 @@ if [ "$UPDATING" = yes ]; then
 fi
 
 if [ "${ORBITE_SKIP_SETUP:-}" = "1" ]; then
-    say "Orbite is installed. Set it up with: sudo -u orbite ORBITE_HOME=$HOME_DIR orbite setup"
+    say "Orbite is installed. Set it up with: sudo orbite setup"
     exit 0
 fi
 

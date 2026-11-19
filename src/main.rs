@@ -45,6 +45,17 @@ type Failure = Box<dyn std::error::Error>;
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Everything but what changes the machine itself is done as the Agent's
+    // own account, even when asked as root.
+    let command = env::args().nth(1).unwrap_or_default();
+    if !matches!(
+        command.as_str(),
+        "update" | "uninstall" | "export" | "restore" | "version" | "providers"
+    ) && let Err(failure) = become_the_agents_account()
+    {
+        eprintln!("{failure}");
+        return ExitCode::from(2);
+    }
     let outcome = match env::args().nth(1).as_deref() {
         Some("run") => run().await,
         Some("version" | "--version" | "-V") => {
@@ -469,12 +480,46 @@ fn public_key(written: &str) -> Option<[u8; 32]> {
     bytes.get(bytes.len().checked_sub(32)?..)?.try_into().ok()
 }
 
-/// The folder that holds everything of this installation.
+/// The folder that holds everything of this installation: the one named
+/// by ORBITE_HOME, else the one of an Orbite installed on this machine when
+/// it can be read, else `.orbite` in the home of whoever runs this.
 fn home() -> Result<PathBuf, Failure> {
-    Ok(match setting("ORBITE_HOME") {
-        Some(home) => PathBuf::from(home),
-        None => PathBuf::from(required("HOME")?).join(".orbite"),
-    })
+    if let Some(home) = setting("ORBITE_HOME") {
+        return Ok(PathBuf::from(home));
+    }
+    let installed =
+        PathBuf::from(format!("{}/var/lib/orbite", setting("ORBITE_ROOT").unwrap_or_default()));
+    if fs::read_dir(&installed).is_ok() {
+        return Ok(installed);
+    }
+    Ok(PathBuf::from(required("HOME")?).join(".orbite"))
+}
+
+/// Run as root on an installed machine, goes on as the account the Agent's
+/// folder belongs to: what is written there must stay the Agent's to read.
+fn become_the_agents_account() -> Result<(), Failure> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: plain system calls, made before anything else is started.
+        if unsafe { libc::geteuid() } != 0 {
+            return Ok(());
+        }
+        let Ok(folder) = fs::metadata(home()?) else { return Ok(()) };
+        if folder.uid() == 0 {
+            return Ok(());
+        }
+        // SAFETY: as above; the group is changed first, while still allowed to.
+        let changed = unsafe {
+            libc::setgroups(0, std::ptr::null()) == 0
+                && libc::setgid(folder.gid()) == 0
+                && libc::setuid(folder.uid()) == 0
+        };
+        if !changed {
+            return Err("Could not go on as the account Orbite runs as.".into());
+        }
+    }
+    Ok(())
 }
 
 fn required(name: &str) -> Result<String, Failure> {

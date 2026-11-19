@@ -46,6 +46,14 @@ grep -q '"telegram_owner":1' /var/lib/orbite/config.json
 sleep 3
 [ "$(systemctl is-active orbite)" = "active" ]
 
+# Asked as root with nothing said of where, a command works on the installed
+# Orbite and leaves what it writes to the Agent's account.
+printf '%s\n' "a-value-for-the-install-trial" | /usr/local/bin/orbite secret set TRIAL_KEY >/dev/null
+/usr/local/bin/orbite settings quiet 22:00-07:00 >/dev/null
+[ -z "$(find /var/lib/orbite ! -user orbite)" ]
+as_orbite /usr/local/bin/orbite secret list | grep -q TRIAL_KEY
+as_orbite /usr/local/bin/orbite settings | grep -q "quiet = 22:00-07:00"
+
 # It keeps itself up to date.
 [ "$(systemctl is-enabled orbite-update.timer)" = "enabled" ]
 [ "$(systemctl is-active orbite-update.timer)" = "active" ]

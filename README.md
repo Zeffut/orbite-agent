@@ -14,20 +14,12 @@ curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/insta
 
 The installer checks the machine before changing anything, verifies that what it downloads is signed by Orbite's key, gives Orbite an account of its own and a service that restarts by itself, then asks a few questions: which AI to think with, your Telegram bot, your agent's name. Running it again updates Orbite and keeps everything else.
 
-An installed Orbite keeps itself up to date: once a day it installs the latest release, only if Orbite's key signed it, and goes back to the previous one if the new one does not start. `orbite update off` turns that off, and `sudo orbite update` updates now.
+Then:
 
-MCP servers are listed in `mcp.json` in Orbite's folder, in the form other MCP clients use, and their tools become Actions of the Agent behind the same Approval gate; `/mcp` shows their state:
-
-```json
-{ "mcpServers": {
-    "memory": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"] },
-    "github": { "url": "https://api.githubcopilot.com/mcp/", "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" } }
-} }
-```
-
-`${NAME}` stands for a secret entered with `orbite secret set NAME`, so no key is written in that file.
-
-To move to another machine, `sudo orbite export FILE` writes everything of the Agent to one file (keep it to yourself: it holds its secrets), and `sudo orbite restore FILE` puts it back on a machine where Orbite was just installed. `sudo orbite uninstall` removes Orbite; add `--keep-data` to keep the Agent's data.
+- [Installing Orbite](docs/install.md): from nothing to an agent that answers you in Telegram, and how to update, move and remove it.
+- [Your first day](docs/first-day.md): what your agent can do, Approvals, commands, settings, secrets, MCP servers.
+- [Extensions](docs/extensions.md): living with them, and writing one.
+- [Providers](docs/providers.md): the AI your agent thinks with, and how to choose a model.
 
 ## What 1.0 will be
 
@@ -54,8 +46,10 @@ cargo run -- secret set NAME                 # a secret the agent uses without s
 
 ## Documentation
 
+- The guides above, in [`docs/`](docs/).
 - [`GLOSSARY.md`](GLOSSARY.md): the project's vocabulary.
 - [`docs/adr/`](docs/adr/): the decisions behind the design, and why.
+- [`docs/research/`](docs/research/): what was looked into before building.
 
 ## License
 
