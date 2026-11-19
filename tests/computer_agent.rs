@@ -190,6 +190,8 @@ async fn the_owner_is_sent_a_picture_of_the_screen_when_they_ask_for_one() {
     let sent = heard(&mut owner).await;
 
     assert!(sent.starts_with("(file screen-0.png: ") && sent.ends_with("The page."), "{sent}");
+    // What was pictured is the page, not the screen before the browser showed itself.
+    assert_eq!(point(&picture, 900, 600), (255, 0, 0));
     assert_eq!(heard(&mut owner).await, "Sent.");
     // The model was told where the picture is, so that it can send it.
     let told = provider.every_call().into_iter().flat_map(|(_, asked)| asked).any(|message| {

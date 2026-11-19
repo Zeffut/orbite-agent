@@ -404,6 +404,11 @@ impl Host {
     /// the screen once it has settled.
     async fn on_the_computer(&self, gesture: Gesture) -> String {
         let Some(desk) = &self.computer else { return NO_COMPUTER.into() };
+        // What the screen showed before, to know when an address has opened.
+        let before = match &gesture {
+            Gesture::Open { .. } => desk.glance().ok(),
+            _ => None,
+        };
         let (done, patience) = match gesture {
             Gesture::Look => (Ok("This is the screen.".to_owned()), Duration::from_secs(2)),
             Gesture::Open { url, .. } => (
@@ -459,8 +464,8 @@ impl Host {
         };
         // A browser that is starting shows nothing for a moment, then its
         // page: after opening, the screen has to stay still for longer.
-        let calm = if done.starts_with("Opened") { 5 } else { 2 };
-        match desk.picture(patience, calm).await {
+        let calm = if before.is_some() { 3 } else { 2 };
+        match desk.picture(patience, calm, before.as_deref()).await {
             Ok(picture) => format!("{done}\n{}", crate::attached(&picture)),
             Err(error) => format!("{done} The screen could not be pictured: {error}."),
         }

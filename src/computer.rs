@@ -369,19 +369,35 @@ impl Desk {
         }
     }
 
+    /// What the screen shows now, to tell later whether it changed.
+    pub(crate) fn glance(&self) -> io::Result<Vec<u8>> {
+        self.with(|computer| computer.screen().points()).map(|(_, _, points)| points)
+    }
+
     /// A picture of the screen once it has stopped changing for `calm`
     /// looks in a row, half a second apart, or after `patience` at most,
-    /// kept as a file. A blinking cursor is not a change.
-    pub(crate) async fn picture(&self, patience: Duration, calm: u32) -> io::Result<PathBuf> {
+    /// kept as a file. A blinking cursor is not a change. With `before`, a
+    /// screen still as it was then is not taken for a settled one: what
+    /// was asked for has not shown yet.
+    pub(crate) async fn picture(
+        &self,
+        patience: Duration,
+        calm: u32,
+        before: Option<&[u8]>,
+    ) -> io::Result<PathBuf> {
+        let differing = |one: &[u8], other: &[u8]| {
+            one.len() != other.len()
+                || one.iter().zip(other).filter(|(new, old)| new != old).count() > CURSOR_SIZED
+        };
         let until = Instant::now() + patience;
         let mut seen = self.with(|computer| computer.screen().points())?;
         let mut still = 0;
         while still < calm && Instant::now() < until {
             tokio::time::sleep(Duration::from_millis(500)).await;
             let now = self.with(|computer| computer.screen().points())?;
-            let changed = now.2.iter().zip(&seen.2).filter(|(new, old)| new != old).count();
-            still =
-                if now.2.len() == seen.2.len() && changed <= CURSOR_SIZED { still + 1 } else { 0 };
+            let moved = differing(&now.2, &seen.2);
+            let unchanged_since_before = before.is_some_and(|before| !differing(&now.2, before));
+            still = if moved || unchanged_since_before { 0 } else { still + 1 };
             seen = now;
         }
         let seen = crate::png::encode(seen.0, seen.1, &seen.2);
