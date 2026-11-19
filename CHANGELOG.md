@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.3.4
+
+Released on 2026-11-19.
+
+- **On a ChatGPT plan the model was never shown the agent's screen.** Pictures that come with a notice, which is how the screen reaches the model, were left out for this provider: the agent worked in its browser blind, and answered vaguely when a page stopped it. It now sees its screen. Tried on a real site with the smallest model of a plan: it says what the page shows and offers another way. This corrects the note of 0.3.3, which put the vague answers down to the model.
+- Trying a model out now also shows it a picture the way the screen is shown, so that a provider that drops it is caught.
+
 ## 0.3.3
 
 Released on 2026-11-19.

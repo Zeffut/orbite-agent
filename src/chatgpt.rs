@@ -649,28 +649,29 @@ impl ChatGpt {
 impl Provider for ChatGpt {
     async fn reply(&self, request: Request<'_>) -> Result<Reply, ProviderError> {
         let mut input = Vec::new();
+        // What the Owner or Orbite says, with the pictures that came with it:
+        // a photo sent, or the Computer's screen that comes with a notice.
+        let said = |place: usize, text: String| {
+            let mut parts = Vec::new();
+            for (_, image) in request.images.iter().filter(|(at, _)| *at == place) {
+                let (Some(kind), Ok(bytes)) = (image_type(image), std::fs::read(image)) else {
+                    continue;
+                };
+                let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+                parts.push(json!({
+                    "type": "input_image",
+                    "image_url": format!("data:{kind};base64,{encoded}"),
+                }));
+            }
+            if parts.is_empty() {
+                return json!({ "role": "user", "content": text });
+            }
+            parts.insert(0, json!({ "type": "input_text", "text": text }));
+            json!({ "role": "user", "content": parts })
+        };
         for (place, message) in request.conversation.iter().enumerate() {
             match message {
-                Message::Owner(text) => {
-                    let mut parts = Vec::new();
-                    for (_, image) in request.images.iter().filter(|(at, _)| *at == place) {
-                        let (Some(kind), Ok(bytes)) = (image_type(image), std::fs::read(image))
-                        else {
-                            continue;
-                        };
-                        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-                        parts.push(json!({
-                            "type": "input_image",
-                            "image_url": format!("data:{kind};base64,{encoded}"),
-                        }));
-                    }
-                    if parts.is_empty() {
-                        input.push(json!({ "role": "user", "content": text }));
-                    } else {
-                        parts.insert(0, json!({ "type": "input_text", "text": text }));
-                        input.push(json!({ "role": "user", "content": parts }));
-                    }
-                }
+                Message::Owner(text) => input.push(said(place, text.clone())),
                 Message::Agent { text, actions, .. } => {
                     if !text.is_empty() {
                         input.push(json!({ "role": "assistant", "content": text }));
@@ -688,10 +689,10 @@ impl Provider for ChatGpt {
                 Message::Outcome { action, text } => input.push(json!({
                     "type": "function_call_output", "call_id": action, "output": text,
                 })),
-                Message::Notice(text) => input.push(json!({
-                    "role": "user",
-                    "content": format!("[Notice for you, not written by your Owner]\n{text}"),
-                })),
+                Message::Notice(text) => input.push(said(
+                    place,
+                    format!("[Notice for you, not written by your Owner]\n{text}"),
+                )),
             }
         }
         // Nothing else: this path refuses most of what the API takes elsewhere.

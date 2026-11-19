@@ -305,12 +305,27 @@ pub async fn try_out(provider: &impl Provider) -> Result<Verdict, ProviderError>
         Ok(()) => {
             let look =
                 [Message::from_owner("What is the main colour of this image? Answer in one word.")];
-            let seen = about_the_model(trying.ask(&look, &[], &[(0, picture.clone())]).await);
-            let _ = std::fs::remove_file(&picture);
-            seen?.is_some_and(|reply| {
+            let red = |reply: crate::Reply| {
                 let said = reply.text.to_lowercase();
                 said.contains("red") || said.contains("rouge")
-            })
+            };
+            let seen = about_the_model(trying.ask(&look, &[], &[(0, picture.clone())]).await);
+            // And as the Computer's screen reaches it: with a notice, not
+            // with something its Owner said.
+            let screen = [
+                Message::from_owner(
+                    "What is the main colour of your Computer's screen? Answer in one word.",
+                ),
+                Message::Notice("The Computer's screen now:".into()),
+            ];
+            let shown = match &seen {
+                Ok(Some(_)) => {
+                    about_the_model(trying.ask(&screen, &[], &[(1, picture.clone())]).await)
+                }
+                _ => Ok(None),
+            };
+            let _ = std::fs::remove_file(&picture);
+            seen?.is_some_and(red) && shown?.is_some_and(red)
         }
     };
 

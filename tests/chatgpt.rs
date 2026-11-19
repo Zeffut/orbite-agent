@@ -739,3 +739,42 @@ async fn an_address_sent_when_no_sign_in_is_under_way_is_neither_kept_nor_shown_
     assert!(said.contains("/providers connect chatgpt"), "{said}");
     assert_eq!(asked.times_asked(), 0);
 }
+
+#[tokio::test]
+async fn the_model_is_shown_the_pictures_that_come_with_a_notice_such_as_the_computers_screen() {
+    let server = MockServer::start().await;
+    let (home, chatgpt) = signed_in(&server, 3600).await;
+    let sent = Arc::new(Mutex::new(Value::Null));
+    let seen = sent.clone();
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(move |request: &wiremock::Request| {
+            *seen.lock().unwrap() = serde_json::from_slice(&request.body).unwrap();
+            saying("I see it.")
+        })
+        .mount(&server)
+        .await;
+    // The smallest PNG there is: its content does not matter here.
+    let picture = home.path().join("screen.png");
+    std::fs::write(&picture, b"\x89PNG\r\n\x1a\nnot much of a picture").unwrap();
+    let conversation = [
+        Message::from_owner("Open the site."),
+        Message::Notice("The Computer's screen now:".into()),
+    ];
+    let request = Request {
+        instructions: "",
+        conversation: &conversation,
+        actions: &[],
+        images: &[(1, picture)],
+        light: false,
+    };
+
+    chatgpt.reply(request).await.unwrap();
+
+    let sent = sent.lock().unwrap().clone();
+    let notice = &sent["input"][1]["content"];
+    assert_eq!(notice[0]["type"], "input_text", "{notice}");
+    assert!(notice[0]["text"].as_str().unwrap().contains("The Computer's screen now:"));
+    assert_eq!(notice[1]["type"], "input_image", "{notice}");
+    assert!(notice[1]["image_url"].as_str().unwrap().starts_with("data:image/png;base64,"));
+}
