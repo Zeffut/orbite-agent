@@ -194,6 +194,16 @@ mod browser {
             }
             std::thread::sleep(Duration::from_millis(300));
         }
+        // Kept for whoever looks into the failure.
+        if let (Some(folder), Ok(picture)) =
+            (std::env::var_os("ORBITE_TEST_PICTURES"), computer.screen().picture())
+        {
+            let _ = std::fs::create_dir_all(&folder);
+            let _ = std::fs::write(
+                std::path::Path::new(&folder).join(format!("expected-{colour:?}.png")),
+                picture,
+            );
+        }
         false
     }
 

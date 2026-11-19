@@ -151,6 +151,18 @@ const BROWSERS: [(&str, bool); 5] = [
     ("chromium-browser", true),
 ];
 
+/// Settings a person would choose on Firefox's first day, chosen for the
+/// Agent: no welcome pages, no question about being the default browser.
+const FIREFOX_FIRST_DAY: &str = r#"user_pref("browser.aboutwelcome.enabled", false);
+user_pref("browser.shell.checkDefaultBrowser", false);
+user_pref("browser.startup.homepage_override.mstone", "ignore");
+user_pref("startup.homepage_welcome_url", "");
+user_pref("startup.homepage_welcome_url.additional", "");
+user_pref("datareporting.policy.dataSubmissionPolicyBypassNotification", true);
+user_pref("browser.tabs.warnOnClose", false);
+user_pref("browser.sessionstore.resume_from_crash", false);
+"#;
+
 /// The Agent's Computer: its screen, and a browser that keeps what sites
 /// leave in it from one day to the next.
 pub struct Computer {
@@ -248,6 +260,11 @@ impl Computer {
                 .arg("--window-position=0,0")
                 .arg(format!("--window-size={},{}", self.size.0, self.size.1));
         } else {
+            // Firefox's own first-day pages would cover what was asked for.
+            let settled = self.profile.join("user.js");
+            if !settled.exists() {
+                std::fs::write(&settled, FIREFOX_FIRST_DAY)?;
+            }
             starting.arg("--profile").arg(&self.profile).args([
                 "--width",
                 &self.size.0.to_string(),

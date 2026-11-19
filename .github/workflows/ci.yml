@@ -24,3 +24,33 @@ jobs:
           ORBITE_TESTS_NEED_A_SCREEN: "1"
           # The browser the Computer was tried with so far.
           ORBITE_BROWSER: google-chrome
+
+  # The Computer with Firefox from Mozilla's own packages, the browser the
+  # installer would put on a Host. Being tried: it does not hold the build up yet.
+  computer-with-firefox:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: Install a screen and Firefox
+        run: |
+          sudo install -d -m 0755 /etc/apt/keyrings
+          wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- | sudo tee /etc/apt/keyrings/packages.mozilla.org.asc >/dev/null
+          echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" | sudo tee /etc/apt/sources.list.d/mozilla.list >/dev/null
+          printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' | sudo tee /etc/apt/preferences.d/mozilla >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --allow-downgrades xvfb xdotool firefox
+          firefox --version
+      - run: cargo test --locked --test computer --test computer_agent
+        env:
+          ORBITE_TESTS_NEED_A_SCREEN: "1"
+          ORBITE_BROWSER: firefox
+          ORBITE_TEST_PICTURES: ${{ runner.temp }}/pictures
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-pictures
+          path: ${{ runner.temp }}/pictures
+          if-no-files-found: ignore

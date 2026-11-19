@@ -11,6 +11,7 @@ You talk to your agent in Telegram, in one continuous conversation. There is not
 - **Work in the background.** It can hand a long piece of work to a sub-agent and carry on talking with you.
 - **Act on a schedule.** "Every morning at 8, tell me the weather" becomes a routine; "remind me at 5 to call Ada" a reminder.
 - **Wake up by itself** now and then to review what is pending, and tell you only when something deserves it.
+- **Use a computer of its own**, where the machine has one: a screen nobody else looks at, with a real browser, that it sees through pictures and acts on with mouse and keyboard. It is for sites that need signing in or a person's gestures. See below.
 - **Keep a task list**, and whatever [extensions](extensions.md) add.
 - **Receive and send files.** Send it a document or a photo; ask it to send you a file it made.
 
@@ -27,6 +28,17 @@ How much it does without asking is the **permission level**:
 | free | everything, except critical actions |
 
 **Critical actions**, such as anything that could show a secret to the AI provider, are asked about at every level and cannot be allowed once and for all.
+
+## The agent's computer
+
+Reading the web is done by fetching pages, which is fast. For what that cannot do, your agent has a computer of its own: a virtual screen and a browser running under its account, whose sign-ins are kept from one day to the next in `/var/lib/orbite/computer`.
+
+- **Going to a site asks you first**, with the site and what for. **Always** then covers that site. What it does there afterwards (clicks, typing) does not ask.
+- **Typing a secret asks every time.** The agent names the secret and Orbite types its value; the model does not see it, unless the field shows what is typed, in which case the picture of the screen does. The request says so.
+- Where a site asks for a verification code, or for proof of being a person, the agent asks you. Orbite does not disguise its browser and does not solve such challenges.
+- The model must be one that sees images.
+
+The installer does not set the computer up yet. The agent has one when the machine has `Xvfb`, `xdotool` and a browser (Firefox, Chrome or Chromium); on Debian and Ubuntu, `sudo apt install xvfb xdotool` and a browser installed from its maker's packages, then `sudo systemctl restart orbite`.
 
 ## Commands
 
