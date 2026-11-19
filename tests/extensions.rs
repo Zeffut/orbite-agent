@@ -694,3 +694,39 @@ async fn what_an_extension_keeps_and_reads_has_limits() {
     let kept = std::fs::metadata(extensions.path().join("hoarder/data.json")).unwrap().len();
     assert!(kept < 11_000_000, "{kept} bytes kept");
 }
+
+#[tokio::test]
+async fn a_secret_a_service_sends_back_in_another_dress_is_still_not_handed_over() {
+    use base64::Engine;
+    let home = tempfile::tempdir().unwrap();
+    let value = ["weather", "key", "for", "the", "test"].join("-");
+    orbite::Secrets::kept_in(home.path()).set("WEATHER_KEY", &value).unwrap();
+    install(
+        &home.path().join("extensions"),
+        "weather",
+        json!({ "description": "Weather.", "hosts": ["localhost"], "secrets": ["WEATHER_KEY"] }),
+        r#"
+        function describe() { return [{ name: "ask", description: "Ask.", parameters: { url: "Address" } }]; }
+        function run(action, input) {
+          return http.get(input.url, { headers: { Authorization: "Bearer {{WEATHER_KEY}}" } }).body;
+        }"#,
+    );
+    // The service answers with the key as services often carry one: in base64.
+    let dressed = base64::engine::general_purpose::STANDARD.encode(&value);
+    let server = page(&format!("your key, encoded: {dressed}")).await;
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([(
+            "weather_ask",
+            json!({ "url": format!("http://localhost:{}/", server.address().port()) }),
+        )])
+        .then(Ok("Done.".into()));
+    let mut owner = agent_with_secrets_in(home.path(), &provider);
+
+    owner.says("Go.");
+    owner.hears().await;
+
+    let told = outcome(&provider);
+    assert!(!told.contains(&dressed), "{told}");
+    assert!(told.contains("[WEATHER_KEY]"), "{told}");
+}

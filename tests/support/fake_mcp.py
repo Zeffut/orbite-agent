@@ -36,6 +36,9 @@ def answer(message):
         if method == "server/discover":
             return {"resultType": "complete", "supportedVersions": ["2026-07-28"], "capabilities": {"tools": {}}}
     elif method == "server/discover":
+        if len(sys.argv) > 2 and sys.argv[2] == "quits":
+            # As some earlier servers take a first request they do not know.
+            sys.exit(1)
         return None
     if method == "initialize":
         return {"protocolVersion": params.get("protocolVersion"), "capabilities": {"tools": {}},

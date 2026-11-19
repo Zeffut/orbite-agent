@@ -149,7 +149,17 @@ impl Mcp {
 
     async fn greet(&self, server: &Server) -> Result<(Link, Vec<Tool>), String> {
         let mut link = self.open(&server.described)?;
-        if !link.speaks_todays_protocol().await? {
+        let speaks = match link.speaks_todays_protocol().await {
+            Ok(speaks) => speaks,
+            // Some earlier servers quit at a request they do not know: a
+            // local one is started again and greeted the earlier way.
+            Err(_) if server.described.command.is_some() => {
+                link = self.open(&server.described)?;
+                false
+            }
+            Err(problem) => return Err(problem),
+        };
+        if !speaks {
             let hello = json!({
                 "protocolVersion": EARLIER_PROTOCOL,
                 "capabilities": {},

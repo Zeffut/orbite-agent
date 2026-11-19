@@ -430,3 +430,20 @@ async fn what_a_server_started_is_stopped_with_it() {
         std::fs::read(format!("/proc/{started}/cmdline")).is_ok_and(|command| !command.is_empty());
     assert!(!alive, "the program the server started is still running");
 }
+
+#[tokio::test]
+async fn an_earlier_server_that_quits_at_a_request_it_does_not_know_is_started_again_and_greeted() {
+    let home = tempfile::tempdir().unwrap();
+    let servers = json!({ "notes": { "command": "python3", "args": [SERVER, home.path().join("calls.log"), "quits"] } });
+    fs::write(home.path().join("mcp.json"), json!({ "mcpServers": servers }).to_string()).unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("notes_read_note", json!({ "name": "shopping" }))])
+        .then(Ok("Read.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Read my shopping note.");
+    owner.hears().await;
+
+    assert_eq!(outcome(&provider), "read-note shopping: token none\nsecond part");
+}

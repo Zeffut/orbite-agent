@@ -826,6 +826,22 @@ fn named(text: &str, lent: &[(String, String)]) -> String {
         if encoded != *value {
             named = named.replace(&encoded, &marked);
         }
+        // And as services often carry a key: in base64, either alphabet,
+        // with or without its padding.
+        {
+            use base64::Engine;
+            use base64::engine::general_purpose::{
+                STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD,
+            };
+            for dressed in [
+                STANDARD.encode(value),
+                STANDARD_NO_PAD.encode(value),
+                URL_SAFE.encode(value),
+                URL_SAFE_NO_PAD.encode(value),
+            ] {
+                named = named.replace(&dressed, &marked);
+            }
+        }
     }
     named
 }
