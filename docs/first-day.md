@@ -52,6 +52,7 @@ Everything else is said in plain words, but a few commands are always there, als
 | `/reset` | starts the conversation afresh; what it remembers about you is kept |
 | `/settings` | shows the settings, with buttons to change them |
 | `/usage` | what the agent has used, by provider and model |
+| `/providers` | the AIs it thinks with, in order, with their limits; `/providers first NAME`, `limit NAME 200000`, `remove NAME`, `connect chatgpt` |
 | `/extensions` | lists the extensions; `/extensions off NAME`, `on NAME`, `remove NAME` |
 | `/mcp` | lists the MCP servers and their state |
 | `/secrets on` | lets you give a secret in the conversation (off by default; see below) |
@@ -100,5 +101,6 @@ Tools from MCP servers become actions of your agent. List the servers in `/var/l
 ## When something goes wrong
 
 - **It does not answer.** `systemctl status orbite` on the machine, then `journalctl -u orbite -n 50`.
-- **"My AI provider is too busy"** is the provider's limit, not Orbite's: wait, or choose a lighter model.
+- **"My AI provider is too busy"** is the provider's limit, not Orbite's: wait, choose a lighter model, or give your agent a second provider to fall back on (`sudo orbite providers add`).
+- **"The sign-in to ChatGPT ended."** Send `/providers connect chatgpt`, follow the link, and send back the address your browser ends on.
 - **It keeps failing or declining.** After a few times in a row the agent says the model seems to be the cause. `sudo orbite tryout NAME` on the machine shows what to expect of another model, and `/settings model NAME` changes it.
