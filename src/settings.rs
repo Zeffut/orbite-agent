@@ -8,11 +8,11 @@ use chrono::NaiveTime;
 use crate::{Config, Store};
 
 /// The settings, in the order they are shown.
-pub const SETTINGS: [&str; 7] =
-    ["permission", "quiet", "wakeups", "secrets", "updates", "language", "model"];
+pub const SETTINGS: [&str; 8] =
+    ["permission", "quiet", "wakeups", "secrets", "updates", "language", "model", "voice"];
 
 /// The settings that are read when Orbite starts: changing one takes a restart.
-pub const TAKES_A_RESTART: [&str; 2] = ["language", "model"];
+pub const TAKES_A_RESTART: [&str; 3] = ["language", "model", "voice"];
 
 /// The settings of one installation.
 pub struct Settings<'a> {
@@ -59,6 +59,14 @@ impl<'a> Settings<'a> {
             "updates" => on_or_off(self.config().automatic_updates != Some(false)).into(),
             "language" => self.config().language.unwrap_or_else(|| "en".into()),
             "model" => self.config().provider.map_or_else(|| "none".into(), |chosen| chosen.model),
+            // What writes down what the Owner says aloud.
+            "voice" => match self.config().transcription {
+                None => "provider".into(),
+                Some(chosen) => match (chosen.engine.as_str(), &chosen.model) {
+                    ("whisper.cpp", Some(model)) => format!("whisper.cpp ({model})"),
+                    (engine, _) => engine.to_owned(),
+                },
+            },
             other => return Err(unknown(other)),
         })
     }
@@ -71,6 +79,7 @@ impl<'a> Settings<'a> {
             "wakeups" => &["off", "60", "240", "720"],
             "secrets" | "updates" => &["off", "on"],
             "language" => &["en", "fr"],
+            "voice" => &["provider", "whisper.cpp", "server", "command", "off"],
             _ => &[],
         }
     }
@@ -134,6 +143,34 @@ impl<'a> Settings<'a> {
                 } else {
                     config.language = Some(value);
                 }
+                config.save(home).map_err(|error| error.to_string())
+            }
+            "voice" => {
+                one_of(Self::choices(key))?;
+                let Some(home) = self.home else {
+                    return Err("voice is kept in Orbite's folder, and there is none here.".into());
+                };
+                let mut config = Config::load(home).map_err(|error| error.to_string())?;
+                let mut chosen = config.transcription.clone().unwrap_or_default();
+                // A way of the machine's own is set up there, with its model
+                // or address; from here it is only gone back to.
+                let set_up = match value.as_str() {
+                    "whisper.cpp" => {
+                        chosen.model.is_some()
+                            && chosen.address.is_none()
+                            && chosen.command.is_none()
+                    }
+                    "server" => chosen.address.is_some(),
+                    "command" => chosen.command.is_some(),
+                    _ => true,
+                };
+                if !set_up {
+                    return Err(format!(
+                        "{value} is not set up yet. Set it up on the machine first: orbite transcription"
+                    ));
+                }
+                chosen.engine = value;
+                config.transcription = Some(chosen);
                 config.save(home).map_err(|error| error.to_string())
             }
             "model" => {

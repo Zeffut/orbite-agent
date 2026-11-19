@@ -33,6 +33,8 @@ Send your agent a voice message in Telegram and it answers what you said. Someth
 - **too heavy for the machine**: a model that takes more than half of the machine's memory is flagged, since the agent's browser needs room too, and one that does not fit at all is refused unless you add `--anyway`;
 - **too slow**: few cores under a large model are flagged, and when you choose a model Orbite times it on ten seconds of sound and tells you if your machine listens slower than people speak.
 
+In Telegram, `/settings` shows the choice under **Voice messages** and switches between a provider, nothing, and a local way you already set up on the machine.
+
 `sudo orbite transcription language fr` names the language rather than leaving it to be found, which helps short messages. A ChatGPT plan and Anthropic do not write speech down: with only those, choose a local way, or add Groq or OpenAI behind them (`sudo orbite providers add`).
 
 ## Approvals: you stay in charge

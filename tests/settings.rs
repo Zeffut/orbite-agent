@@ -182,3 +182,45 @@ async fn without_a_service_to_restart_it_the_agent_says_when_the_change_applies(
     owner.says("Hello");
     assert_eq!(owner.hears().await, "Still here.");
 }
+
+#[tokio::test]
+async fn what_writes_voice_messages_down_is_seen_and_switched_from_the_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    // Set up on the machine earlier: whisper.cpp with a model.
+    let local = orbite::Transcription {
+        engine: "whisper.cpp".into(),
+        model: Some("small".into()),
+        ..Default::default()
+    };
+    Config { transcription: Some(local), ..Config::default() }.save(home.path()).unwrap();
+    let (mut channel, mut owner) = memory_channel();
+    let store = Store::open(home.path().join("orbite.db")).unwrap();
+    let folder = home.path().to_owned();
+    tokio::spawn(async move {
+        Agent::new(ScriptedProvider::default(), store)
+            .configured_in(&folder)
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("/settings");
+    let shown = owner.hears().await;
+    assert!(shown.contains("whisper.cpp (small)"), "{shown}");
+
+    owner.says("/settings voice provider");
+    let said = owner.hears().await;
+    assert!(said.contains("provider"), "{said}");
+    let kept = Config::load(home.path()).unwrap().transcription.unwrap();
+    // The model chosen on the machine is kept, to go back to it.
+    assert_eq!((kept.engine.as_str(), kept.model.as_deref()), ("provider", Some("small")));
+
+    owner.says("/settings voice whisper.cpp");
+    owner.hears().await;
+    assert_eq!(Config::load(home.path()).unwrap().transcription.unwrap().engine, "whisper.cpp");
+
+    // What was never set up on the machine is not switched to from here.
+    owner.says("/settings voice server");
+    let refused = owner.hears().await;
+    assert!(refused.contains("orbite transcription"), "{refused}");
+    assert_eq!(Config::load(home.path()).unwrap().transcription.unwrap().engine, "whisper.cpp");
+}

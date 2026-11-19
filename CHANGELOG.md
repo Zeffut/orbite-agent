@@ -2,6 +2,10 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## Unreleased
+
+- `/settings` shows what writes voice messages down and switches between a provider, nothing, and a local way already set up on the machine.
+
 ## 0.3.7
 
 Released on 2026-11-19.

@@ -380,7 +380,8 @@ pub async fn transcription(
             return Ok(());
         }
         ["provider"] | ["off"] => {
-            choice = Transcription { engine: asked[0].into(), ..Default::default() };
+            // What was set up for the machine is kept, to go back to it.
+            choice.engine = asked[0].into();
         }
         ["language", spoken] => {
             choice.language = (spoken != "auto").then(|| spoken.to_owned());

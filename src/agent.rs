@@ -1601,6 +1601,7 @@ impl<P: Provider + 'static> Agent<P> {
             }
             "updates" => format!("⬆️ {}", say("Automatic updates", "Mises à jour automatiques")),
             "model" => format!("🧠 {}", say("Model", "Modèle")),
+            "voice" => format!("🎙 {}", say("Voice messages", "Messages vocaux")),
             _ => format!("🌐 {}", say("Language", "Langue")),
         };
         // A value as an Owner reads it; what is written to set it stays as it is.
