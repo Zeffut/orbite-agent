@@ -386,3 +386,33 @@ fn nobody_without_the_screens_own_key_can_look_at_it_or_act_on_it() {
     assert!(screen.picture().is_ok());
     screen.click(20, 20).unwrap();
 }
+
+#[test]
+fn the_screen_does_not_start_over_each_time_nothing_is_connected_to_it() {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt, PropMode};
+    use x11rb::wrapper::ConnectionExt as _;
+    let Some(screen) = screen() else { return };
+
+    // Something left on the screen by a program that then goes away, as a
+    // browser's window is between two looks at it.
+    {
+        let (connection, number) = screen.connect().unwrap();
+        let root = connection.setup().roots[number].root;
+        connection
+            .change_property8(PropMode::REPLACE, root, AtomEnum::WM_NAME, AtomEnum::STRING, b"kept")
+            .unwrap()
+            .check()
+            .unwrap();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    let (connection, number) = screen.connect().unwrap();
+    let root = connection.setup().roots[number].root;
+    let read = connection
+        .get_property(false, root, AtomEnum::WM_NAME, AtomEnum::STRING, 0, 16)
+        .unwrap()
+        .reply()
+        .unwrap();
+    assert_eq!(read.value, b"kept", "the screen started over when its last program left");
+}

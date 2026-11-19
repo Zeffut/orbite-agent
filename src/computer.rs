@@ -59,6 +59,10 @@ impl Screen {
                 &format!("{width}x{height}x24"),
                 "-nolisten",
                 "tcp",
+                // Without this the server starts over each time its last
+                // program leaves, which every look at an empty screen is:
+                // whoever connects meanwhile is cut off.
+                "-noreset",
                 "-auth",
             ])
             .arg(&kept)
