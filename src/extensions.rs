@@ -29,6 +29,15 @@ const MEMORY_LIMIT: usize = 32 * 1024 * 1024;
 /// The longest text an Extension is given back from a host.
 const BODY_LIMIT: usize = 200_000;
 
+/// The largest value an Extension keeps under one key, as written.
+const VALUE_LIMIT: usize = 1_000_000;
+
+/// The most an Extension keeps in all.
+const STORE_LIMIT: usize = 10_000_000;
+
+/// The longest name of an Action: what every Provider accepts.
+const NAME_LIMIT: usize = 64;
+
 /// How many redirections in a row an Extension's request follows.
 const REDIRECTIONS_FOLLOWED: usize = 6;
 
@@ -41,7 +50,7 @@ const store = Object.freeze({
   get: key => { const kept = __store_get(String(key)); return kept === "" ? null : JSON.parse(kept); },
   set: (key, value) => {
     if (value === undefined || value === null) __store_remove(String(key));
-    else __store_set(String(key), JSON.stringify(value));
+    else { const refused = __store_set(String(key), JSON.stringify(value)); if (refused) throw new Error(refused); }
   },
   remove: key => { __store_remove(String(key)); },
   keys: () => JSON.parse(__store_keys()),
@@ -161,7 +170,7 @@ impl Extensions {
             .flatten()
             .flatten()
             .filter_map(|entry| entry.file_name().into_string().ok())
-            .filter(|name| slug(name).is_ok_and(|safe| &safe == name))
+            .filter(|name| name.is_ascii() && slug(name).is_ok_and(|safe| &safe == name))
             .filter(|name| OFFICIAL.iter().all(|(official, ..)| official != name))
             .collect();
         names.sort();
@@ -189,8 +198,16 @@ impl Extensions {
         let mut specs = Vec::new();
         for extension in self.all().iter().filter(|extension| extension.off.is_none()) {
             for action in self.describe(extension).unwrap_or_default() {
+                let name = format!("{}_{}", prefix(&extension.name), action.name);
+                // One put there by hand that would clash, or that no
+                // Provider would take, is left out rather than failing every turn.
+                if name.len() > NAME_LIMIT
+                    || specs.iter().any(|other: &ActionSpec| other.name == name)
+                {
+                    continue;
+                }
                 specs.push(ActionSpec {
-                    name: format!("{}_{}", prefix(&extension.name), action.name),
+                    name,
                     description: action.description,
                     input: action.input,
                 });
@@ -228,7 +245,7 @@ impl Extensions {
     /// The Actions an Extension called `name` running `script` would add, or
     /// what is wrong with it. Nothing is kept.
     pub(crate) fn check(&self, name: &str, script: &str) -> Result<Vec<String>, String> {
-        if slug(name).ok().as_deref() != Some(name) {
+        if slug(name).ok().as_deref() != Some(name) || !name.is_ascii() {
             return Err(format!(
                 "\"{name}\" cannot name an Extension: use a few lowercase words joined by dashes."
             ));
@@ -255,7 +272,32 @@ impl Extensions {
         if described.is_empty() {
             return Err("describe() returns no action: the Extension would add nothing.".into());
         }
-        Ok(described.iter().map(|action| format!("{}_{}", prefix(name), action.name)).collect())
+        let adds: Vec<String> =
+            described.iter().map(|action| format!("{}_{}", prefix(name), action.name)).collect();
+        if let Some(long) = adds.iter().find(|action| action.len() > NAME_LIMIT) {
+            return Err(format!(
+                "{long} is too long a name for an Action: {NAME_LIMIT} letters at most, the Extension's name included."
+            ));
+        }
+        // Two Extensions never add an Action of the same name.
+        let taken: Vec<String> = self
+            .all()
+            .iter()
+            .filter(|other| other.name != name && other.off.is_none())
+            .flat_map(|other| {
+                let prefix = prefix(&other.name);
+                self.describe(other)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |action| format!("{prefix}_{}", action.name))
+            })
+            .collect();
+        if let Some(same) = adds.iter().find(|action| taken.contains(action)) {
+            return Err(format!(
+                "Another Extension already adds an Action called {same}: choose another name."
+            ));
+        }
+        Ok(adds)
     }
 
     /// True when the installation has an Extension called `name`.
@@ -469,6 +511,13 @@ impl Extensions {
                 .and_then(|kept| serde_json::from_str(&kept).ok())
                 .unwrap_or_default()
         };
+        // How much is kept under each key, so that the whole need not be
+        // weighed again each time something is kept.
+        let sizes: HashMap<String, usize> = kept
+            .iter()
+            .map(|(key, value)| (key.clone(), key.len() + value.to_string().len()))
+            .collect();
+        let weighed = Arc::new(Mutex::new(sizes));
         let store = Arc::new(Mutex::new((kept, false)));
 
         let loaded = context.with(|ctx| -> Result<(), String> {
@@ -484,11 +533,36 @@ impl Extensions {
             lend(
                 &ctx,
                 "__store_set",
-                Function::new(ctx.clone(), move |key: String, value: String| {
-                    if let Ok(value) = serde_json::from_str(&value) {
+                Function::new(ctx.clone(), {
+                    let sizes = Arc::clone(&weighed);
+                    move |key: String, value: String| -> String {
+                        // Kept by Orbite, outside the engine's own limit: it has its own.
+                        if value.len() > VALUE_LIMIT {
+                            return format!(
+                                "a value kept cannot be larger than {} kB",
+                                VALUE_LIMIT / 1000
+                            );
+                        }
+                        let Ok(parsed) = serde_json::from_str::<Value>(&value) else {
+                            return "only what JSON can hold can be kept".into();
+                        };
                         let mut kept = kept.lock().unwrap();
-                        kept.0.insert(key, value);
+                        let mut sizes = sizes.lock().unwrap();
+                        let held: usize = sizes
+                            .iter()
+                            .filter(|(other, _)| **other != key)
+                            .map(|(_, size)| size)
+                            .sum();
+                        if held + key.len() + value.len() > STORE_LIMIT {
+                            return format!(
+                                "an Extension cannot keep more than {} MB in all",
+                                STORE_LIMIT / 1_000_000
+                            );
+                        }
+                        sizes.insert(key.clone(), key.len() + value.len());
+                        kept.0.insert(key, parsed);
                         kept.1 = true;
+                        String::new()
                     }
                 }),
             )?;
@@ -496,9 +570,13 @@ impl Extensions {
             lend(
                 &ctx,
                 "__store_remove",
-                Function::new(ctx.clone(), move |key: String| {
-                    let mut kept = kept.lock().unwrap();
-                    kept.1 |= kept.0.remove(&key).is_some();
+                Function::new(ctx.clone(), {
+                    let sizes = Arc::clone(&weighed);
+                    move |key: String| {
+                        let mut kept = kept.lock().unwrap();
+                        sizes.lock().unwrap().remove(&key);
+                        kept.1 |= kept.0.remove(&key).is_some();
+                    }
                 }),
             )?;
             let kept = Arc::clone(&store);
@@ -684,10 +762,21 @@ format!(
             url = to;
             continue;
         }
-        let text = answer
-            .text()
-            .await
-            .map_err(|error| format!("{host} did not answer whole: {}", error.without_url()))?;
+        // Read as it comes and no further than the limit: a service cannot
+        // make Orbite hold more than a script would be given.
+        let mut answer = answer;
+        let mut read: Vec<u8> = Vec::new();
+        while read.len() < BODY_LIMIT * 4 {
+            match answer.chunk().await {
+                Ok(Some(part)) => read.extend_from_slice(&part),
+                Ok(None) => break,
+                Err(error) => {
+                    return Err(format!("{host} did not answer whole: {}", error.without_url()));
+                }
+            }
+        }
+        read.truncate(BODY_LIMIT * 4);
+        let text = String::from_utf8_lossy(&read).into_owned();
         // A service that sends a secret back does not hand it to the script:
         // named before the text is cut, so that no part of one is left.
         let text: String = named(&text, lent).chars().take(BODY_LIMIT).collect();

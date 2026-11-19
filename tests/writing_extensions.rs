@@ -326,3 +326,38 @@ async fn writing_straight_into_orbites_own_folders_is_asked_about_at_every_level
         !home.path().join("extensions/sneaky").exists() && !home.path().join("mcp.json").exists()
     );
 }
+
+#[tokio::test]
+async fn an_extension_is_named_so_that_its_actions_are_its_own_and_every_provider_takes_them() {
+    let extensions = tempfile::tempdir().unwrap();
+    let named = |name: &str, script: &str| {
+        let mut wanted = counter(script);
+        wanted["name"] = json!(name);
+        wanted
+    };
+    // An Extension "visit" with an Action "counter_bump", then one "visit-counter" with "bump".
+    let clashing = COUNTER.replace("name: \"bump\"", "name: \"counter_bump\"");
+    let long = COUNTER.replace("name: \"bump\"", &format!("name: \"{}\"", "b".repeat(70)));
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("create_extension", named("météo", COUNTER))])
+        .then_acts([("create_extension", named("long", &long))])
+        .then_acts([("create_extension", named("visit", &clashing))])
+        .then_acts([("create_extension", named("visit-counter", COUNTER))])
+        .then(Ok("Done.".into()));
+    let mut owner = agent_extended_in(extensions.path(), &provider);
+
+    owner.says("Make these.");
+    // Only the third is sound, and so the only one the Owner is asked about.
+    let asked = owner.is_asked().await;
+    assert!(asked.detail.contains("visit_counter_bump"), "{asked:?}");
+    owner.allows();
+    owner.hears().await;
+
+    assert!(owner.was_asked_nothing());
+    let told = outcomes(&provider);
+    assert!(told[0].contains("cannot name an Extension"), "{}", told[0]);
+    assert!(told[1].contains("too long"), "{}", told[1]);
+    assert!(told[3].contains("already adds an Action called visit_counter_bump"), "{}", told[3]);
+    assert!(!extensions.path().join("visit-counter").exists());
+}

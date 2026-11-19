@@ -649,3 +649,48 @@ async fn orbites_own_secrets_are_never_lent_to_an_extension() {
     assert!(outcome(&provider).contains("ORBITE_API_KEY"), "{}", outcome(&provider));
     assert!(server.received_requests().await.unwrap().is_empty(), "Orbite's own key was sent");
 }
+
+#[tokio::test]
+async fn what_an_extension_keeps_and_reads_has_limits() {
+    let extensions = tempfile::tempdir().unwrap();
+    install(
+        extensions.path(),
+        "hoarder",
+        json!({ "description": "Hoards.", "hosts": ["localhost"] }),
+        r#"
+        function describe() { return [{ name: "hoard", description: "Hoard.", parameters: { url: "Address" } }]; }
+        function run(action, input) {
+          const told = [];
+          try { store.set("big", "x".repeat(2000000)); told.push("kept a big value"); } catch (error) { told.push(error.message); }
+          let kept = 0;
+          try { for (let i = 0; i < 20; i++) { store.set("part" + i, "y".repeat(900000)); kept++; } } catch (error) { told.push(error.message); }
+          told.push("parts kept: " + kept);
+          told.push("read: " + http.get(input.url).body.length);
+          return told.join(" | ");
+        }"#,
+    );
+    let server = page(&"z".repeat(3_000_000)).await;
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([(
+            "hoarder_hoard",
+            json!({ "url": format!("http://localhost:{}/", server.address().port()) }),
+        )])
+        .then(Ok("Done.".into()));
+    // With the time an Extension is usually given: this one works hard.
+    let (mut channel, mut owner) = memory_channel();
+    let (model, folder) = (provider.clone(), extensions.path().to_owned());
+    tokio::spawn(async move {
+        Agent::new(model, Store::in_memory()).extending_in(folder).converse(&mut channel).await
+    });
+
+    owner.says("Go.");
+    tokio::time::timeout(Duration::from_secs(30), owner.hears_whenever()).await.unwrap();
+
+    let told = outcome(&provider);
+    assert!(told.contains("cannot be larger than"), "{told}");
+    assert!(told.contains("cannot keep more than") && told.contains("parts kept: 11"), "{told}");
+    assert!(told.contains("read: 200000"), "{told}");
+    let kept = std::fs::metadata(extensions.path().join("hoarder/data.json")).unwrap().len();
+    assert!(kept < 11_000_000, "{kept} bytes kept");
+}
