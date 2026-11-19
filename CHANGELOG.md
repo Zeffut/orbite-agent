@@ -7,6 +7,7 @@ What changed in each version of Orbite, for the people who run it.
 Released on 2026-11-19.
 
 - **An MCP server with many tools no longer costs its whole description on every turn.** A server that says a great deal about its tools (Notion offers 77) is offered to the model as one action: it lists the tools in a line each, says what a tool takes when asked, then calls it. Measured with Notion connected: about 6,500 tokens a turn instead of 57,000.
+- A reminder asked for "in three minutes" comes three minutes later to the second: it could come up to a minute early, the delay being rounded down to the minute.
 - Correction to the note of 0.3.0: OpenAI does cache on a ChatGPT plan when requests are large (about a fifth of what was read, over nineteen large requests); it cached nothing on small ones.
 
 ## 0.3.2

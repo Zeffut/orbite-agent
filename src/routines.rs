@@ -90,16 +90,18 @@ pub(crate) fn specs() -> Vec<ActionSpec> {
     vec![
         spec(
             "schedule_routine",
-            "Schedules something for later. With `at`, once: at that moment the instruction \
-             comes back to you as a notice and you carry it out (reminders, follow-ups). With \
-             `cron`, recurring: each run is done in a fresh context that knows nothing of your \
+            "Schedules something for later. With `in_minutes` or `at`, once: at that moment the \
+             instruction comes back to you as a notice and you carry it out (reminders, \
+             follow-ups). \"In ten minutes\" or \"in two hours\" is `in_minutes`, never a moment \
+             you work out yourself. With `cron`, recurring: each run is done in a fresh context that knows nothing of your \
              conversation and only looks at things; its report reaches you as a notice. An \
              existing name is replaced.",
             json!({
                 "name": text("A few words naming it."),
                 "instruction": text("What to do, written to be understood on its own."),
                 "cron": text("Recurring: minute hour day-of-month month day-of-week, in your Owner's time."),
-                "at": text("Once: YYYY-MM-DD HH:MM in your Owner's time."),
+                "at": text("Once, at a moment your Owner named: YYYY-MM-DD HH:MM in their time."),
+                "in_minutes": json!({ "type": "number", "description": "Once, after a delay: how many minutes from now." }),
             }),
             &["name", "instruction"],
         ),

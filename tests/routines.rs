@@ -283,7 +283,7 @@ async fn a_schedule_that_makes_no_sense_is_explained_to_the_model() {
         (json!({ "name": "x", "instruction": "i" }), "cron"),
         (
             json!({ "name": "x", "instruction": "i", "cron": "0 9 * * *", "at": "2026-11-20 09:00" }),
-            "not both",
+            "not several",
         ),
     ] {
         let explained = dictate(&mut owner, "schedule_routine", input).await;
@@ -384,4 +384,54 @@ async fn the_model_is_told_the_date_and_time() {
         instructions.contains("2026-11-19 08:05") && instructions.contains("Thursday"),
         "{instructions}"
     );
+}
+
+#[tokio::test]
+async fn a_reminder_asked_for_in_a_few_minutes_comes_that_long_after_to_the_second() {
+    let clock = Clock::at("2026-11-19 08:00");
+    // Fifty seconds into the minute, as a request usually is.
+    let later = |seconds: i64| time("2026-11-19 08:00") + chrono::Duration::seconds(seconds);
+    *clock.0.lock().unwrap() = later(50);
+    let provider = obedient(|_| Ok(saying("Time to water the plants.")));
+    let mut owner = agent_with(&provider, Store::in_memory(), &clock);
+
+    let set = dictate(
+        &mut owner,
+        "schedule_routine",
+        json!({ "name": "plants", "instruction": "Remind the Owner to water the plants.", "in_minutes": 3 }),
+    )
+    .await;
+    assert!(set.contains("08:03"), "{set}");
+
+    // Three minutes are not over when the clock shows 08:03.
+    *clock.0.lock().unwrap() = later(3 * 60 + 20);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let listed = dictate(&mut owner, "list_routines", json!({})).await;
+    assert!(listed.contains("plants"), "it came early: {listed}");
+
+    *clock.0.lock().unwrap() = later(3 * 60 + 50);
+    let told = owner.hears().await;
+    assert!(told.contains("water the plants"), "{told}");
+}
+
+#[tokio::test]
+async fn a_moment_and_a_delay_are_not_both_given() {
+    let clock = Clock::at("2026-11-19 08:00");
+    let provider = obedient(|_| Ok(saying("Done.")));
+    let mut owner = agent_with(&provider, Store::in_memory(), &clock);
+
+    let refused = dictate(
+        &mut owner,
+        "schedule_routine",
+        json!({ "name": "x", "instruction": "i", "in_minutes": 3, "at": "2026-11-19 09:00" }),
+    )
+    .await;
+    assert!(refused.contains("one of"), "{refused}");
+    let refused = dictate(
+        &mut owner,
+        "schedule_routine",
+        json!({ "name": "x", "instruction": "i", "in_minutes": 0 }),
+    )
+    .await;
+    assert!(refused.contains("in_minutes"), "{refused}");
 }

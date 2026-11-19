@@ -2127,13 +2127,26 @@ impl<P: Provider + 'static> Agent<P> {
         let name = slug(field("name").unwrap_or_default())
             .map_err(|error| format!("The routine cannot be named that: {error}."))?;
         let instruction = field("instruction").ok_or("A routine needs an instruction.")?.to_owned();
-        let (cron, next) = match (field("cron"), field("at")) {
-            (Some(_), Some(_)) => return Err("Give `cron` or `at`, not both.".into()),
-            (None, None) => {
-                return Err("A routine needs `cron` (to recur) or `at` (to run once).".into());
+        // A delay is counted from this very second: written as a moment by
+        // the model, it would lose up to a minute.
+        let delay = &request.input["in_minutes"];
+        let delay =
+            delay.as_f64().or_else(|| delay.as_str().and_then(|text| text.trim().parse().ok()));
+        let (cron, next) = match (field("cron"), field("at"), delay) {
+            (None, None, None) => {
+                return Err("A routine needs `cron` (to recur), or `at` or `in_minutes` (to run \
+                            once)."
+                    .into());
             }
-            (Some(cron), None) => (Some(cron.to_owned()), routines::next_after(cron, now)?),
-            (None, Some(at)) => (None, routines::moment(at, now)?),
+            (Some(cron), None, None) => (Some(cron.to_owned()), routines::next_after(cron, now)?),
+            (None, Some(at), None) => (None, routines::moment(at, now)?),
+            (None, None, Some(minutes)) => {
+                if !(minutes > 0.0 && minutes <= 366.0 * 24.0 * 60.0) {
+                    return Err("`in_minutes` is a number of minutes from now, more than 0.".into());
+                }
+                (None, now + chrono::Duration::seconds((minutes * 60.0).round() as i64))
+            }
+            _ => return Err("Give one of `cron`, `at` and `in_minutes`, not several.".into()),
         };
         Ok(Routine {
             name,
