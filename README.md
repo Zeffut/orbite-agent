@@ -34,7 +34,7 @@ Already there:
 
 Still to come before 1.0:
 
-- Running on a subscription you already pay for, through each provider's official path only: a ChatGPT plan is written and awaits its first real try, GitHub Copilot comes next.
+- Running on a subscription you already pay for, through each provider's official path only: a ChatGPT plan works (tried with one account so far); others only where their provider supports it natively.
 - Gmail and Google Calendar.
 
 ## Developing
