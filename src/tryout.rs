@@ -326,8 +326,11 @@ pub async fn try_out(provider: &impl Provider) -> Result<Verdict, ProviderError>
         long.push(Message::from_agent("Noted."));
     }
     long.push(Message::from_owner("What was the code word I gave you at the very start?"));
-    let remembers = about_the_model(trying.ask(&long, &[], &[]).await)?
-        .map(|reply| reply.text.to_uppercase().contains("PELICAN-42"));
+    let remembers = about_the_model(trying.ask(&long, &[], &[]).await)?.map(|reply| {
+        // Letters and digits only: models write the hyphen in more than one way.
+        let said: String = reply.text.chars().filter(|c| c.is_alphanumeric()).collect();
+        said.to_uppercase().contains("PELICAN42")
+    });
     if remembers.is_none() {
         not_tried.push("a conversation of a few thousand tokens".into());
     }

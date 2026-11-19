@@ -57,7 +57,11 @@ impl Provider for Model {
             Some(Message::Owner(asked))
                 if asked.contains("code word") && request.conversation.len() > 2 =>
             {
-                if self.remembers { say("It was PELICAN-42.") } else { say("I do not know.") }
+                if self.remembers {
+                    say("The code word was **PELICAN\u{2011}42**.")
+                } else {
+                    say("I do not know.")
+                }
             }
             Some(Message::Owner(_)) if !self.acts => {
                 say("I cannot do that, but here is how you could.")
