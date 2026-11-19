@@ -709,7 +709,13 @@ impl<P: Provider + 'static> Agent<P> {
                     reply
                 }
                 // Most likely a model that does not take images: go on without.
-                Attended::Done(Err(ProviderError::Failed(_))) if !images.is_empty() => {
+                // A request the plan finds too large says nothing of the model.
+                Attended::Done(Err(ProviderError::Failed(why)))
+                    if !images.is_empty() && !is_about_size(&why) =>
+                {
+                    eprintln!(
+                        "The model was not shown an image again after its Provider failed on one: {why}"
+                    );
                     self.sees_images = false;
                     continue;
                 }
@@ -2255,6 +2261,13 @@ async fn showing_work<T>(channel: &mut impl Channel, work: impl Future<Output = 
 
 fn explain_storage(error: &StoreError) -> String {
     format!("I couldn't use my own storage ({error}).")
+}
+
+/// True when a Provider's failure is about how much it was sent, or how
+/// often, rather than about what it was sent.
+fn is_about_size(why: &str) -> bool {
+    let why = why.to_lowercase();
+    ["413", "429", "too large", "rate limit", "tokens per"].iter().any(|sign| why.contains(sign))
 }
 
 /// How many turns in a row a model fails or declines before the Owner is

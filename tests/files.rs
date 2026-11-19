@@ -164,3 +164,26 @@ async fn sending_a_file_that_does_not_exist_or_is_secret_is_handled() {
     let Some(Message::Outcome { text, .. }) = provider.last_asked().pop() else { panic!() };
     assert!(text.contains("nothing.txt"), "{text}");
 }
+
+#[tokio::test]
+async fn a_request_too_large_for_the_plan_is_not_taken_for_a_model_that_cannot_see() {
+    let workspace = tempfile::tempdir().unwrap();
+    let photo = workspace.path().join("photo.png");
+    fs::write(&photo, PNG).unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then(Err(ProviderError::Failed(
+            "HTTP 413: Request too large for model on input tokens per minute: Limit 7000, Requested 7589".into(),
+        )))
+        .then(Ok("A cat.".into()));
+    let mut owner = agent_in(workspace.path(), &provider);
+
+    owner.says(&sent_with("What is this?", &photo));
+    let told = owner.hears().await;
+    assert!(told.contains("too large"), "the Owner is told what really happened: {told}");
+
+    // The model still sees: the next picture is shown to it.
+    owner.says(&sent_with("And now?", &photo));
+    assert_eq!(owner.hears().await, "A cat.");
+    assert_eq!(provider.last_images().len(), 1);
+}
