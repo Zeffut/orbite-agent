@@ -189,7 +189,19 @@ async fn the_owner_is_sent_a_picture_of_the_screen_when_they_ask_for_one() {
     owner.allows();
     let sent = heard(&mut owner).await;
 
-    assert!(sent.starts_with("(file screen-0.png: ") && sent.ends_with("The page."), "{sent}");
+    let outcomes: Vec<String> = provider
+        .every_call()
+        .into_iter()
+        .flat_map(|(_, asked)| asked)
+        .filter_map(|message| match message {
+            Message::Outcome { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        sent.starts_with("(file screen-0.png: ") && sent.ends_with("The page."),
+        "{sent}\nwhat the model was told: {outcomes:?}"
+    );
     // What was pictured is the page, not the screen before the browser showed itself.
     assert_eq!(point(&picture, 900, 600), (255, 0, 0));
     assert_eq!(heard(&mut owner).await, "Sent.");
