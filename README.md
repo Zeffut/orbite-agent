@@ -2,7 +2,7 @@
 
 An open-source personal AI agent that lives on a machine you control, uses the AI you already pay for, and adapts to you over time.
 
-> **Status: early development.** Versions before 1.0 are for trying it out. The Agent itself works, in a terminal and in Telegram: it acts on its machine behind Approvals, remembers, learns Skills, runs Routines and Sub-agents, reads the web and wakes up by itself. Version 1.0 is specified in the issue tracker; versions before it are numbered 0.x.
+> **Status: early development.** Versions before 1.0 are for trying it out, and things will change. What works today: an agent you talk to in Telegram (or a terminal) that acts on its machine behind your approvals, remembers, learns skills, runs routines and sub-agents, reads the web, wakes up by itself, uses MCP servers, writes its own extensions, and has a computer of its own with a browser. [CHANGELOG.md](CHANGELOG.md) says what each version brought.
 
 ## Trying it
 
@@ -23,12 +23,19 @@ Then:
 
 ## What 1.0 will be
 
+Already there:
+
 - One command installs Orbite on a Debian or Ubuntu machine: a spare computer, a mini PC, a VPS.
 - You talk to your agent in Telegram, in one continuous conversation.
-- It runs on your own subscriptions (through each provider's official path) or on API keys.
+- It runs on API keys from the provider you choose, or on a model on your own machine.
 - It has its own computer on your machine, with a screen and a browser.
 - It remembers, learns skills, runs routines, and writes its own extensions when you agree.
 - It sends no telemetry, and everything it learns is a file you can read.
+
+Still to come before 1.0:
+
+- Running on your own subscriptions (ChatGPT, GitHub Copilot, Claude), through each provider's official path only.
+- Gmail and Google Calendar, and MCP servers that need signing in.
 
 ## Developing
 
