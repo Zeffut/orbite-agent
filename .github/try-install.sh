@@ -111,7 +111,9 @@ if systemctl is-active --quiet orbite; then
     echo "the service was left running" >&2
     exit 1
 fi
-sh "$RELEASE/install.sh"
+# As from a script with no terminal to ask in: installed, setup left for later.
+env -u ORBITE_SKIP_SETUP setsid sh "$RELEASE/install.sh" </dev/null | tee /root/install.out
+grep -q "no terminal here" /root/install.out
 ORBITE_HOME=/var/lib/orbite /usr/local/bin/orbite restore /root/orbite-export.tar.gz
 grep -q '"telegram_owner":1' /var/lib/orbite/config.json
 [ -z "$(find /var/lib/orbite ! -user orbite)" ]

@@ -497,3 +497,65 @@ fn a_system_made_from_debian_or_ubuntu_is_installed_as_they_are_and_told_so() {
     other.write("etc/os-release", "ID=fedora\nID_LIKE=\"rhel centos\"\nPRETTY_NAME=\"Fedora\"\n");
     assert!(!other.install().status.success());
 }
+
+/// The address of the report offered in what was `shown`, taken apart.
+fn report_offered(shown: &str) -> Option<std::collections::HashMap<String, String>> {
+    let link = shown.split_whitespace().find(|word| word.contains("/issues/new?"))?;
+    assert!(link.starts_with("https://github.com/Zeffut/orbite-agent/issues/new?"), "{link}");
+    let decoded = |text: &str| {
+        let mut bytes = Vec::new();
+        let mut rest = text.as_bytes();
+        while let Some((&first, after)) = rest.split_first() {
+            if first == b'%' && after.len() >= 2 {
+                let code = std::str::from_utf8(&after[..2]).unwrap();
+                bytes.push(u8::from_str_radix(code, 16).unwrap());
+                rest = &after[2..];
+            } else {
+                bytes.push(first);
+                rest = after;
+            }
+        }
+        String::from_utf8(bytes).unwrap()
+    };
+    let query = link.split_once('?').unwrap().1;
+    Some(
+        query
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .map(|(name, value)| (name.to_owned(), decoded(value)))
+            .collect(),
+    )
+}
+
+#[test]
+fn an_install_that_fails_unexpectedly_offers_a_report_the_owner_sends_themselves() {
+    let machine = Machine::debian();
+    // The account cannot be created, for a reason nobody foresaw.
+    machine.stand_in("useradd", "echo 'useradd: cannot lock /etc/passwd' >&2; exit 1");
+
+    let failed = machine.install();
+
+    assert!(!failed.status.success());
+    let shown = shown(&failed);
+    let report = report_offered(&shown).unwrap_or_else(|| panic!("no report offered:\n{shown}"));
+    // Nothing is sent: the link is theirs to open, and it says what it holds.
+    assert!(shown.contains("Nothing is sent unless you open"), "{shown}");
+    assert!(report["title"].contains("Install failed"), "{report:?}");
+    let body = &report["body"];
+    assert!(body.contains("Debian GNU/Linux 13") && body.contains("x86_64"), "{body}");
+    assert!(body.contains("creating the agent's account"), "the step is named: {body}");
+    // Nothing that names the person or the machine.
+    for private in ["HOSTNAME", "/home/", "@"] {
+        assert!(!body.contains(private), "{private} in {body}");
+    }
+}
+
+#[test]
+fn a_refusal_the_installer_explains_offers_no_report() {
+    let other_system = Machine::debian();
+    other_system.write("etc/os-release", "ID=fedora\nPRETTY_NAME=\"Fedora Linux 43\"\n");
+
+    let refused = other_system.install();
+
+    assert!(report_offered(&shown(&refused)).is_none(), "{}", shown(&refused));
+}

@@ -21,10 +21,49 @@ PROGRAM=/usr/local/bin/orbite
 SERVICE=/etc/systemd/system/orbite.service
 
 say() { printf '%s\n' "$*"; }
+# What the installer is doing, to say where it stopped.
+STEP="checking the machine"
+# Yes when a failure is one the installer did not foresee.
+UNFORESEEN=yes
 refuse() {
+    UNFORESEEN=no
     printf 'Orbite was not installed: %s\n' "$*" >&2
     exit 1
 }
+
+# `$1` as it is written in an address.
+in_an_address() {
+    printf '%s' "$1" | od -An -v -tx1 | tr -d '\n' | sed 's/ \([0-9a-f][0-9a-f]\)/%\1/g'
+}
+
+# When the installer stops on something it did not foresee, it offers a
+# report: a link to a new issue, filled in with what went wrong and on what
+# kind of system. Nothing is sent; the Owner opens the link, or does not.
+offer_a_report() {
+    code=$?
+    rm -rf "${WORK:-}"
+    [ "$code" -ne 0 ] && [ "$UNFORESEEN" = yes ] || exit "$code"
+    printf '\nOrbite was not installed: the installer stopped while %s.\n' "$STEP" >&2
+    report "The installer stopped while $STEP (exit code $code)." "Install failed while $STEP"
+    exit "$code"
+}
+
+# Says how to report `$1`, under the title `$2`: a link to a new issue that
+# holds it and the kind of system this is, for the Owner to open or not.
+report() {
+    BODY="$1
+
+System: ${PRETTY_NAME:-unknown} on ${ARCH:-$(uname -m)}
+Memory: $((${MEMORY_KB:-0} / 1024)) MB
+Installing again over an earlier Orbite: ${UPDATING:-no}
+
+What was shown just before it stopped (please paste it here):
+"
+    printf 'To report this, open the link below and send the issue it prepares. Nothing is sent unless you open it.\nIt holds only this: what stopped, your system (%s, %s) and its memory.\n\n' "${PRETTY_NAME:-unknown}" "${ARCH:-$(uname -m)}" >&2
+    printf 'https://github.com/Zeffut/orbite-agent/issues/new?title=%s&body=%s\n' \
+        "$(in_an_address "$2")" "$(in_an_address "$BODY")" >&2
+}
+trap offer_a_report EXIT
 
 # --- The machine is checked before anything is changed ---
 
@@ -71,6 +110,7 @@ for tool in curl openssl sha256sum; do
     command -v "$tool" >/dev/null 2>&1 || MISSING="$MISSING $tool"
 done
 if [ -n "$MISSING" ]; then
+    STEP="installing what the installer needs ($(echo $MISSING))"
     say "Installing what the installer needs:$MISSING"
     # Asked nothing: a question here would read the rest of this script as its answer.
     apt-get update -qq </dev/null
@@ -81,7 +121,7 @@ fi
 # --- The program is downloaded and checked before it is put anywhere ---
 
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+STEP="downloading Orbite"
 FILE="orbite-$ARCH-linux"
 
 say "Downloading Orbite for $ARCH..."
@@ -89,6 +129,7 @@ for name in "$FILE" SHA256SUMS SHA256SUMS.sig; do
     curl -fsSL "$RELEASE/$name" -o "$WORK/$name" || refuse "$name could not be downloaded from $RELEASE."
 done
 
+STEP="checking what was downloaded"
 # The list of checksums is signed; the program must match its checksum.
 # Checking the signature takes OpenSSL 3: an older one fails on a sound release.
 HAS="$(openssl version 2>/dev/null | awk '{print $2}')"
@@ -121,6 +162,7 @@ fi
 UPDATING=no
 [ -f "$ROOT$SERVICE" ] && UPDATING=yes
 
+STEP="creating the agent's account"
 if ! id orbite >/dev/null 2>&1; then
     useradd --system --home-dir "$HOME_DIR" --shell /usr/sbin/nologin orbite
 fi
@@ -130,11 +172,13 @@ mkdir -p "$ROOT$HOME_DIR"
 chown -R orbite: "$ROOT$HOME_DIR"
 chmod 700 "$ROOT$HOME_DIR"
 
+STEP="installing the program"
 mkdir -p "$ROOT$(dirname "$PROGRAM")"
 cp "$WORK/$FILE" "$ROOT$PROGRAM.new"
 chmod 755 "$ROOT$PROGRAM.new"
 mv "$ROOT$PROGRAM.new" "$ROOT$PROGRAM"
 
+STEP="setting up the service"
 mkdir -p "$ROOT$(dirname "$SERVICE")"
 cat >"$WORK/orbite.service" <<UNIT
 # Written by Orbite's installer, and written again each time it runs.
@@ -246,9 +290,11 @@ else
     if ! computer; then
         say "Note: the agent's computer could not be set up. Orbite works without it; run this installer"
         say "again later to add it."
+        report "Orbite was installed, but the agent's computer (xvfb, xdotool, Firefox from Mozilla's packages, fonts) could not be set up." "Install: the agent's computer could not be set up"
     fi
 fi
 
+STEP="starting Orbite"
 if [ "$UPDATING" = yes ]; then
     # An Orbite that was never set up has nothing to run yet.
     if [ -f "$ROOT$HOME_DIR/config.json" ]; then
@@ -267,7 +313,16 @@ fi
 
 # Setup asks its questions in this terminal, even when the installer itself
 # was piped in.
+# Where there is no terminal to ask in, setup is left for later.
+if ! (: </dev/tty) 2>/dev/null; then
+    say "Orbite is installed. There is no terminal here to set it up in: do it with: sudo orbite setup"
+    exit 0
+fi
 say ""
-runuser -u orbite -- env ORBITE_HOME="$HOME_DIR" "$PROGRAM" setup </dev/tty
+if ! runuser -u orbite -- env ORBITE_HOME="$HOME_DIR" "$PROGRAM" setup </dev/tty; then
+    UNFORESEEN=no
+    say "Orbite is installed, but setup was not finished. Go on with: sudo orbite setup"
+    exit 1
+fi
 systemctl start orbite
 say "Orbite is running, and will start again by itself after a restart."

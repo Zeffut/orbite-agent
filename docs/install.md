@@ -4,6 +4,8 @@ Orbite installs on a machine you control and keeps running there: a spare comput
 
 Orbite is in early development: versions before 1.0 are for trying it out, and things will change.
 
+**If the installer stops** on something it did not foresee, it prints a link to a new issue, filled in with what stopped and your system's name, processor and memory. Nothing is sent unless you open it and send it; what the terminal showed just before helps, if you paste it in.
+
 ## What you need
 
 - A machine running **Debian or Ubuntu**, with systemd, on an x86_64 or aarch64 processor, where you can run commands as root. The installer checks all of this before changing anything, and warns when the machine has little memory.
