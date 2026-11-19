@@ -27,6 +27,8 @@ MCP servers are listed in `mcp.json` in Orbite's folder, in the form other MCP c
 
 `${NAME}` stands for a secret entered with `orbite secret set NAME`, so no key is written in that file.
 
+To move to another machine, `sudo orbite export FILE` writes everything of the Agent to one file (keep it to yourself: it holds its secrets), and `sudo orbite restore FILE` puts it back on a machine where Orbite was just installed. `sudo orbite uninstall` removes Orbite; add `--keep-data` to keep the Agent's data.
+
 ## What 1.0 will be
 
 - One command installs Orbite on a Debian or Ubuntu machine: a spare computer, a mini PC, a VPS.

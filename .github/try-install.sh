@@ -71,7 +71,32 @@ update_from next | grep -q "Updated to 99.0.0"
 [ -f /usr/local/bin/orbite.previous ]
 # The Agent, which is not root, can take what was left for the Owner.
 [ "$(stat -c '%U' /var/lib/orbite/notices)" = "orbite" ]
-kill "$SERVER" "$TELEGRAM"
+kill "$SERVER"
+
+# Moving to another Host: everything is exported, Orbite is removed without
+# a trace, installed again, and the export put back gives the same Agent.
+ORBITE_HOME=/var/lib/orbite /usr/local/bin/orbite export /root/orbite-export.tar.gz
+[ "$(stat -c '%a' /root/orbite-export.tar.gz)" = "600" ]
+cp /usr/local/bin/orbite /root/orbite-to-uninstall
+/usr/local/bin/orbite uninstall --yes
+[ ! -e /usr/local/bin/orbite ] && [ ! -e /var/lib/orbite ] && [ ! -e /etc/systemd/system/orbite.service ]
+if id orbite >/dev/null 2>&1; then
+    echo "the account was left behind" >&2
+    exit 1
+fi
+if systemctl is-active --quiet orbite; then
+    echo "the service was left running" >&2
+    exit 1
+fi
+sh "$RELEASE/install.sh"
+ORBITE_HOME=/var/lib/orbite /usr/local/bin/orbite restore /root/orbite-export.tar.gz
+grep -q '"telegram_owner":1' /var/lib/orbite/config.json
+[ -z "$(find /var/lib/orbite ! -user orbite)" ]
+as_orbite /usr/local/bin/orbite secret list | grep -q ORBITE_TELEGRAM_TOKEN
+systemctl restart orbite
+sleep 3
+[ "$(systemctl is-active orbite)" = "active" ]
+kill "$TELEGRAM"
 
 # What was tampered with is refused.
 echo tampered >> "$RELEASE/orbite-x86_64-linux"
@@ -79,4 +104,4 @@ if sh "$RELEASE/install.sh" 2>/dev/null; then
     echo "a tampered program was installed" >&2
     exit 1
 fi
-echo "Installed, restarted after a crash, updated in place and by itself, undid a bad update, and refused a tampered program."
+echo "Installed, restarted after a crash, updated in place and by itself, undid a bad update, moved by export and restore, and refused a tampered program."

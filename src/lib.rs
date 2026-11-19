@@ -13,6 +13,7 @@ mod extensions;
 mod language;
 mod mcp;
 mod memory;
+mod moving;
 mod openai_compatible;
 mod provider;
 mod routed;
@@ -38,6 +39,7 @@ pub use catalogue::{Connected, KnownProvider, Speaks, connect, known_providers};
 pub use channel::{Answer, Approval, Channel};
 pub use config::{Config, ProviderChoice};
 pub use language::Language;
+pub use moving::{export, restore};
 pub use openai_compatible::OpenAiCompatible;
 pub use provider::{
     ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request, Usage,

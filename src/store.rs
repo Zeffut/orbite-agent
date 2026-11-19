@@ -141,6 +141,14 @@ impl Store {
         rows.into_iter().map(|(id, body)| Ok((id, read(&body)?))).collect()
     }
 
+    /// Writes a whole copy of the Store to `file`, which must not exist,
+    /// even while another program is writing in the Store.
+    pub fn copy_to(&self, file: impl AsRef<Path>) -> Result<(), StoreError> {
+        let file = file.as_ref().to_string_lossy().into_owned();
+        self.database.lock().unwrap().execute("VACUUM INTO ?1", [file])?;
+        Ok(())
+    }
+
     /// The Conversation as said, for a place that shows it: the entries
     /// after `after`, oldest first, or without it the latest ones; never more
     /// than `limit`. Everything is there, summarised for the model or not.

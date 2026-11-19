@@ -20,6 +20,9 @@ Commands:
   version    say which version this is
   setup      set Orbite up, or one part again (language, provider, telegram, name)
   settings   list the settings, or change one (settings NAME VALUE)
+  export     write everything of the Agent to a file (export FILE), to move it to another Host
+  restore    put an export back on a Host where Orbite is not set up yet (restore FILE)
+  uninstall  remove Orbite from this machine (--keep-data keeps the Agent's data)
   update     install the latest release now (on or off: let Orbite do it by itself, or not)
   secret     enter (set NAME), list or remove the secrets the Agent uses without seeing them
 
@@ -51,6 +54,9 @@ async fn main() -> ExitCode {
         Some("secret") => secret(),
         Some("update") => update().await,
         Some("settings") => settings(),
+        Some("export") => moving(true),
+        Some("restore") => moving(false),
+        Some("uninstall") => uninstall(),
         Some("setup") => setup().await,
         Some("providers") => {
             for provider in known_providers() {
@@ -243,6 +249,91 @@ fn secret() -> Result<(), Failure> {
         }
         _ => return Err(HOW.into()),
     }
+    Ok(())
+}
+
+/// Writes everything of the Agent to a file, or puts such a file back.
+fn moving(out: bool) -> Result<(), Failure> {
+    let home = home()?;
+    let Some(file) = env::args().nth(2).map(PathBuf::from) else {
+        return Err("Usage: orbite export FILE | orbite restore FILE".into());
+    };
+    if out {
+        orbite::export(&home, &file)?;
+        println!(
+            "Everything of the Agent is in {}. Keep that file to yourself: it holds its secrets and the \
+             key that opens them.",
+            file.display()
+        );
+    } else {
+        orbite::restore(&file, &home)?;
+        println!(
+            "The Agent is back, in {}. Start it with: systemctl restart orbite",
+            home.display()
+        );
+    }
+    Ok(())
+}
+
+/// Removes Orbite from this machine: the service, the account, the program
+/// and, unless asked to keep it, the Agent's data.
+fn uninstall() -> Result<(), Failure> {
+    let arguments: Vec<String> = env::args().skip(2).collect();
+    let keep = arguments.iter().any(|argument| argument == "--keep-data");
+    let root = setting("ORBITE_ROOT").unwrap_or_default();
+    let data = PathBuf::from(format!("{root}/var/lib/orbite"));
+    if !arguments.iter().any(|argument| argument == "--yes") {
+        let losing = if keep {
+            "The Agent's data is kept."
+        } else {
+            "The Agent's data is removed with it: its \
+             Conversation, Memory, Skills, Extensions and secrets."
+        };
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            return Err(
+                "Nothing was removed. To remove Orbite without being asked, add --yes.".into()
+            );
+        }
+        println!("This removes Orbite from this machine. {losing}\nType yes to go on:");
+        let mut typed = String::new();
+        std::io::stdin().read_line(&mut typed)?;
+        if typed.trim() != "yes" {
+            return Err("Nothing was removed.".into());
+        }
+    }
+    let systemctl = |arguments: &[&str]| {
+        let _ = std::process::Command::new("systemctl").args(arguments).status();
+    };
+    systemctl(&["disable", "--now", "orbite"]);
+    systemctl(&["disable", "--now", "orbite-update.timer"]);
+    for file in [
+        "/etc/systemd/system/orbite.service",
+        "/etc/systemd/system/orbite-update.service",
+        "/etc/systemd/system/orbite-update.timer",
+        "/usr/local/bin/orbite.previous",
+        "/usr/local/bin/orbite",
+    ] {
+        match fs::remove_file(format!("{root}{file}")) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                return Err(
+                    format!("{file} could not be removed: {error}. Run this as root.").into()
+                );
+            }
+            _ => {}
+        }
+    }
+    systemctl(&["daemon-reload"]);
+    if keep {
+        println!("Orbite is removed. The Agent's data is kept in {}.", data.display());
+        // The account goes, the data stays for whoever reads it next.
+        let _ = std::process::Command::new("userdel").arg("orbite").status();
+        return Ok(());
+    }
+    if data.exists() {
+        fs::remove_dir_all(&data)?;
+    }
+    let _ = std::process::Command::new("userdel").arg("orbite").status();
+    println!("Orbite is removed, with the Agent's data.");
     Ok(())
 }
 
