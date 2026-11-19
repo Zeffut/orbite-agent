@@ -84,6 +84,20 @@ impl Screen {
         self.act(&["mousemove", "--sync", &x.to_string(), &y.to_string(), "click", "1"])
     }
 
+    /// Clicks twice at a point, as to open something or pick a word.
+    pub fn double_click(&self, x: u16, y: u16) -> io::Result<()> {
+        self.act(&[
+            "mousemove",
+            "--sync",
+            &x.to_string(),
+            &y.to_string(),
+            "click",
+            "--repeat",
+            "2",
+            "1",
+        ])
+    }
+
     /// Types `text`, as on a keyboard.
     pub fn type_text(&self, text: &str) -> io::Result<()> {
         self.act(&["type", "--delay", "12", "--", text])
@@ -150,6 +164,23 @@ pub struct Computer {
 }
 
 impl Computer {
+    /// True when this machine has what a Computer is made of: the program
+    /// that serves a screen, the one that moves the mouse, and a browser.
+    pub fn can_start() -> bool {
+        let there = |command: &str, argument: &str| {
+            Command::new(command)
+                .arg(argument)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok()
+        };
+        there("Xvfb", "-help")
+            && there("xdotool", "version")
+            && BROWSERS.iter().any(|(browser, _)| there(browser, "--version"))
+    }
+
     /// Starts a screen of its own for a browser that keeps its data in `profile`.
     pub fn start(profile: impl AsRef<Path>, width: u16, height: u16) -> io::Result<Self> {
         // ORBITE_BROWSER names one of them, when the first found is not the one wanted.
@@ -255,5 +286,69 @@ impl Computer {
 impl Drop for Computer {
     fn drop(&mut self) {
         self.close_browser();
+    }
+}
+
+/// The Computer as the Agent holds it: started the first time it is used,
+/// with the pictures taken of its screen kept in its folder.
+pub(crate) struct Desk {
+    folder: PathBuf,
+    computer: std::sync::Mutex<Option<Computer>>,
+    taken: std::sync::atomic::AtomicU32,
+}
+
+/// The size of the Computer's screen.
+const SCREEN: (u16, u16) = (1280, 800);
+
+/// How many pictures of the screen are kept on disk.
+const PICTURES_KEPT: u32 = 6;
+
+impl Desk {
+    pub(crate) fn in_folder(folder: PathBuf) -> Self {
+        Self {
+            folder,
+            computer: std::sync::Mutex::new(None),
+            taken: std::sync::atomic::AtomicU32::new(0),
+        }
+    }
+
+    /// Does `something` with the Computer, starting it first when needed.
+    pub(crate) fn with<T>(
+        &self,
+        something: impl FnOnce(&mut Computer) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let mut computer = self.computer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if computer.is_none() {
+            *computer = Some(Computer::start(self.folder.join("profile"), SCREEN.0, SCREEN.1)?);
+        }
+        match computer.as_mut() {
+            Some(computer) => something(computer),
+            None => Err(io::Error::other("the Computer did not start")),
+        }
+    }
+
+    /// A picture of the screen once it has stopped changing, or after
+    /// `patience` at most, kept as a file.
+    pub(crate) async fn picture(&self, patience: Duration) -> io::Result<PathBuf> {
+        let until = Instant::now() + patience;
+        let mut seen = self.with(|computer| computer.screen().picture())?;
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let now = self.with(|computer| computer.screen().picture())?;
+            let still = now == seen;
+            seen = now;
+            if still || Instant::now() >= until {
+                break;
+            }
+        }
+        let number = self.taken.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let pictures = self.folder.join("pictures");
+        std::fs::create_dir_all(&pictures)?;
+        let file = pictures.join(format!("screen-{number}.png"));
+        std::fs::write(&file, seen)?;
+        if let Some(old) = number.checked_sub(PICTURES_KEPT) {
+            let _ = std::fs::remove_file(pictures.join(format!("screen-{old}.png")));
+        }
+        Ok(file)
     }
 }

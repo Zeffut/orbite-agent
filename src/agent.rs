@@ -201,6 +201,7 @@ impl<P: Provider + 'static> Agent<P> {
             language: Language::English,
             extensions: None,
             mcp: None,
+            computer: None,
         };
         let (subagents, reports) = Subagents::new();
         Self {
@@ -285,6 +286,13 @@ impl<P: Provider + 'static> Agent<P> {
     /// does: the Agent then ends by itself to take a setting read at start.
     pub fn restarted_by_its_service(mut self) -> Self {
         self.restarted = true;
+        self
+    }
+
+    /// Gives the Agent a Computer, a screen and a browser of its own, which
+    /// keeps what it has to in `folder`. It is started when first used.
+    pub fn using_a_computer_in(mut self, folder: impl Into<PathBuf>) -> Self {
+        self.host_mut().computer = Some(crate::computer::Desk::in_folder(folder.into()));
         self
     }
 
@@ -658,7 +666,8 @@ impl<P: Provider + 'static> Agent<P> {
             let mut images = Vec::new();
             let recent = conversation.len().saturating_sub(ENTRIES_SHOWING_IMAGES);
             for (place, message) in conversation.iter_mut().enumerate().skip(recent) {
-                let Message::Owner(text) = message else { continue };
+                // What the Owner sent, and what the Computer's screen showed.
+                let (Message::Owner(text) | Message::Notice(text)) = message else { continue };
                 let sent: Vec<PathBuf> =
                     attachments(text).filter(|file| is_showable_image(file)).collect();
                 if sent.is_empty() {
@@ -745,6 +754,8 @@ impl<P: Provider + 'static> Agent<P> {
             // started are left out, each with an Outcome saying why.
             let mut left_out: Option<&str> = None;
             let mut stopped = false;
+            // The Computer's screen after the last thing done on it.
+            let mut screen: Option<PathBuf> = None;
             for action in &reply.actions {
                 let outcome = |text: String| Message::Outcome { action: action.id.clone(), text };
                 if let Some(why) = left_out {
@@ -852,11 +863,24 @@ impl<P: Provider + 'static> Agent<P> {
                         }
                     }
                 };
+                if action.name.starts_with("computer_")
+                    && let Some(picture) = attachments(&text).last()
+                {
+                    screen = Some(picture);
+                }
                 self.store.append(&outcome(self.sized(text)))?;
                 if !said.is_empty() && left_out.is_none() {
                     left_out =
                         Some("Your Owner wrote to you meanwhile: this action was not carried out.");
                 }
+            }
+            // Shown once, after everything done on this step: a picture is
+            // costly, and only the latest one tells what is there now.
+            if let Some(picture) = screen {
+                self.store.append(&Message::Notice(format!(
+                    "The Computer's screen now:\n{}",
+                    crate::attached(&picture)
+                )))?;
             }
             if stopped {
                 return self.stopped(channel, &said).await;
@@ -2119,6 +2143,12 @@ impl Level {
 /// What an "always allow" answered for `action` covers: this very command,
 /// this file, this name. Nothing broader.
 fn covered_by_always(action: &ActionRequest) -> String {
+    // On the Computer, what is allowed once and for all is a site.
+    if action.name == "computer_open" {
+        let site = action.input["url"].as_str().and_then(|url| url::Url::parse(url).ok());
+        let site = site.and_then(|url| url.host_str().map(str::to_owned)).unwrap_or_default();
+        return format!("computer_open: {site}");
+    }
     let what = ["command", "path", "url", "name"]
         .iter()
         .find_map(|field| action.input[*field].as_str())

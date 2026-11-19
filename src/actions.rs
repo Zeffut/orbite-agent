@@ -13,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::Language;
+use crate::computer::Desk;
 use crate::extensions::{Extensions, Unremovable};
 use crate::mcp::Mcp;
 use crate::memory::Memory;
@@ -31,6 +32,8 @@ const PREVIEW_KEPT: usize = 1_500;
 const NO_SKILLS: &str = "There is nowhere to keep skills.";
 
 const NO_EXTENSIONS: &str = "There is nowhere to keep Extensions.";
+
+const NO_COMPUTER: &str = "You have no Computer on this machine.";
 
 /// What the gate decided about an Action.
 pub(crate) enum Review {
@@ -63,6 +66,8 @@ pub(crate) struct Host {
     pub(crate) extensions: Option<Arc<Extensions>>,
     /// The MCP servers of this installation, when it has any.
     pub(crate) mcp: Option<Arc<Mcp>>,
+    /// The Agent's Computer, when it has one.
+    pub(crate) computer: Option<Desk>,
 }
 
 #[derive(Deserialize)]
@@ -101,6 +106,33 @@ struct CreateExtension {
 #[derive(Deserialize)]
 struct NamedExtension {
     name: String,
+}
+
+/// Something done on the Computer.
+#[derive(Deserialize)]
+#[serde(tag = "gesture", rename_all = "lowercase")]
+enum Gesture {
+    Look,
+    Open {
+        url: String,
+        #[serde(default)]
+        purpose: String,
+    },
+    Click {
+        x: u16,
+        y: u16,
+        #[serde(default)]
+        double: bool,
+    },
+    Type {
+        text: String,
+    },
+    Key {
+        keys: String,
+    },
+    Scroll {
+        notches: i32,
+    },
 }
 
 #[derive(Deserialize)]
@@ -153,6 +185,7 @@ enum Action {
     CreateExtension(CreateExtension),
     ReadExtension(NamedExtension),
     RemoveExtension(NamedExtension),
+    Computer(Gesture),
 }
 
 impl Host {
@@ -263,6 +296,59 @@ impl Host {
                 json!({ "name": text("The skill's name, as listed in your skills.") }),
             ));
         }
+        if self.computer.is_some() {
+            let whole =
+                |description: &str| json!({ "type": "integer", "description": description });
+            specs.push(spec(
+                "computer_open",
+                "Opens an address in the browser of your own Computer: a real desktop with a screen, \
+                 1280 by 800, that you see through pictures and act on with a mouse and a keyboard, as \
+                 a person would. Use it for what reading a page cannot do: sites that need signing in \
+                 or a person's gestures. Your Owner is asked before you go to a site. Every computer \
+                 Action answers with a picture of the screen as it then is. Before anything that \
+                 pays, sends or deletes, stop and ask your Owner in words. When a site asks for a \
+                 verification code or to prove you are a person, ask your Owner.",
+                json!({
+                    "url": text("The address, starting with https://."),
+                    "purpose": text("What you are going there to do, in a few words, for your Owner."),
+                }),
+            ));
+            specs.push(spec(
+                "computer_look",
+                "Shows you the Computer's screen as it is now.",
+                json!({}),
+            ));
+            specs.push(ActionSpec {
+                name: "computer_click".into(),
+                description: "Clicks at a point of the Computer's screen, counted in pixels from its top left corner, as in the last picture.".into(),
+                input: json!({
+                    "type": "object",
+                    "properties": { "x": whole("Across, from 0 to 1279."), "y": whole("Down, from 0 to 799."), "double": { "type": "boolean", "description": "True to click twice." } },
+                    "required": ["x", "y"],
+                }),
+            });
+            specs.push(spec(
+                "computer_type",
+                "Types a text on the Computer's keyboard, where the cursor is: click the field first. \
+                 To type a secret (see list_secrets), write its name as {{NAME}}: its value is typed \
+                 without you seeing it, after your Owner agreed.",
+                json!({ "text": text("What to type.") }),
+            ));
+            specs.push(spec(
+                "computer_key",
+                "Presses a key or a combination on the Computer's keyboard.",
+                json!({ "keys": text("Such as Return, Tab, Escape, BackSpace, Page_Down, ctrl+l, ctrl+a, alt+Left.") }),
+            ));
+            specs.push(ActionSpec {
+                name: "computer_scroll".into(),
+                description: "Turns the mouse wheel where the pointer is.".into(),
+                input: json!({
+                    "type": "object",
+                    "properties": { "notches": whole("How far: positive for down, negative for up; 5 is about a screen.") },
+                    "required": ["notches"],
+                }),
+            });
+        }
         if self.extensions.is_some() {
             specs.push(ActionSpec {
                 name: "create_extension".into(),
@@ -306,6 +392,69 @@ impl Host {
             ));
         }
         specs
+    }
+
+    /// Does `gesture` on the Computer; the Outcome ends with the picture of
+    /// the screen once it has settled.
+    async fn on_the_computer(&self, gesture: Gesture) -> String {
+        let Some(desk) = &self.computer else { return NO_COMPUTER.into() };
+        let (done, patience) = match gesture {
+            Gesture::Look => (Ok("This is the screen.".to_owned()), Duration::from_secs(2)),
+            Gesture::Open { url, .. } => (
+                desk.with(|computer| computer.open(&url)).map(|()| format!("Opened {url}.")),
+                Duration::from_secs(25),
+            ),
+            Gesture::Click { x, y, double } => (
+                desk.with(|computer| {
+                    if double {
+                        computer.screen().double_click(x, y)
+                    } else {
+                        computer.screen().click(x, y)
+                    }
+                })
+                .map(|()| format!("Clicked at {x}, {y}.")),
+                Duration::from_secs(6),
+            ),
+            Gesture::Type { text } => {
+                // A secret is typed by its name; its value goes to the keyboard only.
+                let lent: Vec<(String, String)> = text
+                    .split("{{")
+                    .skip(1)
+                    .filter_map(|after| after.split_once("}}"))
+                    .filter_map(|(name, _)| {
+                        Some((name.to_owned(), self.secrets.as_ref()?.get(name).ok()??))
+                    })
+                    .collect();
+                let typed = match crate::extensions::filled(&text, &lent) {
+                    Ok(typed) => desk
+                        .with(|computer| computer.screen().type_text(&typed))
+                        .map(|()| "Typed.".to_owned()),
+                    Err(_) => Err(std::io::Error::other(
+                        "a secret named there has not been entered: your Owner enters one on the machine with \
+                         `orbite secret set NAME`",
+                    )),
+                };
+                (typed, Duration::from_secs(4))
+            }
+            Gesture::Key { keys } => (
+                desk.with(|computer| computer.screen().key(&keys))
+                    .map(|()| format!("Pressed {keys}.")),
+                Duration::from_secs(6),
+            ),
+            Gesture::Scroll { notches } => (
+                desk.with(|computer| computer.screen().scroll(notches))
+                    .map(|()| "Scrolled.".to_owned()),
+                Duration::from_secs(3),
+            ),
+        };
+        let done = match done {
+            Ok(done) => done,
+            Err(error) => return format!("That could not be done on the Computer: {error}."),
+        };
+        match desk.picture(patience).await {
+            Ok(picture) => format!("{done}\n{}", crate::attached(&picture)),
+            Err(error) => format!("{done} The screen could not be pictured: {error}."),
+        }
     }
 
     /// The Actions the Extensions add, as told to the model, without any
@@ -528,6 +677,34 @@ impl Host {
                     }),
                 },
             },
+            Action::Computer(_) if self.computer.is_none() => Review::Refuse(NO_COMPUTER.into()),
+            Action::Computer(Gesture::Open { url, purpose }) => match web_address(&url) {
+                Err(problem) => Review::Refuse(problem),
+                // Going to a site is asked; what is done there afterwards is not.
+                Ok(address) => Review::Ask(Approval {
+                    summary: self.language.say("Use the computer on a site", "Utiliser l'ordinateur sur un site").into(),
+                    detail: format!("{}\n\n{}", address.host_str().unwrap_or_default(), purpose.trim()),
+                    ..Approval::default()
+                }),
+            },
+            // Typing a secret is how an account is entered: asked every time.
+            Action::Computer(Gesture::Type { text }) if text.contains("{{") => Review::Ask(Approval {
+                summary: self.language.say("Type a secret on the computer", "Taper un secret sur l'ordinateur").into(),
+                detail: format!(
+                    "{}\n\n{}",
+                    text,
+                    self.language.say(
+                        "Its value is typed in place of its name. If the field shows what is typed, the \
+                         picture of the screen will show it to the AI provider.",
+                        "Sa valeur est tapée à la place de son nom. Si le champ affiche ce qui est tapé, la \
+                         photo de l'écran la montrera au fournisseur d'IA."
+                    )
+                ),
+                critical: true,
+                irreversible: true,
+                ..Approval::default()
+            }),
+            Action::Computer(_) => Review::Free,
             // Memory is the Agent's own, and its Owner can read and undo all of it.
             Action::Remember(_) | Action::Forget(_) => Review::Free,
             Action::EditFile(edit) => match self.edited(&edit) {
@@ -668,6 +845,7 @@ impl Host {
                     }
                 },
             },
+            Ok(Action::Computer(gesture)) => self.on_the_computer(gesture).await,
             Ok(Action::Forget(entry)) => self.forget(&entry.name),
             Ok(Action::EditFile(edit)) => match self.edited(&edit) {
                 Err(problem) => problem,
@@ -896,7 +1074,19 @@ fn understand(request: &ActionRequest) -> Result<Action, String> {
         "remove_extension" => input(request).map(Action::RemoveExtension),
         "save_skill" => input(request).map(Action::SaveSkill),
         "remove_skill" => input(request).map(Action::RemoveSkill),
-        other => Err(format!("{NO_SUCH_ACTION} {other}.")),
+        other => match other.strip_prefix("computer_") {
+            Some(gesture @ ("look" | "open" | "click" | "type" | "key" | "scroll")) => {
+                let mut input = match &request.input {
+                    serde_json::Value::Object(given) => given.clone(),
+                    _ => serde_json::Map::new(),
+                };
+                input.insert("gesture".into(), gesture.into());
+                serde_json::from_value(input.into())
+                    .map(Action::Computer)
+                    .map_err(|error| format!("The input of {other} is not valid: {error}."))
+            }
+            _ => Err(format!("{NO_SUCH_ACTION} {other}.")),
+        },
     }
 }
 

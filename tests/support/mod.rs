@@ -297,6 +297,12 @@ impl Owner {
         tokio::time::timeout(Duration::from_millis(100), self.from_agent.recv()).await.is_err()
     }
 
+    /// What the Agent says next, however long it takes: for the caller to bound.
+    #[allow(dead_code)]
+    pub async fn hears_whenever(&mut self) -> String {
+        self.from_agent.recv().await.expect("the Agent is gone")
+    }
+
     pub async fn hears(&mut self) -> String {
         tokio::time::timeout(Duration::from_secs(5), self.from_agent.recv())
             .await
@@ -305,6 +311,12 @@ impl Owner {
     }
 
     /// The Approval the Agent is waiting on.
+    /// The Approval the Agent asks for next, however long it takes: for the caller to bound.
+    #[allow(dead_code)]
+    pub async fn is_asked_whenever(&mut self) -> Approval {
+        self.asked.recv().await.expect("the Agent is gone")
+    }
+
     pub async fn is_asked(&mut self) -> Approval {
         tokio::time::timeout(Duration::from_secs(5), self.asked.recv())
             .await

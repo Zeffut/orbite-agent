@@ -688,7 +688,7 @@ format!(
 
 /// `text` with each {{NAME}} replaced by the secret of that name, when the
 /// Extension was granted it.
-fn filled(text: &str, lent: &[(String, String)]) -> Result<String, String> {
+pub(crate) fn filled(text: &str, lent: &[(String, String)]) -> Result<String, String> {
     let mut filled = String::new();
     let mut rest = text;
     while let Some((before, after)) = rest.split_once("{{") {

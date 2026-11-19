@@ -210,7 +210,12 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         Some(tokens) => tokens.parse().map_err(|_| "ORBITE_CONTEXT_TOKENS must be a number.")?,
         None => 60_000,
     };
-    Ok(Agent::new(provider, store)
+    let mut agent = Agent::new(provider, store);
+    // The Agent has a Computer where the machine has what one is made of.
+    if orbite::Computer::can_start() {
+        agent = agent.using_a_computer_in(home.join("computer"));
+    }
+    Ok(agent
         .working_in(home.join("workspace"))
         .remembering_in(home.join("memory"))
         .learning_in(home.join("skills"))
