@@ -19,6 +19,7 @@ Commands:
   providers  list the Providers known by name
   version    say which version this is
   setup      set Orbite up, or one part again (language, provider, telegram, name)
+  tryout     try the chosen model (or: tryout MODEL) out on a few real tasks and say what to expect of it
   settings   list the settings, or change one (settings NAME VALUE)
   export     write everything of the Agent to a file (export FILE), to move it to another Host
   restore    put an export back on a Host where Orbite is not set up yet (restore FILE)
@@ -54,6 +55,7 @@ async fn main() -> ExitCode {
         Some("secret") => secret(),
         Some("update") => update().await,
         Some("settings") => settings(),
+        Some("tryout") => tryout().await,
         Some("export") => moving(true),
         Some("restore") => moving(false),
         Some("uninstall") => uninstall(),
@@ -117,6 +119,26 @@ async fn chat() -> Result<(), Failure> {
     let mut agent = agent()?;
     agent.converse(&mut Terminal::new(BufReader::new(stdin()), stdout())).await;
     Ok(())
+}
+
+/// The Provider this installation was set up with, running `model` when one
+/// is given rather than the model chosen.
+fn usual_provider(model: Option<String>) -> Result<Connected, Failure> {
+    let home = home()?;
+    let chosen = Config::load(&home)?.provider;
+    let name = setting("ORBITE_PROVIDER")
+        .or(chosen.as_ref().map(|chosen| chosen.name.clone()))
+        .ok_or("No AI is set up yet. Run `orbite setup`.")?;
+    let model = model
+        .or(setting("ORBITE_MODEL"))
+        .or(chosen.as_ref().map(|chosen| chosen.model.clone()))
+        .ok_or("No model is chosen yet. Run `orbite setup`.")?;
+    let key = match setting("ORBITE_API_KEY") {
+        Some(key) => Some(key),
+        None => Secrets::kept_in(&home).get(PROVIDER_KEY)?,
+    };
+    let address = setting("ORBITE_BASE_URL").or(chosen.and_then(|chosen| chosen.address));
+    Ok(connect(&name, key.as_deref(), &model, address.as_deref())?)
 }
 
 /// The Agent of this installation: its Provider and the folder holding its data.
@@ -334,6 +356,34 @@ fn uninstall() -> Result<(), Failure> {
     }
     let _ = std::process::Command::new("userdel").arg("orbite").status();
     println!("Orbite is removed, with the Agent's data.");
+    Ok(())
+}
+
+/// Tries the chosen model out and says what an Owner can expect of it.
+async fn tryout() -> Result<(), Failure> {
+    let home = home()?;
+    let language = Language::of(Config::load(&home)?.language.as_deref());
+    let provider = usual_provider(env::args().nth(2))?;
+    println!(
+        "{}",
+        language.say(
+            "Trying the model out on a few real tasks...",
+            "Essai du modèle sur quelques vraies tâches..."
+        )
+    );
+    let verdict = orbite::try_out(&provider).await.map_err(|error| match error {
+        orbite::ProviderError::Rejected(why) => format!("The Provider refused the key: {why}"),
+        orbite::ProviderError::Unreachable(why) => {
+            format!("The Provider could not be reached: {why}")
+        }
+        orbite::ProviderError::Busy { reason, .. } => {
+            format!("The Provider is too busy to try the model now: {reason}")
+        }
+        orbite::ProviderError::Declined(why) | orbite::ProviderError::Failed(why) => {
+            format!("The Provider failed on the first task: {why}")
+        }
+    })?;
+    println!("{}", verdict.told(language));
     Ok(())
 }
 

@@ -28,6 +28,7 @@ mod store;
 mod subagents;
 mod telegram;
 mod terminal;
+mod tryout;
 mod updater;
 mod web;
 
@@ -52,4 +53,5 @@ pub use steps::Step;
 pub use store::{Entry, Store, StoreError};
 pub use telegram::Telegram;
 pub use terminal::Terminal;
+pub use tryout::{Tools, Verdict, try_out};
 pub use updater::{RELEASE_KEY, Service, Systemd, UpdateError, Updater};
