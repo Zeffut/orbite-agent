@@ -2,10 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## Not released yet
+## 0.2.1
+
+Released on 2026-11-19.
 
 - The catalogue of models gains Claude Haiku 5.5 and Claude Sonnet 5.5, from real tryouts.
-- MCP servers you sign in to: `/mcp connect NAME` gives a link to follow, and the address your browser ends on, sent back, finishes the sign-in.
+- MCP servers you sign in to: `/mcp connect NAME` gives a link to follow, and the address your browser ends on, sent back, finishes the sign-in. Tried for real with an account, in Telegram.
 - A secret a service sends back in base64 is not handed to an Extension either; an MCP server of the earlier protocol that quits when probed is started again.
 
 ## 0.2.0
