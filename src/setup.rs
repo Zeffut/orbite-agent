@@ -316,9 +316,42 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         if let Some(key) = &key {
             secrets.set(PROVIDER_KEY, key).map_err(stopped)?;
         }
-        config.provider = Some(ProviderChoice { name: known.name.into(), model, address });
+        config.provider =
+            Some(ProviderChoice { name: known.name.into(), model: model.clone(), address });
+        config.light_model = None;
         config.save(&self.home).map_err(stopped)?;
-        self.say(language.say("The AI answers. ✓", "L'IA répond. ✓"))
+        self.say(language.say("The AI answers. ✓", "L'IA répond. ✓"))?;
+
+        // Summaries and wake-ups do not need the best model. What was chosen
+        // so far is kept even if setup is closed at this question.
+        let Ok(answer) = self.ask_or_pass(language.say(
+            "A lighter model for simple work, such as summaries and wake-ups (number or name; Enter for none) > ",
+            "Un modèle plus léger pour le travail simple, comme les résumés et les réveils (numéro ou nom ; Entrée pour aucun) > ",
+        )) else {
+            return Ok(());
+        };
+        let light = answer
+            .parse::<usize>()
+            .ok()
+            .and_then(|number| offered.get(number.wrapping_sub(1)).cloned())
+            .unwrap_or(answer);
+        if light.trim().is_empty() || light == model {
+            return Ok(());
+        }
+        match self.check(&known, key.as_deref().unwrap_or_default(), &light, &root).await {
+            Ok(()) => {
+                config.light_model = Some(light);
+                config.save(&self.home).map_err(stopped)
+            }
+            Err(error) => self.say(&format!(
+                "{} {}",
+                language.say(
+                    "That one did not work, so none is used:",
+                    "Celui-ci n'a pas fonctionné, aucun n'est donc utilisé :"
+                ),
+                crate::agent::explain(&error, language)
+            )),
+        }
     }
 
     /// Asks the Provider for one word, to see that the key and model work.
@@ -542,6 +575,17 @@ impl<R: BufRead, W: Write> Setup<R, W> {
     }
 
     /// Shows `question` and reads the answer; nothing typed is repeated.
+    /// Asks a question that may be passed over with Enter: the answer is
+    /// then empty.
+    fn ask_or_pass(&mut self, question: &str) -> Result<String, SetupError> {
+        write!(self.shown, "{question}").and_then(|()| self.shown.flush()).map_err(stopped)?;
+        let mut line = String::new();
+        if self.typed.read_line(&mut line).map_err(stopped)? == 0 {
+            return Err(SetupError("Setup was cut short; run it again to go on from here.".into()));
+        }
+        Ok(line.trim().to_owned())
+    }
+
     fn ask(&mut self, question: &str) -> Result<String, SetupError> {
         loop {
             write!(self.shown, "{question}").and_then(|()| self.shown.flush()).map_err(stopped)?;

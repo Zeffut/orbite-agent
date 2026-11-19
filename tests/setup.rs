@@ -156,9 +156,10 @@ async fn set_up(
 }
 
 /// What an Owner types on a first run: English, the Provider "custom", its
-/// key, the first model offered, the bot's token, then a name of their own.
+/// key, the first model offered, no lighter model, the bot's token, then a
+/// name of their own.
 fn first_run() -> String {
-    format!("1\ncustom\n{}\n1\n{}\nNova\n", api_key(), bot_token())
+    format!("1\ncustom\n{}\n1\n\n{}\nNova\n", api_key(), bot_token())
 }
 
 async fn sent_to_owner(telegram: &MockServer) -> Vec<String> {
@@ -227,7 +228,7 @@ async fn a_wrong_api_key_is_explained_and_asked_for_again() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\nwrong-key\n{}\n1\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\nwrong-key\n{}\n1\n\n{}\nNova\n", api_key(), bot_token());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -243,7 +244,7 @@ async fn a_wrong_bot_token_is_explained_and_asked_for_again() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\n{}\n1\nnot-a-token\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\n{}\n1\n\nnot-a-token\n{}\nNova\n", api_key(), bot_token());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -320,7 +321,7 @@ async fn setup_speaks_the_language_the_owner_chooses() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("2\ncustom\n{}\n1\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("2\ncustom\n{}\n1\n\n{}\nNova\n", api_key(), bot_token());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -334,7 +335,7 @@ async fn a_name_can_be_picked_from_the_suggestions_and_a_model_typed_by_hand() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\n{}\nmodel-of-my-own\n{}\n1\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\n{}\nmodel-of-my-own\n\n{}\n1\n", api_key(), bot_token());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -392,7 +393,7 @@ async fn a_model_that_cannot_act_is_chosen_only_after_the_owner_insists() {
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
 
     // The mute model, declined at the warning; then the first one offered.
-    let typed = format!("1\ncustom\n{}\nmodel-mute\nno\n1\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\n{}\nmodel-mute\nno\n1\n\n{}\nNova\n", api_key(), bot_token());
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
     assert!(shown.contains("cannot act") && shown.contains("Strongly discouraged"), "{shown}");
     assert_eq!(Config::load(home.path()).unwrap().provider.unwrap().model, "model-large");
@@ -401,4 +402,26 @@ async fn a_model_that_cannot_act_is_chosen_only_after_the_owner_insists() {
     let insisting = format!("custom\n{}\nmodel-mute\nyes\n", api_key());
     set_up(home.path(), &insisting, &provider, &telegram, Some(Step::Provider)).await;
     assert_eq!(Config::load(home.path()).unwrap().provider.unwrap().model, "model-mute");
+}
+
+#[tokio::test]
+async fn a_lighter_model_can_be_chosen_for_simple_work_or_passed_over() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
+
+    // Passed over on the first run.
+    let shown = set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    assert!(shown.contains("lighter model"), "{shown}");
+    assert_eq!(Config::load(home.path()).unwrap().light_model, None);
+
+    // Chosen later, by its number in the list.
+    let again = format!("custom\n{}\n1\n2\n", api_key());
+    set_up(home.path(), &again, &provider, &telegram, Some(Step::Provider)).await;
+    assert_eq!(Config::load(home.path()).unwrap().light_model.as_deref(), Some("model-small"));
+
+    // And given up again by passing over it.
+    let without = format!("custom\n{}\n1\n\n", api_key());
+    set_up(home.path(), &without, &provider, &telegram, Some(Step::Provider)).await;
+    assert_eq!(Config::load(home.path()).unwrap().light_model, None);
 }

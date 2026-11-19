@@ -50,4 +50,4 @@ To change model later: `/settings model NAME` in Telegram, or `orbite settings m
 
 ## A lighter model for simple work
 
-Summaries and wake-ups do not need your best model. Setting `light_model` in `/var/lib/orbite/config.json` to the name of a smaller model of the same provider makes Orbite use it for those.
+Summaries and wake-ups do not need your best model. Setup asks for a lighter model of the same provider once the main one is chosen; pass over the question to use the main model for everything. `sudo orbite setup provider` asks it again.
