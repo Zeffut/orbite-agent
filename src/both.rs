@@ -128,6 +128,20 @@ impl<A: Channel, B: Channel> Channel for Both<A, B> {
         }
     }
 
+    async fn offer(&mut self, text: &str, choices: &[(String, String)]) -> io::Result<()> {
+        if self.first_open && self.first.offer(text, choices).await.is_err() {
+            self.close(Place::First);
+        }
+        if self.second_open && self.second.offer(text, choices).await.is_err() {
+            self.close(Place::Second);
+        }
+        if self.first_open || self.second_open {
+            Ok(())
+        } else {
+            Err(io::Error::other("every place the Conversation was open in has closed"))
+        }
+    }
+
     async fn echo(&mut self, text: &str) {
         if self.first_open {
             self.first.echo(text).await;

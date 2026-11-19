@@ -14,6 +14,7 @@ use crate::mcp::Mcp;
 use crate::memory::Memory;
 use crate::routines::{self, Routine};
 use crate::secrets::Secrets;
+use crate::settings::Settings;
 use crate::skills::Skills;
 use crate::slug::slug;
 use crate::subagents::{Report, Subagents};
@@ -162,6 +163,9 @@ pub struct Agent<P> {
     time_check: Duration,
     /// Where Orbite leaves word of what it did by itself, such as updating.
     notices: Option<PathBuf>,
+    /// The installation's folder, where the settings not kept with the
+    /// Conversation are.
+    home: Option<PathBuf>,
     /// True when a notice was added that the Agent has yet to respond to.
     owed: bool,
     /// How often the Agent wakes up when its Owner has set no pace, in
@@ -204,6 +208,7 @@ impl<P: Provider + 'static> Agent<P> {
             clock: Arc::new(|| Local::now().fixed_offset()),
             time_check: Duration::from_secs(20),
             notices: None,
+            home: None,
             owed: false,
             wake_up_pace: 0,
             last_active: 0,
@@ -260,6 +265,12 @@ impl<P: Provider + 'static> Agent<P> {
     /// whose tools the Agent can use.
     pub fn connecting_servers_in(mut self, home: impl AsRef<std::path::Path>) -> Self {
         self.host_mut().mcp = Some(Arc::new(Mcp::configured_in(home.as_ref())));
+        self
+    }
+
+    /// The installation's folder, for the settings kept in it.
+    pub fn configured_in(mut self, home: impl Into<PathBuf>) -> Self {
+        self.home = Some(home.into());
         self
     }
 
@@ -410,6 +421,13 @@ impl<P: Provider + 'static> Agent<P> {
                 Some(true) => continue,
                 Some(false) => return,
                 None => {}
+            }
+            if let Some(asked) = text.trim().strip_prefix("/settings") {
+                let (said, choices) = self.settings(asked);
+                if channel.offer(&said, &choices).await.is_err() {
+                    return;
+                }
+                continue;
             }
             if text.trim() == "/mcp" {
                 if channel.send(&self.servers().await).await.is_err() {
@@ -1281,6 +1299,97 @@ impl<P: Provider + 'static> Agent<P> {
             }
         }
         self.store.append(&Message::Notice(format!("{} {}", report.who, report.ended)))
+    }
+
+    /// Shows the settings, the choices of one, or changes one, as the Owner
+    /// asked after /settings: the text, and the choices to offer under it.
+    fn settings(&mut self, asked: &str) -> (String, Vec<(String, String)>) {
+        // The language may just have been changed, here or on the Host.
+        if let Some(config) = self.home.as_ref().and_then(|home| crate::Config::load(home).ok()) {
+            self.language = Language::of(config.language.as_deref());
+        }
+        let words: Vec<&str> = asked.split_whitespace().collect();
+        let settings = Settings::of(&self.store, self.home.as_deref())
+            .waking_up_by_default_every(self.wake_up_pace);
+        let changed = match words[..] {
+            [key, value] => match settings.set(key, value) {
+                Ok(()) => Some(key),
+                Err(problem) => return (problem, Vec::new()),
+            },
+            _ => None,
+        };
+        let language = match settings.get("language").as_deref() {
+            Ok("fr") => Language::French,
+            _ => Language::English,
+        };
+        self.language = language;
+        let say = |english: &str, french: &str| language.say(english, french).to_owned();
+        let label = |key: &str| match key {
+            "permission" => format!("🛡 {}", say("Permission level", "Niveau d'autorisation")),
+            "quiet" => format!("🌙 {}", say("Quiet hours", "Heures de silence")),
+            "wakeups" => format!("⏰ {}", say("Wake-ups (minutes)", "Réveils (minutes)")),
+            "secrets" => {
+                format!("🔑 {}", say("Secrets in the conversation", "Secrets dans la discussion"))
+            }
+            "updates" => format!("⬆️ {}", say("Automatic updates", "Mises à jour automatiques")),
+            _ => format!("🌐 {}", say("Language", "Langue")),
+        };
+        // A value as an Owner reads it; what is written to set it stays as it is.
+        let shown = |value: &str| match value {
+            "off" => say("off", "désactivé"),
+            "on" => say("on", "activé"),
+            "careful" => say("careful", "prudent"),
+            "balanced" => say("balanced", "équilibré"),
+            "free" => say("free", "libre"),
+            "en" => "English".to_owned(),
+            "fr" => "Français".to_owned(),
+            other => other.to_owned(),
+        };
+        let colon = say(":", " :");
+        let line = |key: &str| {
+            let current = settings.get(key).unwrap_or_else(|problem| problem);
+            format!("{}{colon} {}", label(key), shown(&current))
+        };
+        // One setting: its choices, the one in force marked.
+        if let [key] = words[..] {
+            let current = match settings.get(key) {
+                Ok(current) => current,
+                Err(problem) => return (problem, Vec::new()),
+            };
+            let mut choices: Vec<(String, String)> = Settings::choices(key)
+                .iter()
+                .map(|choice| {
+                    let mark = if *choice == current { "● " } else { "" };
+                    (format!("{mark}{}", shown(choice)), format!("/settings {key} {choice}"))
+                })
+                .collect();
+            choices.push((say("← Back", "← Retour"), "/settings".into()));
+            let mut text = format!("**{}**", line(key));
+            match key {
+                "quiet" => text.push_str(&say(
+                    "\nOther hours: /settings quiet 21:30-06:45",
+                    "\nAutres heures : /settings quiet 21:30-06:45",
+                )),
+                "wakeups" => text.push_str(&say(
+                    "\nAnother pace: /settings wakeups 90",
+                    "\nAutre rythme : /settings wakeups 90",
+                )),
+                "language" => text.push_str(&say(
+                    "\nApprovals and buttons follow when Orbite next starts.",
+                    "\nLes autorisations et les boutons suivront au prochain démarrage d'Orbite.",
+                )),
+                _ => {}
+            }
+            return (text, choices);
+        }
+        let mut said = match changed {
+            Some(key) => format!("✅ {}\n\n", line(key)),
+            None => String::new(),
+        };
+        said.push_str(&format!("**{}**", say("Settings", "Réglages")));
+        let choices =
+            crate::SETTINGS.iter().map(|key| (line(key), format!("/settings {key}"))).collect();
+        (said, choices)
     }
 
     /// The MCP servers and what each offers, trying again those that failed.

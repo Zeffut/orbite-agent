@@ -1,0 +1,146 @@
+//! The settings an Owner changes, by name, wherever they are kept: the same
+//! from the Conversation and from the `orbite` command.
+
+use std::path::Path;
+
+use chrono::NaiveTime;
+
+use crate::{Config, Store};
+
+/// The settings, in the order they are shown.
+pub const SETTINGS: [&str; 6] =
+    ["permission", "quiet", "wakeups", "secrets", "updates", "language"];
+
+/// The settings of one installation.
+pub struct Settings<'a> {
+    store: &'a Store,
+    /// The installation's folder, when it has one.
+    home: Option<&'a Path>,
+    /// Minutes between Wake-ups when the Owner has not said.
+    usual_wake_ups: u32,
+}
+
+impl<'a> Settings<'a> {
+    pub fn of(store: &'a Store, home: Option<&'a Path>) -> Self {
+        Self { store, home, usual_wake_ups: 0 }
+    }
+
+    /// How often the Agent wakes up when the Owner has not said, in minutes.
+    pub fn waking_up_by_default_every(mut self, minutes: u32) -> Self {
+        self.usual_wake_ups = minutes;
+        self
+    }
+
+    fn config(&self) -> Config {
+        self.home.and_then(|home| Config::load(home).ok()).unwrap_or_default()
+    }
+
+    fn kept(&self, name: &str) -> Result<Option<String>, String> {
+        self.store.setting(name).map_err(|error| error.to_string())
+    }
+
+    /// The value of the setting called `key`, as it is written to set it.
+    pub fn get(&self, key: &str) -> Result<String, String> {
+        Ok(match key {
+            "permission" => self.kept("permission_level")?.unwrap_or_else(|| "careful".into()),
+            "quiet" => self.kept("quiet_hours")?.unwrap_or_else(|| "off".into()),
+            "wakeups" => {
+                let minutes =
+                    self.kept("wake_up_minutes")?.and_then(|minutes| minutes.parse::<u32>().ok());
+                match minutes.unwrap_or(self.usual_wake_ups) {
+                    0 => "off".into(),
+                    minutes => minutes.to_string(),
+                }
+            }
+            "secrets" => on_or_off(self.kept("secrets_in_conversation")?.is_some()).into(),
+            "updates" => on_or_off(self.config().automatic_updates != Some(false)).into(),
+            "language" => self.config().language.unwrap_or_else(|| "en".into()),
+            other => return Err(unknown(other)),
+        })
+    }
+
+    /// The values the setting called `key` is usually given.
+    pub fn choices(key: &str) -> &'static [&'static str] {
+        match key {
+            "permission" => &["careful", "balanced", "free"],
+            "quiet" => &["off", "22:00-07:00", "23:00-08:00", "00:00-09:00"],
+            "wakeups" => &["off", "60", "240", "720"],
+            "secrets" | "updates" => &["off", "on"],
+            "language" => &["en", "fr"],
+            _ => &[],
+        }
+    }
+
+    /// Gives the setting called `key` the value `value`; the error says what
+    /// it can be given.
+    pub fn set(&self, key: &str, value: &str) -> Result<(), String> {
+        let value = value.trim().to_lowercase();
+        let keep = |name: &str, value: Option<&str>| {
+            self.store.set_setting(name, value).map_err(|error| error.to_string())
+        };
+        let one_of = |choices: &[&str]| {
+            if choices.contains(&value.as_str()) {
+                Ok(())
+            } else {
+                Err(format!("{key} is one of: {}.", choices.join(", ")))
+            }
+        };
+        match key {
+            "permission" => {
+                one_of(Self::choices(key))?;
+                keep("permission_level", Some(&value))
+            }
+            "quiet" if value == "off" => keep("quiet_hours", None),
+            "quiet" => {
+                let read = |time: &str| NaiveTime::parse_from_str(time.trim(), "%H:%M").ok();
+                let times = value
+                    .split_once('-')
+                    .and_then(|(from, until)| Some((read(from)?, read(until)?)));
+                let Some((from, until)) = times else {
+                    return Err(
+                        "quiet is off, or two times as HH:MM-HH:MM, such as 22:00-07:00.".into()
+                    );
+                };
+                keep(
+                    "quiet_hours",
+                    Some(&format!("{}-{}", from.format("%H:%M"), until.format("%H:%M"))),
+                )
+            }
+            "wakeups" => {
+                let minutes = if value == "off" { Some(0) } else { value.parse::<u32>().ok() };
+                match minutes.filter(|minutes| *minutes <= 7 * 24 * 60) {
+                    Some(minutes) => keep("wake_up_minutes", Some(&minutes.to_string())),
+                    None => Err("wakeups is off, or a number of minutes, such as 240.".into()),
+                }
+            }
+            "secrets" => {
+                one_of(Self::choices(key))?;
+                keep("secrets_in_conversation", (value == "on").then_some("on"))
+            }
+            "updates" | "language" => {
+                one_of(Self::choices(key))?;
+                let Some(home) = self.home else {
+                    return Err(format!(
+                        "{key} is kept in Orbite's folder, and there is none here."
+                    ));
+                };
+                let mut config = Config::load(home).map_err(|error| error.to_string())?;
+                if key == "updates" {
+                    config.automatic_updates = (value == "off").then_some(false);
+                } else {
+                    config.language = Some(value);
+                }
+                config.save(home).map_err(|error| error.to_string())
+            }
+            other => Err(unknown(other)),
+        }
+    }
+}
+
+fn on_or_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
+
+fn unknown(key: &str) -> String {
+    format!("There is no setting called {key}. The settings are: {}.", SETTINGS.join(", "))
+}

@@ -18,6 +18,7 @@ mod provider;
 mod routed;
 mod routines;
 mod secrets;
+mod settings;
 mod setup;
 mod skills;
 mod slug;
@@ -43,6 +44,7 @@ pub use provider::{
 };
 pub use routed::Routed;
 pub use secrets::{Secrets, SecretsError};
+pub use settings::{SETTINGS, Settings};
 pub use setup::{PROVIDER_KEY, Setup, SetupError, Step as SetupStep, TELEGRAM_TOKEN};
 pub use steps::Step;
 pub use store::{Entry, Store, StoreError};

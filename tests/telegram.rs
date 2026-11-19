@@ -776,7 +776,7 @@ async fn the_bot_offers_its_commands_in_telegrams_menu() {
         .iter()
         .map(|command| command["command"].as_str().unwrap())
         .collect();
-    assert_eq!(commands, ["stop", "reset", "usage", "mcp", "extensions"]);
+    assert_eq!(commands, ["stop", "reset", "usage", "settings", "mcp", "extensions"]);
 }
 
 // --- One Conversation open in several places ---
@@ -882,4 +882,38 @@ async fn an_answer_telegram_could_not_take_is_kept_and_delivered_with_the_next()
         .map(|(_, body)| body["text"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(delivered, ["The first answer.", "The second answer."]);
+}
+
+#[tokio::test]
+async fn choices_are_buttons_one_per_line_and_tapping_one_is_writing_its_command() {
+    let server = telegram_asking(vec![
+        tap(100, STRANGER, 7, "/settings permission"),
+        tap(101, OWNER, 7, "/settings quiet"),
+    ])
+    .await;
+    let mut channel = telegram(&server);
+
+    let choices = [
+        ("🛡 Permission level: careful".to_owned(), "/settings permission".to_owned()),
+        ("🌙 Quiet hours: off".to_owned(), "/settings quiet".to_owned()),
+    ];
+    channel.offer("**Settings**", &choices).await.unwrap();
+    let written = channel.receive().await;
+
+    assert_eq!(written.as_deref(), Some("/settings quiet"), "only the Owner's tap counts");
+    let calls = calls(&server).await;
+    let (_, sent) = calls.iter().find(|(called, _)| called == "sendMessage").unwrap();
+    assert_eq!(sent["text"], "<b>Settings</b>");
+    // One button per line stays readable on a phone.
+    assert_eq!(
+        sent["reply_markup"]["inline_keyboard"],
+        json!([
+            [{ "text": "🛡 Permission level: careful", "callback_data": "/settings permission" }],
+            [{ "text": "🌙 Quiet hours: off", "callback_data": "/settings quiet" }],
+        ])
+    );
+    assert!(
+        calls.iter().any(|(called, body)| called == "answerCallbackQuery"
+            && body["callback_query_id"] == "tap-101")
+    );
 }

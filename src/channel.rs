@@ -85,6 +85,22 @@ pub trait Channel: Send {
         async {}
     }
 
+    /// Sends the Owner a text with choices under it, each a few words and
+    /// the command that choosing it stands for: choosing one is received as
+    /// if the Owner had written that command. A Channel with no buttons
+    /// writes the commands out.
+    fn offer(
+        &mut self,
+        text: &str,
+        choices: &[(String, String)],
+    ) -> impl Future<Output = io::Result<()>> + Send {
+        let mut written = text.to_owned();
+        for (label, command) in choices {
+            written.push_str(&format!("\n{label}: {command}"));
+        }
+        async move { self.send(&written).await }
+    }
+
     /// Shows the Owner what the Agent is starting to do.
     fn doing(&mut self, step: &Step) -> impl Future<Output = ()> + Send {
         let _ = step;

@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use orbite::{
-    Agent, Both, Config, Connected, Language, PROVIDER_KEY, RELEASE_KEY, Routed, Secrets, Setup,
-    SetupStep, Store, Systemd, TELEGRAM_TOKEN, Telegram, Terminal, Updater, connect,
-    known_providers,
+    Agent, Both, Config, Connected, Language, PROVIDER_KEY, RELEASE_KEY, Routed, SETTINGS, Secrets,
+    Settings, Setup, SetupStep, Store, Systemd, TELEGRAM_TOKEN, Telegram, Terminal, Updater,
+    connect, known_providers,
 };
 use tokio::io::{BufReader, stdin, stdout};
 
@@ -19,6 +19,7 @@ Commands:
   providers  list the Providers known by name
   version    say which version this is
   setup      set Orbite up, or one part again (language, provider, telegram, name)
+  settings   list the settings, or change one (settings NAME VALUE)
   update     install the latest release now (on or off: let Orbite do it by itself, or not)
   secret     enter (set NAME), list or remove the secrets the Agent uses without seeing them
 
@@ -49,6 +50,7 @@ async fn main() -> ExitCode {
         Some("chat") => chat().await,
         Some("secret") => secret(),
         Some("update") => update().await,
+        Some("settings") => settings(),
         Some("setup") => setup().await,
         Some("providers") => {
             for provider in known_providers() {
@@ -176,6 +178,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .hearing_notices_in(home.join("notices"))
         .extending_in(home.join("extensions"))
         .connecting_servers_in(&home)
+        .configured_in(&home)
         .keeping_secrets_in(&home)
         .called(config.agent_name.clone().unwrap_or_else(|| "Orbite".into()))
         .speaking(Language::of(config.language.as_deref()))
@@ -239,6 +242,37 @@ fn secret() -> Result<(), Failure> {
             println!("Removed {}.", name.to_uppercase());
         }
         _ => return Err(HOW.into()),
+    }
+    Ok(())
+}
+
+/// Lists the settings, or changes one: the same as /settings in the Conversation.
+fn settings() -> Result<(), Failure> {
+    let home = home()?;
+    fs::create_dir_all(&home)?;
+    let store = Store::open(home.join("orbite.db"))?;
+    let usual =
+        setting("ORBITE_WAKE_UP_MINUTES").and_then(|minutes| minutes.parse().ok()).unwrap_or(240);
+    let settings = Settings::of(&store, Some(&home)).waking_up_by_default_every(usual);
+    let arguments: Vec<String> = env::args().skip(2).collect();
+    match arguments.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [] => {
+            for key in SETTINGS {
+                println!("{key} = {}", settings.get(key)?);
+            }
+        }
+        [key] => {
+            println!("{key} = {}   ({})", settings.get(key)?, Settings::choices(key).join(", "))
+        }
+        [key, value] => {
+            settings.set(key, value)?;
+            println!("{key} = {}", settings.get(key)?);
+        }
+        _ => {
+            return Err(
+                "Usage: orbite settings | orbite settings NAME | orbite settings NAME VALUE".into(),
+            );
+        }
     }
     Ok(())
 }

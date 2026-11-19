@@ -305,6 +305,7 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
             "Repartir de zéro dans la discussion (la mémoire est gardée)",
         ) },
         { "command": "usage", "description": bot.language.say("What the agent has used", "Ce que l'agent a consommé") },
+        { "command": "settings", "description": bot.language.say("See and change the settings", "Voir et changer les réglages") },
         { "command": "mcp", "description": bot.language.say("List the MCP servers and their state", "Lister les serveurs MCP et leur état") },
         { "command": "extensions", "description": bot.language.say(
             "List the extensions, turn one off or remove it",
@@ -418,6 +419,11 @@ impl Channel for Telegram {
         loop {
             // No Approval is open here, so any tap is on an old one.
             while let Some(tap) = self.taps.pop_front() {
+                // A choice offered earlier stands for the command it carries.
+                if tap.choice.starts_with('/') {
+                    self.acknowledge(&tap, "").await;
+                    return Some(tap.choice);
+                }
                 self.acknowledge(&tap, "This request is no longer open.").await;
             }
             if let Some(text) = self.waiting.pop_front() {
@@ -449,6 +455,22 @@ impl Channel for Telegram {
             self.undelivered.pop_front();
         }
         Ok(())
+    }
+
+    async fn offer(&mut self, text: &str, choices: &[(String, String)]) -> io::Result<()> {
+        self.clear_progress().await;
+        // One choice per line: readable and easy to tap on a phone.
+        let buttons: Vec<Value> = choices
+            .iter()
+            .map(|(label, command)| json!([{ "text": label, "callback_data": command }]))
+            .collect();
+        let body = json!({
+            "chat_id": self.bot.owner,
+            "text": formatting::to_html(text),
+            "parse_mode": "HTML",
+            "reply_markup": { "inline_keyboard": buttons },
+        });
+        self.bot.call::<Value>("sendMessage", body).await.map(|_| ())
     }
 
     async fn send_file(&mut self, file: &Path, caption: &str) -> io::Result<()> {
