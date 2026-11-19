@@ -2,6 +2,11 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## Unreleased
+
+- Two runs of one extension at once no longer lose what the other kept: a run waits for the one before.
+- A large part of a secret (twelve characters in a row or more) is hidden from the model like the whole.
+
 ## 0.3.0
 
 Released on 2026-11-19.

@@ -7,6 +7,7 @@
 //! does not protect them from someone who has that account.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt;
 use std::fs;
 use std::io::Write;
@@ -18,6 +19,8 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 
 /// The shortest value worth hiding: anything shorter would hide ordinary words.
 const SHORTEST_HIDDEN: usize = 6;
+/// The shortest part of a secret that is hidden wherever it shows.
+const SHORTEST_PART_HIDDEN: usize = 12;
 
 pub struct Secrets {
     sealed: PathBuf,
@@ -93,6 +96,11 @@ impl Secrets {
             if value.len() >= SHORTEST_HIDDEN {
                 hidden = hidden.replace(value.as_str(), &format!("[secret {name}]"));
             }
+        }
+        // A large part of one says nearly as much as the whole: a command
+        // may print only the beginning of a secret, or its end.
+        for (name, value) in &all {
+            hidden = without_parts_of(&hidden, value, &format!("[part of secret {name}]"));
         }
         hidden
     }
@@ -179,6 +187,47 @@ impl Secrets {
 
 /// True of the keys Orbite itself runs on (its Provider's, its bot's): the
 /// Agent neither lists nor uses those.
+/// `text` with every run of at least [`SHORTEST_PART_HIDDEN`] bytes that is
+/// also in `secret` replaced by `named`.
+fn without_parts_of(text: &str, secret: &str, named: &str) -> String {
+    let (text_bytes, secret_bytes) = (text.as_bytes(), secret.as_bytes());
+    if secret_bytes.len() < SHORTEST_PART_HIDDEN || text_bytes.len() < SHORTEST_PART_HIDDEN {
+        return text.to_owned();
+    }
+    // Where each run of that length starts in the secret.
+    let mut starts: HashMap<&[u8], Vec<usize>> = HashMap::new();
+    for (at, run) in secret_bytes.windows(SHORTEST_PART_HIDDEN).enumerate() {
+        starts.entry(run).or_default().push(at);
+    }
+    let mut shown = Vec::with_capacity(text_bytes.len());
+    let mut at = 0;
+    while at < text_bytes.len() {
+        let run = text_bytes.get(at..at + SHORTEST_PART_HIDDEN);
+        let longest = run.and_then(|run| starts.get(run)).map(|found| {
+            let same_from = |start: &usize| {
+                text_bytes[at..]
+                    .iter()
+                    .zip(&secret_bytes[*start..])
+                    .take_while(|(a, b)| a == b)
+                    .count()
+            };
+            found.iter().map(same_from).max().unwrap_or(0)
+        });
+        match longest {
+            // Never cut inside a letter of several bytes.
+            Some(length) if text.is_char_boundary(at) && text.is_char_boundary(at + length) => {
+                shown.extend_from_slice(named.as_bytes());
+                at += length;
+            }
+            _ => {
+                shown.push(text_bytes[at]);
+                at += 1;
+            }
+        }
+    }
+    String::from_utf8(shown).unwrap_or_else(|_| text.to_owned())
+}
+
 fn is_orbites_own(name: &str) -> bool {
     name.starts_with("ORBITE_")
 }

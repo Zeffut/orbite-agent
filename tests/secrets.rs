@@ -316,3 +316,38 @@ async fn the_keys_orbite_itself_runs_on_are_not_the_agents_to_list_or_use_but_st
     assert_eq!(fs::read_to_string(home.path().join("workspace/seen.txt")).unwrap().trim(), "k=");
     assert_eq!(outcomes[2], "key is [secret ORBITE_PROVIDER_KEY]");
 }
+
+#[tokio::test]
+async fn a_large_part_of_a_secret_is_hidden_from_the_model_like_the_whole() {
+    let home = tempfile::tempdir().unwrap();
+    let token = format!("tok_{}{}", "Qm7xLp2VzR9aKd4W", "sN8bTc3YhG6eJf1U");
+    Secrets::kept_in(home.path()).set("SERVICE_TOKEN", &token).unwrap();
+    fs::create_dir_all(home.path().join("workspace")).unwrap();
+    // The beginning, the end, and a few letters only.
+    let written = format!(
+        "start {} end {} short {} ok",
+        &token[..20],
+        &token[token.len() - 14..],
+        &token[..6]
+    );
+    fs::write(home.path().join("workspace/parts.txt"), written).unwrap();
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("read_file", json!({ "path": "parts.txt" }))]).then(Ok("Done.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Go.");
+    owner.hears().await;
+
+    let told = provider
+        .last_asked()
+        .into_iter()
+        .find_map(|message| match message {
+            Message::Outcome { text, .. } => Some(text),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        told,
+        "start [part of secret SERVICE_TOKEN] end [part of secret SERVICE_TOKEN] short tok_Qm ok"
+    );
+}
