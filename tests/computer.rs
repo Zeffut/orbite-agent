@@ -313,6 +313,34 @@ mod browser {
         assert!(!home.path().join("profile.running").exists());
     }
 
+    #[test]
+    fn the_browser_is_not_given_what_orbite_was_started_with() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = home.path().join("profile");
+        let Some(mut computer) = started(&profile) else { return };
+        computer.open("about:blank").unwrap();
+
+        // Every program noted as started for this Computer, the screen aside.
+        let noted = std::fs::read_to_string(profile.with_extension("running")).unwrap();
+        let mut looked_at = 0;
+        for pid in noted.lines().filter_map(|line| line.parse::<u32>().ok()) {
+            let command = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+            if command.starts_with(b"Xvfb") {
+                continue;
+            }
+            let given = std::fs::read(format!("/proc/{pid}/environ")).unwrap();
+            let given = String::from_utf8_lossy(&given);
+            for variable in given.split('\0') {
+                let name = variable.split('=').next().unwrap_or_default();
+                // Settings and keys of Orbite, and the way to its Owner's session.
+                assert!(!name.starts_with("ORBITE_"), "the browser was given {name}");
+                assert_ne!(name, "DBUS_SESSION_BUS_ADDRESS");
+            }
+            looked_at += 1;
+        }
+        assert!(looked_at > 0, "no browser was noted: {noted}");
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_page_is_opened_typed_in_and_remembered_by_the_browser() {
         let site = MockServer::start().await;

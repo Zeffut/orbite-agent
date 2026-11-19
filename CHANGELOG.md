@@ -6,6 +6,7 @@ What changed in each version of Orbite, for the people who run it.
 
 Released on 2026-11-19.
 
+- The agent's browser is no longer handed what Orbite itself was started with (its `ORBITE_*` settings, where a key may be) nor the address of a desktop session's bus.
 - The agent's screen no longer starts over each time nothing is connected to it: a browser that was starting then could be cut off, a click or a picture lost.
 - Two runs of one extension at once no longer lose what the other kept: a run waits for the one before.
 - The installer: says when the machine's OpenSSL is too old to check the signature, keeps aside a service file you had changed (`orbite.service.replaced`) and points to drop-ins, and checks the fingerprint of Mozilla's key where `gpg` is there.

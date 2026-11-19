@@ -456,9 +456,18 @@ impl Computer {
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_CACHE_HOME")
             .env_remove("XDG_RUNTIME_DIR")
+            // Nor the way to a desktop session's other programs.
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        // What Orbite was started with is not the browser's to read: a key
+        // may be among it.
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("ORBITE_") {
+                starting.env_remove(name);
+            }
+        }
         if *chrome {
             starting
                 .arg(format!("--user-data-dir={}", self.profile.display()))
