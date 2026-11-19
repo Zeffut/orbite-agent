@@ -173,3 +173,40 @@ async fn what_the_provider_failed_on_is_not_held_against_the_model() {
     assert_eq!(verdict.not_tried.len(), 1);
     assert!(verdict.told(Language::English).contains("Not tried"));
 }
+
+#[test]
+fn every_entry_of_the_catalogue_is_a_dated_verdict() {
+    let catalogue: serde_json::Value =
+        serde_json::from_str(include_str!("../catalogue/models.json"))
+            .expect("the catalogue is JSON");
+    for (provider, models) in catalogue.as_object().unwrap() {
+        assert!(
+            orbite::known_providers().iter().any(|known| known.name == provider),
+            "{provider} is not a known Provider"
+        );
+        for (model, verdict) in models.as_object().unwrap() {
+            let verdict: orbite::Verdict = serde_json::from_value(verdict.clone())
+                .unwrap_or_else(|error| panic!("{provider} {model}: {error}"));
+            assert_eq!(
+                verdict.tried.len(),
+                10,
+                "{provider} {model} does not say when it was tried"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn what_was_tried_on_this_host_is_kept_and_comes_before_the_catalogue() {
+    let home = tempfile::tempdir().unwrap();
+    let from_catalogue =
+        orbite::rating(home.path(), "groq", "qwen/qwen3.8-27b").expect("it is in the catalogue");
+    assert_eq!(from_catalogue.tools, Tools::Reliable);
+    assert_eq!(orbite::rating(home.path(), "groq", "a-model-nobody-tried"), None);
+
+    let tried = try_out(&Model { acts: false, ..ABLE }).await.unwrap();
+    orbite::keep_rating(home.path(), "groq", "qwen/qwen3.8-27b", &tried).unwrap();
+
+    assert_eq!(orbite::rating(home.path(), "groq", "qwen/qwen3.8-27b"), Some(tried.clone()));
+    assert!(tried.in_brief(Language::English).contains("cannot act"));
+}

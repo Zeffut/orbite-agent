@@ -39,9 +39,7 @@ async fn provider() -> MockServer {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .and(authorised())
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "choices": [{ "message": { "role": "assistant", "content": "ok" } }]
-        })))
+        .respond_with(able_model)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -52,6 +50,51 @@ async fn provider() -> MockServer {
         .await;
     Mock::given(method("GET")).respond_with(ResponseTemplate::new(401)).mount(&server).await;
     server
+}
+
+/// Answers as a model that does all a tryout asks of it; "model-mute" is
+/// one that only ever talks.
+fn able_model(request: &wiremock::Request) -> ResponseTemplate {
+    let asked: Value = serde_json::from_slice(&request.body).unwrap();
+    let says = |text: &str| {
+        ResponseTemplate::new(200).set_body_json(
+            json!({ "choices": [{ "message": { "role": "assistant", "content": text } }] }),
+        )
+    };
+    let acts = |name: &str, input: Value| {
+        ResponseTemplate::new(200).set_body_json(json!({ "choices": [{ "message": {
+            "role": "assistant", "content": null,
+            "tool_calls": [{ "id": "call-1", "type": "function", "function": { "name": name, "arguments": input.to_string() } }],
+        } }] }))
+    };
+    let last = asked["messages"]
+        .as_array()
+        .and_then(|messages| messages.last())
+        .cloned()
+        .unwrap_or_default();
+    let said = last["content"].to_string();
+    if asked["model"] == "model-mute" {
+        return says("ok");
+    }
+    if last["role"] == "tool" {
+        return says("That makes 4443.");
+    }
+    if last["content"].is_array() {
+        return says("Red.");
+    }
+    if said.contains("1847") {
+        acts("add", json!({ "a": 1847, "b": 2596 }))
+    } else if said.contains("Ada") {
+        acts("set_reminder", json!({ "text": "call Ada", "at": { "day": "tuesday", "hour": 9 } }))
+    } else if said.contains("forum.example") {
+        acts("fill_form", json!({ "site": "forum.example", "fields": {} }))
+    } else if said.contains("Sam") {
+        acts("send_message", json!({ "to": "Sam", "text": "See you at 8" }))
+    } else if said.contains("at the very start") {
+        says("PELICAN-42")
+    } else {
+        says("ok")
+    }
 }
 
 fn message(update_id: i64, sender: i64, text: &str) -> Value {
@@ -315,4 +358,47 @@ async fn the_code_is_not_left_for_the_agent_to_take_for_a_message() {
         asked.iter().rfind(|request| request.url.path().ends_with("/getUpdates")).unwrap();
     let body: Value = serde_json::from_slice(&last_look.body).unwrap();
     assert_eq!(body["offset"], 102);
+}
+
+#[tokio::test]
+async fn a_model_nobody_rated_is_tried_out_and_the_owner_sees_what_to_expect() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
+
+    let shown = set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+
+    assert!(
+        shown.contains("Actions: reliable") && shown.contains("Images: it sees them"),
+        "{shown}"
+    );
+    // Kept, so that it is not tried again and shows in the settings.
+    let kept = orbite::rating(home.path(), "custom", "model-large").expect("the verdict is kept");
+    assert_eq!(kept.tools, orbite::Tools::Reliable);
+
+    // Setting it up again shows what is known beside the model, without trying it again.
+    let asked_before = provider.received_requests().await.unwrap().len();
+    let again = format!("custom\n{}\n1\n", api_key());
+    let shown = set_up(home.path(), &again, &provider, &telegram, Some(Step::Provider)).await;
+    assert!(shown.contains("1. model-large") && shown.contains("acts reliably"), "{shown}");
+    let asked_since = provider.received_requests().await.unwrap().len() - asked_before;
+    assert!(asked_since <= 4, "the model was tried out again: {asked_since} requests");
+}
+
+#[tokio::test]
+async fn a_model_that_cannot_act_is_chosen_only_after_the_owner_insists() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
+
+    // The mute model, declined at the warning; then the first one offered.
+    let typed = format!("1\ncustom\n{}\nmodel-mute\nno\n1\n{}\nNova\n", api_key(), bot_token());
+    let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
+    assert!(shown.contains("cannot act") && shown.contains("Strongly discouraged"), "{shown}");
+    assert_eq!(Config::load(home.path()).unwrap().provider.unwrap().model, "model-large");
+
+    // Nothing is blocked: the Owner who insists gets it.
+    let insisting = format!("custom\n{}\nmodel-mute\nyes\n", api_key());
+    set_up(home.path(), &insisting, &provider, &telegram, Some(Step::Provider)).await;
+    assert_eq!(Config::load(home.path()).unwrap().provider.unwrap().model, "model-mute");
 }

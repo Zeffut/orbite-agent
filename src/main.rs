@@ -384,6 +384,14 @@ async fn tryout() -> Result<(), Failure> {
         }
     })?;
     println!("{}", verdict.told(language));
+    // Kept, to be shown wherever this model is offered.
+    let chosen = Config::load(&home)?.provider;
+    let name = setting("ORBITE_PROVIDER").or(chosen.as_ref().map(|chosen| chosen.name.clone()));
+    let model =
+        env::args().nth(2).or(setting("ORBITE_MODEL")).or(chosen.map(|chosen| chosen.model));
+    if let (Some(name), Some(model)) = (name, model) {
+        orbite::keep_rating(&home, &name, &model, &verdict)?;
+    }
     Ok(())
 }
 

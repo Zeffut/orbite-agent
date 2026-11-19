@@ -238,7 +238,11 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         if !offered.is_empty() {
             self.say(language.say("\nModels:", "\nModèles :"))?;
             for (place, model) in offered.iter().enumerate() {
-                self.say(&format!("  {}. {model}", place + 1))?;
+                // What trying it out showed, when it was tried.
+                let known = crate::rating(&self.home, known.name, model)
+                    .map(|verdict| format!(": {}", verdict.in_brief(language)))
+                    .unwrap_or_default();
+                self.say(&format!("  {}. {model}{known}", place + 1))?;
             }
         }
         let model = loop {
@@ -249,13 +253,63 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                 .ok()
                 .and_then(|number| offered.get(number.wrapping_sub(1)).cloned())
                 .unwrap_or(answer);
-            match self.check(&known, key.as_deref().unwrap_or_default(), &model, &root).await {
-                Ok(()) => break model,
-                Err(error) => self.say(&format!(
+            if let Err(error) =
+                self.check(&known, key.as_deref().unwrap_or_default(), &model, &root).await
+            {
+                self.say(&format!(
                     "{} {}",
                     language.say("That did not work:", "Cela n'a pas fonctionné :"),
                     crate::agent::explain(&error, language)
-                ))?,
+                ))?;
+                continue;
+            }
+            // A model nobody rated is tried out on a few real tasks, so that
+            // its Owner knows what to expect before relying on it.
+            let verdict = match crate::rating(&self.home, known.name, &model) {
+                Some(verdict) => Some(verdict),
+                None => {
+                    self.say(language.say(
+                        "Trying this model out on a few real tasks (about a minute)...",
+                        "Essai de ce modèle sur quelques vraies tâches (environ une minute)...",
+                    ))?;
+                    let tried = connect(known.name, key.as_deref(), &model, Some(&root))
+                        .map_err(ProviderError::Failed);
+                    let tried = match tried {
+                        Ok(provider) => crate::try_out(&provider).await,
+                        Err(error) => Err(error),
+                    };
+                    match tried {
+                        Ok(verdict) => {
+                            let _ = crate::keep_rating(&self.home, known.name, &model, &verdict);
+                            Some(verdict)
+                        }
+                        // The model answers; it will be tried another time.
+                        Err(error) => {
+                            self.say(&format!(
+                                "{} {}",
+                                language.say(
+                                    "The tryout could not be finished:",
+                                    "L'essai n'a pas pu aller au bout :"
+                                ),
+                                crate::agent::explain(&error, language)
+                            ))?;
+                            None
+                        }
+                    }
+                }
+            };
+            let Some(verdict) = verdict else { break model };
+            self.say(&verdict.told(language))?;
+            if !verdict.strongly_discouraged() {
+                break model;
+            }
+            // Nothing is blocked, but this choice is made knowingly.
+            let insisted = self.ask(language.say(
+                "An Agent on this model can only talk. Choose it anyway? Type yes, or anything else to choose another > ",
+                "Un agent sur ce modèle ne peut que parler. Le choisir quand même ? Tapez oui, ou autre chose pour en choisir un autre > ",
+            ))?;
+            if matches!(insisted.trim().to_lowercase().as_str(), "yes" | "oui") {
+                break model;
             }
         };
 

@@ -12,7 +12,8 @@ use crate::agent::patiently;
 use crate::{ActionSpec, Language, Message, Provider, ProviderError, Reply, Request};
 
 /// How well a model uses the Actions it is offered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Tools {
     /// It asked for the right Actions with the right input, every time.
     Reliable,
@@ -23,8 +24,11 @@ pub enum Tools {
 }
 
 /// What trying a model out showed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Verdict {
+    /// The day it was tried, as YYYY-MM-DD.
+    #[serde(default)]
+    pub tried: String,
     pub tools: Tools,
     pub sees_images: bool,
     /// True when it gave back a detail from the start of a conversation of a
@@ -48,6 +52,36 @@ impl Verdict {
     /// True for a model an Agent cannot work with.
     pub fn strongly_discouraged(&self) -> bool {
         self.tools == Tools::None
+    }
+
+    /// The verdict on one line, to show beside the model's name.
+    pub fn in_brief(&self, language: Language) -> String {
+        let say = |english: &str, french: &str| language.say(english, french).to_owned();
+        let mut parts = vec![match self.tools {
+            Tools::Reliable => say("acts reliably", "agit de façon fiable"),
+            Tools::Unreliable => say("acts, with mistakes", "agit, avec des erreurs"),
+            Tools::None => say(
+                "⛔ cannot act: strongly discouraged",
+                "⛔ ne sait pas agir : fortement déconseillé",
+            ),
+        }];
+        parts.push(if self.sees_images {
+            say("sees images", "voit les images")
+        } else {
+            say("no images", "pas d'images")
+        });
+        if self.asked > 0 && self.declined > 0 {
+            parts.push(format!(
+                "{} {}/{}",
+                say(
+                    "strict: ordinary requests not done",
+                    "strict : demandes ordinaires non faites"
+                ),
+                self.declined,
+                self.asked
+            ));
+        }
+        format!("{} ({} {})", parts.join(", "), say("tried on", "essayé le"), self.tried)
     }
 
     /// The verdict in words, one line per thing tried.
@@ -339,6 +373,7 @@ pub async fn try_out(provider: &impl Provider) -> Result<Verdict, ProviderError>
     }
 
     Ok(Verdict {
+        tried: chrono::Local::now().format("%Y-%m-%d").to_string(),
         tools,
         sees_images,
         remembers,
@@ -386,4 +421,38 @@ fn red_square() -> Vec<u8> {
         file.extend_from_slice(&check.sum().to_be_bytes());
     }
     file
+}
+
+/// What trying models out showed, by Provider then model: the catalogue
+/// built into this release.
+const CATALOGUE: &str = include_str!("../catalogue/models.json");
+
+type Rated = std::collections::BTreeMap<String, std::collections::BTreeMap<String, Verdict>>;
+
+/// What is known of `model` at `provider`: what was tried on this Host
+/// (kept in `home`) first, then the catalogue.
+pub fn rating(home: &std::path::Path, provider: &str, model: &str) -> Option<Verdict> {
+    let known = |rated: Rated| rated.get(provider).and_then(|models| models.get(model)).cloned();
+    std::fs::read_to_string(home.join("tryouts.json"))
+        .ok()
+        .and_then(|kept| serde_json::from_str::<Rated>(&kept).ok())
+        .and_then(known)
+        .or_else(|| serde_json::from_str::<Rated>(CATALOGUE).ok().and_then(known))
+}
+
+/// Keeps in `home` what trying `model` at `provider` out showed.
+pub fn keep_rating(
+    home: &std::path::Path,
+    provider: &str,
+    model: &str,
+    verdict: &Verdict,
+) -> std::io::Result<()> {
+    let file = home.join("tryouts.json");
+    let mut rated: Rated = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|kept| serde_json::from_str(&kept).ok())
+        .unwrap_or_default();
+    rated.entry(provider.to_owned()).or_default().insert(model.to_owned(), verdict.clone());
+    std::fs::create_dir_all(home)?;
+    std::fs::write(file, serde_json::to_string_pretty(&rated)? + "\n")
 }
