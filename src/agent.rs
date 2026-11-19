@@ -635,7 +635,7 @@ impl<P: Provider + 'static> Agent<P> {
         for report in self.host.extensions.iter().flat_map(|extensions| extensions.take_reports()) {
             self.store.append(&Message::Notice(report))?;
         }
-        Ok(actions)
+        Ok(folded(actions))
     }
 
     /// Thinks and acts, turn after turn, until the model has nothing left to
@@ -763,6 +763,9 @@ impl<P: Provider + 'static> Agent<P> {
             // The Computer's screen after the last thing done on it.
             let mut screen: Option<PathBuf> = None;
             for action in &reply.actions {
+                // Asked through its family, an Action is carried out as itself.
+                let unfolded = unfolded(action);
+                let action = &unfolded;
                 let outcome = |text: String| Message::Outcome { action: action.id.clone(), text };
                 if let Some(why) = left_out {
                     self.store.append(&outcome(why.into()))?;
@@ -1063,10 +1066,8 @@ fn permission_specs() -> Vec<ActionSpec> {
 fn wake_ups_spec() -> ActionSpec {
     ActionSpec {
         name: "set_wake_ups".into(),
-        description: "Sets how often you, the agent, review by yourself what is pending with \
-                      your Owner when nothing else is going on (your own check-ins, not an \
-                      alarm or reminder for your Owner: use schedule_routine for those). 0 \
-                      turns them off."
+        description: "Sets how often you review by yourself what is pending (your own check-ins, \
+                      not a reminder for your Owner). 0 turns them off."
             .into(),
         input: serde_json::json!({
             "type": "object",
@@ -1080,8 +1081,7 @@ fn quiet_hours_spec() -> ActionSpec {
     ActionSpec {
         name: "set_quiet_hours".into(),
         description: "Sets the hours during which you do not write to your Owner on your own \
-                      initiative; what you would have said is delivered when they end. Give \
-                      both times empty to turn them off."
+                      initiative. Both empty turns them off."
             .into(),
         input: serde_json::json!({
             "type": "object",
@@ -2148,6 +2148,129 @@ impl Level {
 
 /// What an "always allow" answered for `action` covers: this very command,
 /// this file, this name. Nothing broader.
+/// A family of Actions: its name, what it is for, its members as (what to
+/// do, the Action), and the field its members take.
+type Family = (&'static str, &'static str, &'static [(&'static str, &'static str)], &'static str);
+
+/// The Actions seldom used, offered as a few families rather than one by
+/// one: each Action on offer is paid for on every turn. (family, what it is
+/// for, its members as (what to do, the Action), the field its members take).
+const FAMILIES: [Family; 4] = [
+    (
+        "manage_routine",
+        "Lists the routines with their schedule and last result, or pauses, resumes, removes (needs approval) or runs one now.",
+        &[
+            ("list", "list_routines"),
+            ("pause", "pause_routine"),
+            ("resume", "resume_routine"),
+            ("remove", "remove_routine"),
+            ("run", "run_routine"),
+        ],
+        "name",
+    ),
+    (
+        "manage_subagent",
+        "Lists the sub-agents now working, or stops one.",
+        &[("list", "list_subagents"), ("stop", "stop_subagent")],
+        "name",
+    ),
+    (
+        "always_allowed",
+        "Lists what your Owner allowed once and for all, or takes one back.",
+        &[("list", "list_always_allowed"), ("revoke", "revoke_always_allowed")],
+        "what",
+    ),
+    (
+        "manage_extension",
+        "Shows an Extension's script and state, to repair it, or removes one with all it kept (needs approval).",
+        &[("read", "read_extension"), ("remove", "remove_extension")],
+        "name",
+    ),
+];
+
+/// `actions` with the seldom used ones gathered into their families.
+fn folded(actions: Vec<ActionSpec>) -> Vec<ActionSpec> {
+    let mut offered = Vec::new();
+    let mut gathered: Vec<&str> = Vec::new();
+    for action in actions {
+        // The Computer is one thing done in several ways.
+        if action.name.starts_with("computer_") {
+            if action.name == "computer_open" {
+                offered.push(ActionSpec {
+                    name: "computer".into(),
+                    description: "Uses your own Computer: a real screen, 1280 by 800, with a browser, that \
+                        you see through pictures and act on with mouse and keyboard, for sites that need \
+                        signing in or a person's gestures. `do` is open (an address; your Owner is asked \
+                        first), look, click (at x, y of the last picture), type (a text where the cursor \
+                        is; {{NAME}} types a secret you never see, once your Owner agrees), key (such as \
+                        Return, Tab, ctrl+l) or scroll (notches, positive for down). Each answers with a \
+                        picture of the screen. Before anything that pays, sends or deletes, and when a \
+                        site asks for a code or a person, ask your Owner."
+                        .into(),
+                    input: serde_json::json!({
+                        "type": "object",
+                        "properties": {
+                            "do": { "type": "string", "enum": ["open", "look", "click", "type", "key", "scroll"] },
+                            "url": { "type": "string" },
+                            "purpose": { "type": "string", "description": "With open: what for, in a few words." },
+                            "x": { "type": "integer" },
+                            "y": { "type": "integer" },
+                            "double": { "type": "boolean" },
+                            "text": { "type": "string" },
+                            "keys": { "type": "string" },
+                            "notches": { "type": "integer" },
+                        },
+                        "required": ["do"],
+                    }),
+                });
+            }
+            continue;
+        }
+        let family = FAMILIES
+            .iter()
+            .find(|(_, _, members, _)| members.iter().any(|(_, member)| *member == action.name));
+        let Some((family, purpose, members, field)) = family else {
+            offered.push(action);
+            continue;
+        };
+        if gathered.contains(family) {
+            continue;
+        }
+        gathered.push(family);
+        let ways: Vec<&str> = members.iter().map(|(way, _)| *way).collect();
+        offered.push(ActionSpec {
+            name: (*family).into(),
+            description: (*purpose).into(),
+            input: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "do": { "type": "string", "enum": ways },
+                    *field: { "type": "string", "description": "Which one, by its name or a few of its words." },
+                },
+                "required": ["do"],
+            }),
+        });
+    }
+    offered
+}
+
+/// The Action a request made through a family stands for.
+fn unfolded(action: &ActionRequest) -> ActionRequest {
+    if action.name == "computer"
+        && let Some(way) = action.input["do"].as_str()
+    {
+        return ActionRequest { name: format!("computer_{way}"), ..action.clone() };
+    }
+    let member = FAMILIES
+        .iter()
+        .find(|(family, ..)| *family == action.name)
+        .and_then(|(_, _, members, _)| members.iter().find(|(way, _)| action.input["do"] == *way));
+    match member {
+        Some((_, member)) => ActionRequest { name: (*member).into(), ..action.clone() },
+        None => action.clone(),
+    }
+}
+
 fn covered_by_always(action: &ActionRequest) -> String {
     // On the Computer, what is allowed once and for all is a site.
     if action.name == "computer_open" {

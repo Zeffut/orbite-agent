@@ -102,8 +102,9 @@ async fn the_agent_goes_to_a_site_once_allowed_acts_there_and_the_model_sees_the
     let provider = ScriptedProvider::default();
     provider
         .then_acts([("computer_open", json!({ "url": address, "purpose": "fill in the form" }))])
-        .then_acts([("computer_click", json!({ "x": 190, "y": 147 }))])
-        .then_acts([("computer_type", json!({ "text": "tulip-42" }))])
+        // As the model is offered it: one Action, done in several ways.
+        .then_acts([("computer", json!({ "do": "click", "x": 190, "y": 147 }))])
+        .then_acts([("computer", json!({ "do": "type", "text": "tulip-42" }))])
         .then(Ok("The form is filled in.".into()));
     let mut owner = agent_in(home.path(), &provider);
 
@@ -116,6 +117,11 @@ async fn the_agent_goes_to_a_site_once_allowed_acts_there_and_the_model_sees_the
     owner.allows();
     assert_eq!(heard(&mut owner).await, "The form is filled in.");
 
+    let offered = provider.last_offered();
+    assert!(
+        offered.contains(&"computer".to_owned()) && !offered.contains(&"computer_click".to_owned()),
+        "{offered:?}"
+    );
     // Clicking and typing on the site that was allowed asked nothing more.
     assert!(owner.was_asked_nothing());
     // The model was shown the screen as it was after typing: the page turned green.

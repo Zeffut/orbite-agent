@@ -33,6 +33,26 @@ const NO_SKILLS: &str = "There is nowhere to keep skills.";
 
 const NO_EXTENSIONS: &str = "There is nowhere to keep Extensions.";
 
+/// The rules for writing an Extension, given to the model when it is about
+/// to write one rather than on every turn.
+const WRITING_AN_EXTENSION: &str = "How to write an Extension. Call create_extension again with: name, \
+description (one sentence for your Owner), hosts (the hosts it reaches, by name, such as api.example.com; \
+none when it reaches nothing), secrets (the names of the secrets it sends them; none when it needs none) \
+and script, the whole JavaScript program.\n\
+The script defines two global functions.\n\
+- describe() returns a list of { name, description, parameters }: parameters maps each parameter's name \
+(ending in ? when it may be left out) to its description. Add asks: true to an action that changes \
+something outside.\n\
+- run(action, input) does the action called `action` and returns its result, a text or an object. It may \
+be async, and throws an Error to say what went wrong.\n\
+It has plain JavaScript and what Orbite lends, nothing else: no fetch, require, file or timer.\n\
+- store.get(key), store.set(key, value), store.remove(key), store.keys(): data it keeps.\n\
+- http.get(url, { headers }), http.post(url, body, { headers }), also put, patch and delete: they return \
+{ status, body, json() } and reach only the hosts listed.\n\
+- To send a secret (see list_secrets), write {{NAME}} in an address, a header or a body: Orbite fills it in \
+on the way, and the script never holds its value.\n\
+Its Actions are then called name_action. Try each one before telling your Owner it works.";
+
 const NO_COMPUTER: &str = "You have no Computer on this machine.";
 
 /// What the gate decided about an Action.
@@ -95,11 +115,13 @@ struct SaveSkill {
 #[derive(Deserialize)]
 struct CreateExtension {
     name: String,
+    #[serde(default)]
     description: String,
     #[serde(default)]
     hosts: Vec<String>,
     #[serde(default)]
     secrets: Vec<String>,
+    #[serde(default)]
     script: String,
 }
 
@@ -263,10 +285,8 @@ impl Host {
         if self.secrets.is_some() {
             specs.push(spec(
                 "list_secrets",
-                "Lists the names of the secrets your Owner has entered (keys, tokens, passwords). \
-                 You never see their values: a command uses one by naming it as an environment \
-                 variable, such as $GITHUB_TOKEN, and its value is hidden from what you are \
-                 shown. Your Owner enters a secret on the machine with `orbite secret set NAME`.",
+                "Lists the names of the secrets your Owner entered on the machine. You never see \
+                 their values: a command uses one as $NAME.",
                 json!({}),
             ));
         }
@@ -301,13 +321,10 @@ impl Host {
                 |description: &str| json!({ "type": "integer", "description": description });
             specs.push(spec(
                 "computer_open",
-                "Opens an address in the browser of your own Computer: a real desktop with a screen, \
-                 1280 by 800, that you see through pictures and act on with a mouse and a keyboard, as \
-                 a person would. Use it for what reading a page cannot do: sites that need signing in \
-                 or a person's gestures. Your Owner is asked before you go to a site. Every computer \
-                 Action answers with a picture of the screen as it then is. Before anything that \
-                 pays, sends or deletes, stop and ask your Owner in words. When a site asks for a \
-                 verification code or to prove you are a person, ask your Owner.",
+                "Opens an address in the browser of your own Computer: a real screen, 1280 by 800, that \
+                 you see through pictures and act on with mouse and keyboard, for sites that need \
+                 signing in or a person's gestures. Your Owner is asked first. Before anything that \
+                 pays, sends or deletes, and when a site asks for a code or a person, ask your Owner.",
                 json!({
                     "url": text("The address, starting with https://."),
                     "purpose": text("What you are going there to do, in a few words, for your Owner."),
@@ -353,31 +370,20 @@ impl Host {
             specs.push(ActionSpec {
                 name: "create_extension".into(),
                 description: "Writes yourself an Extension: a small JavaScript program that adds Actions \
-                    you can then use, such as a connector to a web service your Owner uses often. Also \
-                    replaces one of the same name, to repair or improve it; what it kept stays. Your \
-                    Owner is always shown the script and asked first. The script defines two global \
-                    functions. describe() returns a list of { name, description, parameters }, where \
-                    parameters maps each parameter's name (ending in ? when it may be left out) to \
-                    its description. run(action, input) does the Action called `action` and returns \
-                    its result as a text or an object; it may be async and may throw an Error to \
-                    say what went wrong. It can only use plain JavaScript and what Orbite lends: \
-                    store.get(key), store.set(key, value), store.remove(key), store.keys() for data \
-                    it keeps, and http.get(url, { headers }), http.post(url, body, { headers }), \
-                    also put, patch and delete, which return { status, body, json() } and only \
-                    reach the hosts listed. To send a secret (see list_secrets), it writes {{NAME}} in an \
-                    address, a header or a body: Orbite fills it in on the way, and the script never \
-                    holds its value. There is no fetch, require, file or timer."
+                    you can then use, such as a connector to a service your Owner uses often; or \
+                    replaces one of the same name, to repair it. Your Owner is shown it and asked \
+                    first. Call it with only `name` to be given the rules for writing one."
                     .into(),
                 input: json!({
                     "type": "object",
                     "properties": {
-                        "name": text("A few lowercase words joined by dashes, such as \"weather\". Its Actions are called name_action."),
-                        "description": text("One sentence for your Owner: what it is for."),
-                        "hosts": { "type": "array", "items": { "type": "string" }, "description": "The hosts it needs to reach, by name, such as \"api.example.com\"; none when it reaches nothing." },
-                        "secrets": { "type": "array", "items": { "type": "string" }, "description": "The names of the secrets it sends to those hosts; none when it needs none." },
-                        "script": text("The whole JavaScript program."),
+                        "name": text("A few lowercase words joined by dashes, such as \"weather\"."),
+                        "description": { "type": "string" },
+                        "hosts": { "type": "array", "items": { "type": "string" } },
+                        "secrets": { "type": "array", "items": { "type": "string" } },
+                        "script": { "type": "string" },
                     },
-                    "required": ["name", "description", "hosts", "script"],
+                    "required": ["name"],
                 }),
             });
             specs.push(spec(
@@ -599,6 +605,8 @@ impl Host {
                     ..Approval::default()
                 }),
             },
+            // Asked for the rules, not yet for an Extension.
+            Action::CreateExtension(wanted) if wanted.script.trim().is_empty() => Review::Free,
             Action::CreateExtension(wanted) => {
                 let Some(extensions) = &self.extensions else {
                     return Review::Refuse(NO_EXTENSIONS.into());
@@ -799,6 +807,9 @@ impl Host {
                     Err(error) => format!("Could not remove the skill: {error}."),
                 },
             },
+            Ok(Action::CreateExtension(wanted)) if wanted.script.trim().is_empty() => {
+                WRITING_AN_EXTENSION.into()
+            }
             Ok(Action::CreateExtension(wanted)) => match &self.extensions {
                 None => NO_EXTENSIONS.into(),
                 Some(extensions) => {

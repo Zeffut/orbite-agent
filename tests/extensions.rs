@@ -551,3 +551,35 @@ async fn a_secret_that_was_not_granted_is_not_sent() {
     assert!(told.contains("WEATHER_KEY") && told.contains("not granted"), "{told}");
     assert!(server.received_requests().await.unwrap().is_empty(), "a request went out anyway");
 }
+
+#[tokio::test]
+async fn actions_seldom_used_are_offered_as_a_family_and_carried_out_as_themselves() {
+    let extensions = tempfile::tempdir().unwrap();
+    install(extensions.path(), "fetcher", json!({ "description": "Fetches pages." }), FETCHER);
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("manage_extension", json!({ "do": "read", "name": "fetcher" }))])
+        .then_acts([("manage_extension", json!({ "do": "remove", "name": "fetcher" }))])
+        .then(Ok("Removed.".into()));
+    let mut owner = agent_extended_in(extensions.path(), &provider);
+
+    owner.says("Show me the fetcher, then remove it.");
+    // Removing asks, as it does when asked for by its own name.
+    let asked = owner.is_asked().await;
+    assert!(asked.irreversible && asked.detail.contains("fetcher"), "{asked:?}");
+    owner.allows();
+    assert_eq!(owner.hears().await, "Removed.");
+
+    assert!(!extensions.path().join("fetcher").exists());
+    let offered = provider.last_offered();
+    assert!(
+        offered.contains(&"manage_extension".to_owned())
+            && !offered.contains(&"read_extension".to_owned()),
+        "{offered:?}"
+    );
+    let read = provider.last_asked().into_iter().find_map(|message| match message {
+        Message::Outcome { text, .. } if text.contains("http.get(input.url)") => Some(text),
+        _ => None,
+    });
+    assert!(read.is_some(), "the script was not shown");
+}
