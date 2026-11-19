@@ -92,6 +92,7 @@ Everything else is said in plain words, but a few commands are always there, als
 | `updates` | `on` or `off`: automatic updates |
 | `language` | `en` or `fr` |
 | `model` | the model, by its name at your provider |
+| `voice` | what writes voice messages down: `provider`, `off`, or a local way set up on the machine |
 
 Changing the language or the model makes Orbite restart, which takes a few seconds.
 
