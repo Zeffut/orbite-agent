@@ -9,6 +9,7 @@ mod both;
 mod catalogue;
 mod channel;
 mod config;
+mod extensions;
 mod language;
 mod memory;
 mod openai_compatible;

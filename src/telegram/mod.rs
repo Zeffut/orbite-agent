@@ -301,6 +301,11 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
             "Start the conversation afresh (memory is kept)",
             "Repartir de zéro dans la discussion (la mémoire est gardée)",
         ) },
+        { "command": "usage", "description": bot.language.say("What the agent has used", "Ce que l'agent a consommé") },
+        { "command": "extensions", "description": bot.language.say(
+            "List the extensions, turn one off or remove it",
+            "Lister les extensions, en désactiver ou en supprimer une",
+        ) },
     ] });
     let _ = bot.call::<Value>("setMyCommands", menu).await;
     // Identifier of the next update to ask Telegram for.

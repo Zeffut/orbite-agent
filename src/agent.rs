@@ -9,6 +9,7 @@ use tokio::sync::mpsc;
 use crate::Language;
 use crate::actions::{Host, Review};
 use crate::attachments::{attachments, is_showable_image};
+use crate::extensions::{Extensions, Unremovable};
 use crate::memory::Memory;
 use crate::routines::{self, Routine};
 use crate::secrets::Secrets;
@@ -188,6 +189,7 @@ impl<P: Provider + 'static> Agent<P> {
             busy_wait: Duration::from_secs(1),
             secrets: None,
             language: Language::English,
+            extensions: None,
         };
         let (subagents, reports) = Subagents::new();
         Self {
@@ -234,6 +236,21 @@ impl<P: Provider + 'static> Agent<P> {
     /// How often the Agent looks at the time for Routines that are due.
     pub fn checking_time_every(mut self, pace: Duration) -> Self {
         self.time_check = pace;
+        self
+    }
+
+    /// The folder where the Extensions of this installation are kept, one
+    /// folder each, with what each keeps.
+    pub fn extending_in(mut self, folder: impl Into<PathBuf>) -> Self {
+        self.host_mut().extensions = Some(Arc::new(Extensions::kept_in(folder.into())));
+        self
+    }
+
+    /// An Extension still running after `limit` is stopped and turned off.
+    pub fn stopping_extensions_after(mut self, limit: Duration) -> Self {
+        if let Some(extensions) = self.host_mut().extensions.as_mut().and_then(Arc::get_mut) {
+            extensions.time_limit = limit;
+        }
         self
     }
 
@@ -384,6 +401,12 @@ impl<P: Provider + 'static> Agent<P> {
                 Some(true) => continue,
                 Some(false) => return,
                 None => {}
+            }
+            if let Some(asked) = text.trim().strip_prefix("/extensions") {
+                if channel.send(&self.extensions(asked)).await.is_err() {
+                    return;
+                }
+                continue;
             }
             if text.trim() == "/usage" {
                 if channel.send(&self.usage()).await.is_err() {
@@ -536,6 +559,11 @@ impl<P: Provider + 'static> Agent<P> {
         actions.push(quiet_hours_spec());
         actions.push(wake_ups_spec());
         actions.extend(permission_specs());
+        actions.extend(self.host.extension_specs(&actions));
+        // An Extension that could not say what it adds was just turned off.
+        for report in self.host.extensions.iter().flat_map(|extensions| extensions.take_reports()) {
+            self.store.append(&Message::Notice(report))?;
+        }
         for _ in 0..STEPS_BEFORE_STOPPING {
             self.fit(channel, &actions).await?;
             let mut conversation = self.store.conversation()?;
@@ -1225,6 +1253,75 @@ impl<P: Provider + 'static> Agent<P> {
             }
         }
         self.store.append(&Message::Notice(format!("{} {}", report.who, report.ended)))
+    }
+
+    /// Lists the Extensions, or turns one on or off, or removes one, as the
+    /// Owner asked after /extensions; the text is the answer.
+    fn extensions(&self, asked: &str) -> String {
+        let say = |english: &str, french: &str| self.language.say(english, french).to_owned();
+        let Some(extensions) = &self.host.extensions else {
+            return say(
+                "There is nowhere to keep extensions.",
+                "Il n'y a nulle part où garder des extensions.",
+            );
+        };
+        let words: Vec<&str> = asked.split_whitespace().collect();
+        let unknown = |name: &str| {
+            format!(
+                "{} {name}.",
+                say("There is no extension called", "Il n'y a pas d'extension appelée")
+            )
+        };
+        match words[..] {
+            [] => {
+                let mut listed = say("Extensions:", "Extensions :");
+                for extension in extensions.all() {
+                    let state = match &extension.off {
+                        None => "🟢".to_owned(),
+                        Some(reason) if reason == crate::extensions::BY_THE_OWNER => {
+                            "⚪️".to_owned()
+                        }
+                        Some(reason) => format!("🔴 ({})", clip(reason, 120)),
+                    };
+                    listed.push_str(&format!(
+                        "\n{state} **{}**: {}",
+                        extension.name, extension.description
+                    ));
+                }
+                listed.push_str(&say(
+                    "\n\n/extensions off NAME, /extensions on NAME, /extensions remove NAME",
+                    "\n\n/extensions off NOM, /extensions on NOM, /extensions remove NOM",
+                ));
+                listed
+            }
+            [choice @ ("on" | "off"), name] => {
+                if !extensions.turn(name, choice == "on") {
+                    return unknown(name);
+                }
+                match choice {
+                    "on" => format!("{name}: {}", say("turned on.", "activée.")),
+                    _ => format!("{name}: {}", say("turned off.", "désactivée.")),
+                }
+            }
+            ["remove", name] => match extensions.remove(name) {
+                Ok(()) => format!(
+                    "{name}: {}",
+                    say("removed, with what it kept.", "supprimée, avec ce qu'elle gardait.")
+                ),
+                Err(Unremovable::Unknown) => unknown(name),
+                Err(Unremovable::Official) => format!(
+                    "{name} {} /extensions off {name}",
+                    say(
+                        "comes with Orbite and cannot be removed. To turn it off:",
+                        "fait partie d'Orbite et ne peut pas être supprimée. Pour la désactiver :"
+                    )
+                ),
+            },
+            _ => say(
+                "Say /extensions, /extensions off NAME, /extensions on NAME or /extensions remove NAME.",
+                "Écrivez /extensions, /extensions off NOM, /extensions on NOM ou /extensions remove NOM.",
+            ),
+        }
     }
 
     /// Takes what Orbite left for the Owner, oldest first.

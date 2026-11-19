@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -12,6 +13,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::Language;
+use crate::extensions::Extensions;
 use crate::memory::Memory;
 use crate::secrets::Secrets;
 use crate::skills::{Skill, Skills};
@@ -54,6 +56,8 @@ pub(crate) struct Host {
     pub(crate) secrets: Option<Secrets>,
     /// The language Approvals are worded in.
     pub(crate) language: Language,
+    /// The Extensions of this installation, when it has somewhere for them.
+    pub(crate) extensions: Option<Arc<Extensions>>,
 }
 
 #[derive(Deserialize)]
@@ -238,8 +242,28 @@ impl Host {
         specs
     }
 
+    /// The Actions the Extensions add, as told to the model, without any
+    /// that would take the name of one in `taken`: an Extension never
+    /// stands in for an Action of Orbite itself.
+    pub(crate) fn extension_specs(&self, taken: &[ActionSpec]) -> Vec<ActionSpec> {
+        let mut specs =
+            self.extensions.as_ref().map(|extensions| extensions.specs()).unwrap_or_default();
+        specs.retain(|spec| taken.iter().all(|other| other.name != spec.name));
+        specs
+    }
+
+    /// The Extensions, when `request` is not for an Action of Orbite itself.
+    fn extensions_for(&self, request: &ActionRequest) -> Option<&Arc<Extensions>> {
+        self.extensions.as_ref().filter(|_| !is_own(&request.name))
+    }
+
     /// The gate every Action passes through before it is carried out.
     pub(crate) fn review(&self, request: &ActionRequest) -> Review {
+        if let Some(asked) =
+            self.extensions_for(request).and_then(|extensions| extensions.review(request))
+        {
+            return asked.map_or(Review::Free, Review::Ask);
+        }
         let action = match understand(request) {
             Ok(action) => action,
             Err(problem) => return Review::Refuse(problem),
@@ -394,6 +418,11 @@ impl Host {
     }
 
     async fn do_it(&self, request: &ActionRequest) -> String {
+        if let Some(extensions) = self.extensions_for(request)
+            && let Some(outcome) = extensions.carry_out(request).await
+        {
+            return outcome;
+        }
         match understand(request) {
             Err(problem) => problem,
             Ok(Action::RunCommand(run)) => self.run(&run.command).await,
@@ -639,6 +668,15 @@ impl Host {
     }
 }
 
+/// True for the name of an Action of Orbite itself.
+fn is_own(name: &str) -> bool {
+    let named =
+        ActionRequest { id: String::new(), name: name.to_owned(), input: serde_json::Value::Null };
+    !understand(&named).is_err_and(|problem| problem.starts_with(NO_SUCH_ACTION))
+}
+
+const NO_SUCH_ACTION: &str = "There is no Action called";
+
 /// The Action a request stands for, or what to tell the model is wrong.
 fn understand(request: &ActionRequest) -> Result<Action, String> {
     fn input<T: DeserializeOwned>(request: &ActionRequest) -> Result<T, String> {
@@ -658,7 +696,7 @@ fn understand(request: &ActionRequest) -> Result<Action, String> {
         "list_secrets" => Ok(Action::ListSecrets),
         "save_skill" => input(request).map(Action::SaveSkill),
         "remove_skill" => input(request).map(Action::RemoveSkill),
-        other => Err(format!("There is no Action called {other}.")),
+        other => Err(format!("{NO_SUCH_ACTION} {other}.")),
     }
 }
 
