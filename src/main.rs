@@ -279,10 +279,16 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
     // Providers that offers it and has a key.
     // Unless the Owner chose otherwise: the machine itself, or nothing.
     let own_way = config.transcription.clone().filter(|chosen| chosen.engine != "provider");
-    if let Some(chosen) = &own_way
-        && let Some(transcriber) = orbite::chosen_transcriber(&home, chosen)?
-    {
-        agent = agent.transcribing_with(transcriber);
+    if let Some(chosen) = &own_way {
+        match orbite::chosen_transcriber(&home, chosen) {
+            Ok(Some(transcriber)) => agent = agent.transcribing_with(transcriber),
+            Ok(None) => {}
+            // The Agent starts all the same, and says why it cannot hear.
+            Err(why) => {
+                eprintln!("{why}");
+                agent = agent.transcribing_with(orbite::Transcriber::unable(why));
+            }
+        }
     }
     for listening in config.providers().into_iter().filter(|_| own_way.is_none()) {
         let Some(model) = orbite::transcription_model(&listening.name) else { continue };

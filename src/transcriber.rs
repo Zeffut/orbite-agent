@@ -32,6 +32,8 @@ enum Engine {
     /// A command of the Owner's, `{file}` standing for the recording; what
     /// it prints is what was said.
     Command(String),
+    /// What was chosen cannot work, for this reason.
+    Unable(String),
 }
 
 /// The media type of `file` when it is a recording, by its extension.
@@ -137,6 +139,12 @@ impl Transcriber {
         Self { engine: Engine::Command(command.into()) }
     }
 
+    /// What was chosen to write speech down cannot work: every recording
+    /// is answered with `why`, for the Owner to be told.
+    pub fn unable(why: impl Into<String>) -> Self {
+        Self { engine: Engine::Unable(why.into()) }
+    }
+
     /// What is said in `file`. The text of a failure is for the model to
     /// pass on to the Owner.
     pub async fn written(&self, file: &Path) -> Result<String, String> {
@@ -147,6 +155,7 @@ impl Transcriber {
             Engine::WhisperCpp { program, model, converter, language } => {
                 Self::heard_by_whisper(program, model, converter.as_deref(), language, file).await?
             }
+            Engine::Unable(why) => return Err(why.clone()),
             Engine::Command(command) => {
                 let filled = command.replace("{file}", &quoted(&file.to_string_lossy()));
                 let mut shell = tokio::process::Command::new("sh");

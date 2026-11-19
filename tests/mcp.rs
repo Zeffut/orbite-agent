@@ -559,3 +559,42 @@ async fn a_tool_that_does_not_exist_on_such_a_server_is_said_with_those_that_do(
     let told = outcome(&provider);
     assert!(told.contains("tool-99") && told.contains("tool-0"), "{told}");
 }
+
+#[tokio::test]
+async fn allowing_one_tool_of_a_server_for_always_does_not_allow_its_other_tools() {
+    let server = a_server_with_many_tools().await;
+    let home = home_with(json!({ "big": { "url": server.uri() } }));
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("big", json!({ "tool": "tool-3", "input": { "colour": "red" } }))])
+        .then_acts([("big", json!({ "tool": "tool-3", "input": { "colour": "blue" } }))])
+        .then_acts([("big", json!({ "tool": "tool-7", "input": { "colour": "black" } }))])
+        .then(Ok("Painted.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Paint.");
+    owner.is_asked().await;
+    owner.allows_always();
+    // The same tool again asks nothing; another tool of the same server does.
+    let approval = owner.is_asked().await;
+    assert!(approval.detail.contains("black"), "the second call of tool-3 asked: {approval:?}");
+    owner.denies();
+    owner.hears().await;
+}
+
+#[tokio::test]
+async fn a_server_named_like_the_agents_own_computer_does_not_take_its_place() {
+    let server = a_server_with_many_tools().await;
+    let home = home_with(json!({ "computer": { "url": server.uri() } }));
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("mcp_computer", json!({ "tool": "tool-1" }))]).then(Ok("Looked.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("What does tool one take?");
+    assert_eq!(owner.hears().await, "Looked.");
+
+    let offered = provider.last_offered();
+    assert!(offered.contains(&"mcp_computer".to_owned()), "{offered:?}");
+    assert_eq!(offered.iter().filter(|name| *name == "computer").count(), 0, "{offered:?}");
+    assert!(outcome(&provider).contains("Paints thing 1"), "{}", outcome(&provider));
+}

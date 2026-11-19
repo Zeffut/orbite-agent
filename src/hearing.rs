@@ -209,7 +209,8 @@ pub fn chosen(home: &Path, chosen: &Transcription) -> Result<Option<Transcriber>
         "whisper.cpp" => {
             let program = chosen.program.clone().unwrap_or_else(|| "whisper-cli".into());
             let program = found(&program).ok_or(format!(
-                "whisper.cpp is chosen to write speech down, but {program} is not on this machine."
+                "whisper.cpp is chosen to write speech down, but {program} is not on this machine: \
+                 install it, or choose another way with `orbite transcription`"
             ))?;
             let model = model_file(home, chosen.model.as_deref().unwrap_or("small"));
             let mut transcriber = Transcriber::whisper_cpp(program, model);
@@ -291,7 +292,11 @@ async fn fetch(home: &Path, model: &Model, shown: &mut impl Write) -> Result<Pat
         match response.chunk().await {
             Ok(Some(piece)) => {
                 sum.update(&piece);
-                written.write_all(&piece).map_err(|error| wrong(&error))?;
+                if let Err(error) = written.write_all(&piece) {
+                    // Nothing half-fetched is left on a disk that is full.
+                    let _ = std::fs::remove_file(&arriving);
+                    return Err(wrong(&error));
+                }
             }
             Ok(None) => break,
             Err(error) => {
@@ -419,7 +424,8 @@ pub async fn transcription(
                 if !Path::new(name).is_file() {
                     return Err(format!("There is no model file at {name}. Nothing was changed."));
                 }
-                PathBuf::from(name)
+                // Kept whole: Orbite as a service does not start in this folder.
+                std::fs::canonicalize(name).unwrap_or_else(|_| PathBuf::from(name))
             } else {
                 let model = Model::named(name).ok_or_else(|| {
                     let names: Vec<&str> = MODELS.iter().map(|model| model.name).collect();
@@ -462,7 +468,11 @@ pub async fn transcription(
             }
             choice = Transcription {
                 engine: "whisper.cpp".into(),
-                model: Some(name.to_owned()),
+                model: Some(if name.contains('/') {
+                    file.to_string_lossy().into_owned()
+                } else {
+                    name.to_owned()
+                }),
                 language: choice.language,
                 ..Default::default()
             };

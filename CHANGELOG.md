@@ -2,6 +2,17 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.3.13
+
+Released on 2026-11-19. From the same independent read as 0.3.12.
+
+- **Allowing one tool of an MCP server for always no longer allows all its tools.** Since 0.3.3 a server with many tools is one action, and "always" covered the whole server: allowing a tool that comments also allowed the one that deletes.
+- **What a recording says is not taken for your orders.** A voice or video message is told to the model as what a recording says, which may be someone else speaking; a message you pass on from somebody else is said to be theirs; nothing in a transcript, a place's name or a contact's can read as a line of Orbite's own.
+- An agent whose local transcription was removed from the machine still starts, and says why it cannot hear, instead of not starting at all.
+- A voice message sent while the agent is at work is written down too; the agent is seen at work while it writes one down.
+- A server or an extension whose actions begin with `computer_` is offered again, and a server called `computer` no longer takes the place of the agent's own.
+- Smaller: a model named by a relative path is kept by its full path; a download cut short by a full disk leaves nothing behind; what sub-agents used is counted when Orbite stops.
+
 ## 0.3.12
 
 Released on 2026-11-19. **Security: update from 0.3.8 to 0.3.11.**

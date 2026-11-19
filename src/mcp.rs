@@ -685,7 +685,7 @@ impl Mcp {
             // A server that says a great deal about its tools is offered as
             // one Action: said in full on every turn, its tools would cost
             // more than everything else the model is told.
-            let as_one = plain(&server.name);
+            let as_one = as_one_action(&server.name);
             if weighs_much(tools) && !taken.iter().chain(&specs).any(|other| other.name == as_one) {
                 let listed: Vec<String> = tools
                     .iter()
@@ -742,11 +742,13 @@ impl Mcp {
             if let Some(tool) = tools.iter().find(|tool| tool.action == request.name) {
                 return Some(Ok((server, tool.clone(), Some(request.input.clone()))));
             }
-            if weighs_much(tools) && request.name == plain(&server.name) {
+            if weighs_much(tools) && request.name == as_one_action(&server.name) {
                 let wanted = request.input["tool"].as_str().unwrap_or_default();
+                // By its very name first: two tools may differ by a sign only.
                 let Some(tool) = tools
                     .iter()
-                    .find(|tool| tool.name == wanted || plain(&tool.name) == plain(wanted))
+                    .find(|tool| tool.name == wanted)
+                    .or_else(|| tools.iter().find(|tool| plain(&tool.name) == plain(wanted)))
                 else {
                     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
                     return Some(Err(format!(
@@ -755,7 +757,14 @@ impl Mcp {
                         names.join(", ")
                     )));
                 };
-                let given = request.input.get("input").filter(|given| !given.is_null()).cloned();
+                // Some models write the input as text: read as what it says.
+                let given =
+                    request.input.get("input").filter(|given| !given.is_null()).map(|given| {
+                        match given.as_str().map(serde_json::from_str::<Value>) {
+                            Some(Ok(read)) => read,
+                            _ => given.clone(),
+                        }
+                    });
                 return Some(Ok((server, tool.clone(), given)));
             }
         }
@@ -1151,6 +1160,15 @@ fn plain(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
         .collect()
+}
+
+/// The name of the one Action a server called `name` is offered as: the
+/// server's, unless the Agent has an Action of its own called that.
+fn as_one_action(name: &str) -> String {
+    const OWN: [&str; 5] =
+        ["computer", "manage_routine", "manage_subagent", "always_allowed", "manage_extension"];
+    let plain = plain(name);
+    if OWN.contains(&plain.as_str()) { format!("mcp_{plain}") } else { plain }
 }
 
 /// True when saying all of `tools` to the model on every turn would cost

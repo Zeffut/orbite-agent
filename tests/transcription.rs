@@ -351,3 +351,60 @@ async fn the_real_whisper_cpp_fetches_its_published_model_and_writes_a_recording
     let read = String::from_utf8_lossy(&asked[0].body).to_lowercase();
     assert!(read.contains(&word.to_lowercase()), "the model read: {read}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_whose_local_engine_is_gone_still_starts_and_says_why_it_cannot_hear() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let thinking = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{ "message": { "role": "assistant", "content": "I cannot hear it." } }]
+        })))
+        .mount(&thinking)
+        .await;
+    let home = tempfile::tempdir().unwrap();
+    // whisper.cpp was chosen, then removed from the machine.
+    orbite::Config {
+        provider: Some(orbite::ProviderChoice {
+            name: "ollama".into(),
+            model: "some-model".into(),
+            address: Some(thinking.uri()),
+            ..Default::default()
+        }),
+        transcription: Some(orbite::Transcription {
+            engine: "whisper.cpp".into(),
+            model: Some("small".into()),
+            ..Default::default()
+        }),
+        ..orbite::Config::default()
+    }
+    .save(home.path())
+    .unwrap();
+    let voice = home.path().join("voice-1.ogg");
+    std::fs::write(&voice, b"OggS").unwrap();
+    let folder = home.path().to_owned();
+    let said = format!("{}\n", orbite::attached(&voice));
+
+    let chatted = tokio::task::spawn_blocking(move || {
+        let mut chat = Command::new(env!("CARGO_BIN_EXE_orbite"))
+            .arg("chat")
+            .env("ORBITE_HOME", &folder)
+            .env("PATH", format!("{}:/usr/bin:/bin", folder.join("bin").display()))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        chat.stdin.take().unwrap().write_all(said.as_bytes()).unwrap();
+        chat.wait_with_output().unwrap()
+    })
+    .await
+    .unwrap();
+
+    assert!(shown(&chatted).contains("I cannot hear it."), "{}", shown(&chatted));
+    let asked = thinking.received_requests().await.unwrap();
+    let read = String::from_utf8_lossy(&asked[0].body).into_owned();
+    assert!(read.contains("whisper-cli is not on this machine"), "{read}");
+}
