@@ -91,6 +91,53 @@ pub(crate) struct Mcp {
     /// What is wrong with `mcp.json`, when it cannot be read.
     problem: Option<String>,
     http: reqwest::Client,
+    /// The sign-in the Owner is in the middle of, when there is one.
+    signing_in: std::sync::Mutex<Option<SigningIn>>,
+}
+
+/// Where a sign-in ends: an address of the Host itself, where nothing
+/// listens. The Owner's browser stops there, and they send the address back.
+pub(crate) const SIGN_IN_ENDS_AT: &str = "http://127.0.0.1:8976/callback";
+
+/// A sign-in under way: what is needed to finish it once the Owner sends
+/// back the address their browser ended on.
+struct SigningIn {
+    server: String,
+    /// What the challenge in the link was made from; it never leaves the Host.
+    verifier: String,
+    state: String,
+    client: String,
+    exchange: String,
+    issuer: String,
+    resource: String,
+}
+
+/// What a sign-in obtained, kept sealed.
+#[derive(serde::Serialize, Deserialize)]
+struct SignedIn {
+    access: String,
+    #[serde(default)]
+    refresh: Option<String>,
+    /// Seconds since 1970 after which `access` is no longer taken.
+    #[serde(default)]
+    until: Option<u64>,
+    client: String,
+    exchange: String,
+    resource: String,
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// Random letters, for what must not be guessed.
+fn unguessable() -> Result<String, String> {
+    use base64::Engine;
+    let mut random = [0u8; 32];
+    getrandom::fill(&mut random).map_err(|error| error.to_string())?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random))
 }
 
 impl Mcp {
@@ -116,7 +163,13 @@ impl Mcp {
                 tools: std::sync::Mutex::new(None),
             })
             .collect();
-        Self { servers, secrets: Secrets::kept_in(home), problem, http: reqwest::Client::new() }
+        Self {
+            servers,
+            secrets: Secrets::kept_in(home),
+            problem,
+            http: reqwest::Client::new(),
+            signing_in: std::sync::Mutex::new(None),
+        }
     }
 
     /// Starts every server not tried yet, all at once, and asks each what it
@@ -141,6 +194,7 @@ impl Mcp {
 
     /// A fresh connection to `server`, greeted, and what it offers.
     async fn start(&self, server: &Server) -> Result<(Link, Vec<Tool>), String> {
+        self.renew(server).await;
         match tokio::time::timeout(START_LIMIT, self.greet(server)).await {
             Ok(started) => started,
             Err(_) => Err(format!("it did not answer within {} seconds", START_LIMIT.as_secs())),
@@ -148,13 +202,13 @@ impl Mcp {
     }
 
     async fn greet(&self, server: &Server) -> Result<(Link, Vec<Tool>), String> {
-        let mut link = self.open(&server.described)?;
+        let mut link = self.open(server)?;
         let speaks = match link.speaks_todays_protocol().await {
             Ok(speaks) => speaks,
             // Some earlier servers quit at a request they do not know: a
             // local one is started again and greeted the earlier way.
             Err(_) if server.described.command.is_some() => {
-                link = self.open(&server.described)?;
+                link = self.open(server)?;
                 false
             }
             Err(problem) => return Err(problem),
@@ -208,13 +262,18 @@ impl Mcp {
         Ok((link, tools))
     }
 
-    fn open(&self, described: &Described) -> Result<Link, String> {
+    fn open(&self, server: &Server) -> Result<Link, String> {
+        let described = &server.described;
         if let Some(url) = &described.url {
-            let headers = described
+            let mut headers: Vec<(String, String)> = described
                 .headers
                 .iter()
                 .map(|(name, value)| (name.clone(), self.filled(value)))
                 .collect();
+            // Signed in to: what was obtained then is shown on every request.
+            if let Some(signed) = self.signed_in(&server.name) {
+                headers.push(("authorization".into(), format!("Bearer {}", signed.access)));
+            }
             return Ok(Link::Remote {
                 http: self.http.clone(),
                 url: url.clone(),
@@ -259,6 +318,292 @@ impl Mcp {
             next: 0,
             modern: false,
         })
+    }
+
+    /// Under which name what a sign-in to `server` obtained is sealed: one of
+    /// Orbite's own, which the Agent neither lists nor uses.
+    fn kept_as(server: &str) -> String {
+        format!("ORBITE_MCP_{}", plain(server).to_uppercase())
+    }
+
+    fn signed_in(&self, server: &str) -> Option<SignedIn> {
+        serde_json::from_str(&self.secrets.get(&Self::kept_as(server)).ok()??).ok()
+    }
+
+    /// Obtains a fresh access when the one kept is about to end, with what
+    /// the sign-in gave for that.
+    async fn renew(&self, server: &Server) {
+        let Some(signed) = self.signed_in(&server.name) else { return };
+        let (Some(until), Some(refresh)) = (signed.until, signed.refresh.clone()) else { return };
+        if until > now() + 60 {
+            return;
+        }
+        let form = [
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh.as_str()),
+            ("client_id", signed.client.as_str()),
+            ("resource", signed.resource.as_str()),
+        ];
+        let Ok(answer) = self
+            .http
+            .post(&signed.exchange)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(form_written(&form))
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+        else {
+            return;
+        };
+        let Ok(given) = answer.json::<Value>().await else { return };
+        let Some(access) = given["access_token"].as_str() else { return };
+        let renewed = SignedIn {
+            access: access.to_owned(),
+            refresh: given["refresh_token"].as_str().map(str::to_owned).or(Some(refresh)),
+            until: given["expires_in"].as_u64().map(|lasts| now() + lasts),
+            ..signed
+        };
+        if let Ok(written) = serde_json::to_string(&renewed) {
+            let _ = self.secrets.set(&Self::kept_as(&server.name), &written);
+        }
+    }
+
+    /// Begins signing in to the server called `name`: the text is the
+    /// address the Owner follows.
+    pub(crate) async fn sign_in(&self, name: &str) -> Result<String, String> {
+        let server = self
+            .servers
+            .iter()
+            .find(|server| server.name == name)
+            .ok_or("there is no server of that name")?;
+        let address = server
+            .described
+            .url
+            .clone()
+            .ok_or("it is a program on this machine: there is nothing to sign in to")?;
+        let wrong =
+            |error: reqwest::Error| format!("it could not be reached: {}", error.without_url());
+        let fetch = |at: String| async move {
+            let answer = self.http.get(&at).timeout(Duration::from_secs(20)).send().await.ok()?;
+            if !answer.status().is_success() {
+                return None;
+            }
+            answer.json::<Value>().await.ok()
+        };
+        // Where the server says to learn how it is signed in to.
+        let asked = self
+            .http
+            .post(&address)
+            .json(&json!({}))
+            .timeout(Duration::from_secs(20))
+            .send()
+            .await
+            .map_err(wrong)?;
+        let told = asked
+            .headers()
+            .get("www-authenticate")
+            .and_then(|told| told.to_str().ok())
+            .and_then(|told| told.split("resource_metadata=\"").nth(1))
+            .and_then(|rest| rest.split('"').next())
+            .map(str::to_owned);
+        let at = url::Url::parse(&address).map_err(|_| "its address is not one")?;
+        let origin = at.origin().ascii_serialization();
+        let path = at.path().trim_end_matches('/');
+        let mut about = None;
+        for place in told.into_iter().chain([
+            format!("{origin}/.well-known/oauth-protected-resource{path}"),
+            format!("{origin}/.well-known/oauth-protected-resource"),
+        ]) {
+            about = fetch(place).await;
+            if about.is_some() {
+                break;
+            }
+        }
+        let about = about.ok_or("it does not say how it is signed in to: it may take a key instead, in its headers in mcp.json")?;
+        let issuer = about["authorization_servers"][0]
+            .as_str()
+            .ok_or("it names nowhere to sign in")?
+            .trim_end_matches('/')
+            .to_owned();
+        let resource = about["resource"].as_str().unwrap_or(&address).to_owned();
+        let issued =
+            url::Url::parse(&issuer).map_err(|_| "where it says to sign in is not an address")?;
+        let (base, inside) =
+            (issued.origin().ascii_serialization(), issued.path().trim_end_matches('/').to_owned());
+        let mut how = None;
+        for place in [
+            format!("{base}/.well-known/oauth-authorization-server{inside}"),
+            format!("{base}/.well-known/openid-configuration{inside}"),
+            format!("{issuer}/.well-known/openid-configuration"),
+        ] {
+            // Only the place that names itself as the one asked for is believed.
+            how = fetch(place).await.filter(|how| {
+                how["issuer"].as_str().is_some_and(|named| named.trim_end_matches('/') == issuer)
+            });
+            if how.is_some() {
+                break;
+            }
+        }
+        let how = how.ok_or("where it says to sign in does not describe itself")?;
+        let (Some(entrance), Some(exchange)) =
+            (how["authorization_endpoint"].as_str(), how["token_endpoint"].as_str())
+        else {
+            return Err("where it says to sign in does not say how".into());
+        };
+        let proven = how["code_challenge_methods_supported"]
+            .as_array()
+            .is_some_and(|ways| ways.iter().any(|way| way == "S256"));
+        if !proven {
+            return Err("its sign-in does not protect what Orbite would be handed: not used".into());
+        }
+        // Orbite introduces itself, where newcomers are taken.
+        let Some(registry) = how["registration_endpoint"].as_str() else {
+            return Err("its sign-in takes no program it does not already know. If it offers a key or a client of \
+                        your own, put the key in its headers in mcp.json instead"
+                .into());
+        };
+        let myself = json!({
+            "client_name": "Orbite",
+            "redirect_uris": [SIGN_IN_ENDS_AT],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+            "application_type": "native",
+        });
+        let known = self
+            .http
+            .post(registry)
+            .json(&myself)
+            .timeout(Duration::from_secs(20))
+            .send()
+            .await
+            .map_err(wrong)?;
+        let known = known.json::<Value>().await.map_err(wrong)?;
+        let client = known["client_id"]
+            .as_str()
+            .ok_or("its sign-in did not take Orbite as a newcomer")?
+            .to_owned();
+
+        let (verifier, state) = (unguessable()?, unguessable()?);
+        let challenge = {
+            use base64::Engine;
+            use sha2::{Digest, Sha256};
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(Sha256::digest(verifier.as_bytes()))
+        };
+        let mut link =
+            url::Url::parse(entrance).map_err(|_| "where it says to sign in is not an address")?;
+        {
+            let mut asked = link.query_pairs_mut();
+            asked
+                .append_pair("response_type", "code")
+                .append_pair("client_id", &client)
+                .append_pair("redirect_uri", SIGN_IN_ENDS_AT)
+                .append_pair("code_challenge", &challenge)
+                .append_pair("code_challenge_method", "S256")
+                .append_pair("state", &state)
+                .append_pair("resource", &resource);
+            if let Some(scopes) = about["scopes_supported"].as_array() {
+                let scopes: Vec<&str> = scopes.iter().filter_map(Value::as_str).collect();
+                if !scopes.is_empty() {
+                    asked.append_pair("scope", &scopes.join(" "));
+                }
+            }
+        }
+        *self.signing_in.lock().unwrap() = Some(SigningIn {
+            server: name.to_owned(),
+            verifier,
+            state,
+            client,
+            exchange: exchange.to_owned(),
+            issuer,
+            resource,
+        });
+        Ok(link.to_string())
+    }
+
+    /// True when `text` is the address a sign-in under way ended on.
+    pub(crate) fn is_signing_in(&self, text: &str) -> bool {
+        text.trim().starts_with(SIGN_IN_ENDS_AT) && self.signing_in.lock().unwrap().is_some()
+    }
+
+    /// Finishes the sign-in under way with the address the Owner's browser
+    /// ended on: the server's name and how many tools it now offers.
+    pub(crate) async fn signed_in_at(&self, ended_on: &str) -> Result<(String, usize), String> {
+        let Some(begun) = self.signing_in.lock().unwrap().take() else {
+            return Err("no sign-in is under way".into());
+        };
+        let again = format!("start again with /mcp connect {}", begun.server);
+        let ended = url::Url::parse(ended_on.trim())
+            .map_err(|_| format!("that is not an address: {again}"))?;
+        let given: std::collections::HashMap<String, String> =
+            ended.query_pairs().into_owned().collect();
+        // Only the answer to the very link that was sent is taken.
+        if given.get("state") != Some(&begun.state) {
+            return Err(format!("that address is not the answer to the link I sent: {again}"));
+        }
+        if given.get("iss").is_some_and(|issuer| issuer.trim_end_matches('/') != begun.issuer) {
+            return Err(format!("that address does not come from where the link led: {again}"));
+        }
+        let Some(code) = given.get("code") else {
+            let refused =
+                given.get("error_description").or(given.get("error")).cloned().unwrap_or_default();
+            return Err(format!("the sign-in was not granted ({refused}): {again}"));
+        };
+        let form = [
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+            ("redirect_uri", SIGN_IN_ENDS_AT),
+            ("client_id", begun.client.as_str()),
+            ("code_verifier", begun.verifier.as_str()),
+            ("resource", begun.resource.as_str()),
+        ];
+        let answer = self
+            .http
+            .post(&begun.exchange)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(form_written(&form))
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|error| {
+                format!("the sign-in could not be finished ({}): {again}", error.without_url())
+            })?;
+        let given = answer.json::<Value>().await.unwrap_or_default();
+        let Some(access) = given["access_token"].as_str() else {
+            return Err(format!("the sign-in was not accepted: {again}"));
+        };
+        let signed = SignedIn {
+            access: access.to_owned(),
+            refresh: given["refresh_token"].as_str().map(str::to_owned),
+            until: given["expires_in"].as_u64().map(|lasts| now() + lasts),
+            client: begun.client,
+            exchange: begun.exchange,
+            resource: begun.resource,
+        };
+        let written = serde_json::to_string(&signed).map_err(|error| error.to_string())?;
+        self.secrets
+            .set(&Self::kept_as(&begun.server), &written)
+            .map_err(|error| error.to_string())?;
+        // Connected afresh, now that it lets Orbite in.
+        if let Some(server) = self.servers.iter().find(|server| server.name == begun.server) {
+            *server.link.lock().await = None;
+            *server.tools.lock().unwrap() = None;
+        }
+        self.connect(false).await;
+        let tools = self
+            .status()
+            .0
+            .into_iter()
+            .find(|(name, _)| *name == begun.server)
+            .map(|(_, state)| state);
+        match tools {
+            Some(Ok(tools)) => Ok((begun.server, tools)),
+            Some(Err(problem)) => {
+                Err(format!("signed in, but {} still does not answer: {problem}", begun.server))
+            }
+            None => Err("the server is no longer listed".into()),
+        }
     }
 
     /// `text` with each ${NAME} replaced by the secret of that name.
@@ -336,6 +681,14 @@ impl Mcp {
     pub(crate) async fn carry_out(&self, request: &ActionRequest) -> Option<String> {
         let (server, tool) = self.find(request)?;
         let mut link = server.link.lock().await;
+        // What a sign-in obtained does not last: about to end, it is renewed
+        // and the server reached afresh with the new one.
+        if self
+            .signed_in(&server.name)
+            .is_some_and(|signed| signed.until.is_some_and(|until| until <= now() + 60))
+        {
+            *link = None;
+        }
         if link.is_none() {
             // The server was lost on an earlier call: it is started afresh.
             match self.start(server).await {
@@ -696,4 +1049,9 @@ async fn futures_all(tasks: impl Iterator<Item = impl Future<Output = ()>>) {
         if pending.is_empty() { std::task::Poll::Ready(()) } else { std::task::Poll::Pending }
     })
     .await;
+}
+
+/// A form as programs send one: its fields joined, each written safely.
+fn form_written(fields: &[(&str, &str)]) -> String {
+    url::form_urlencoded::Serializer::new(String::new()).extend_pairs(fields).finish()
 }

@@ -476,6 +476,50 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 continue;
             }
+            // The address a sign-in ended on is nothing to keep or to show a
+            // model: it is used once, and removed from where it was written.
+            if let Some(mcp) = self.host.mcp.clone()
+                && mcp.is_signing_in(&text)
+            {
+                channel.erase_last_received().await;
+                let said = match mcp.signed_in_at(&text).await {
+                    Ok((name, tools)) => format!(
+                        "✅ **{name}**: {} ({tools} {})",
+                        self.language.say("connected", "connecté"),
+                        self.language.say("tools", "outils")
+                    ),
+                    Err(problem) => format!("🔴 {problem}"),
+                };
+                if channel.send(&said).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            if let Some(name) = text.trim().strip_prefix("/mcp connect ") {
+                let Some(mcp) = self.host.mcp.clone() else { continue };
+                let name = name.trim();
+                let said = match mcp.sign_in(name).await {
+                    Ok(link) => format!(
+                        "{}\n\n{link}\n\n{}",
+                        self.language.say(
+                            "To connect it, open this link and sign in:",
+                            "Pour le connecter, ouvrez ce lien et connectez-vous :"
+                        ),
+                        self.language.say(
+                            "Your browser will then stop on a page that does not load, at an address starting with \
+                             http://127.0.0.1. That is expected: copy that whole address and send it to me here.",
+                            "Votre navigateur s'arrêtera ensuite sur une page qui ne se charge pas, à une adresse \
+                             commençant par http://127.0.0.1. C'est normal : copiez cette adresse entière et \
+                             envoyez-la-moi ici."
+                        )
+                    ),
+                    Err(problem) => format!("🔴 **{name}**: {problem}."),
+                };
+                if channel.send(&said).await.is_err() {
+                    return;
+                }
+                continue;
+            }
             if text.trim() == "/mcp" {
                 if channel.send(&self.servers().await).await.is_err() {
                     return;
@@ -1520,7 +1564,11 @@ impl<P: Provider + 'static> Agent<P> {
                     listed.push_str(&format!("\n🟢 **{name}**: {tools} {}", say("tools", "outils")))
                 }
                 Err(problem) => {
-                    listed.push_str(&format!("\n🔴 **{name}**: {}", clip(&problem, 200)))
+                    listed.push_str(&format!("\n🔴 **{name}**: {}", clip(&problem, 200)));
+                    // One that wants to be signed in to is connected by a link.
+                    if problem.contains("signed in to") {
+                        listed.push_str(&format!(" → /mcp connect {name}"));
+                    }
                 }
             }
         }

@@ -93,7 +93,9 @@ Tools from MCP servers become actions of your agent. List the servers in `/var/l
 } }
 ```
 
-`${NAME}` stands for a secret entered as above, so no key is written in that file. A tool that declares it only reads runs freely; any other asks you first. Add only servers you trust: a server is taken at its word on which of its tools only read. `/mcp` shows each server's state. Servers that need you to sign in through a web page are not supported yet.
+`${NAME}` stands for a secret entered as above, so no key is written in that file. A tool that declares it only reads runs freely; any other asks you first. Add only servers you trust: a server is taken at its word on which of its tools only read. `/mcp` shows each server's state.
+
+**Servers you sign in to.** For a server that wants you to sign in (Notion, Linear, Sentry and others), list only its address, then send `/mcp connect NAME`. Your agent answers with a link: open it and sign in. Your browser then stops on a page that does not load, at an address starting with `http://127.0.0.1`: that is expected, since that address is your agent's machine and not the device you are on. Copy the whole address and send it to your agent, which finishes the sign-in, removes your message, and keeps what it obtained sealed with its secrets. A server that takes no program it does not already know (GitHub's, for one) is used with a key in its headers instead.
 
 ## When something goes wrong
 
