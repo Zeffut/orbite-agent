@@ -94,7 +94,7 @@ pub fn providers_shown(home: &Path, language: Language, used: &[(String, u64)]) 
 /// Changes the Providers of the installation in `home` as `asked` says:
 /// `first NAME`, `remove NAME`, `limit NAME TOKENS` or `limit NAME none`.
 /// Says what was done; the text of a failure is for the Owner.
-pub fn change_providers(home: &Path, asked: &[&str]) -> Result<String, String> {
+pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, String> {
     let mut config = Config::load(home).map_err(|error| error.to_string())?;
     let mut all = config.providers();
     let place = |name: &str| {
@@ -125,8 +125,14 @@ pub fn change_providers(home: &Path, asked: &[&str]) -> Result<String, String> {
             if let Some(key) = &removed.key {
                 let _ = Secrets::kept_in(home).remove(key);
             }
+            // A plan signed in to is signed out of, at its Provider too.
             if removed.name == "chatgpt" {
-                let _ = Secrets::kept_in(home).remove("ORBITE_CHATGPT");
+                let chatgpt = crate::ChatGpt::kept_in(home, &removed.model);
+                let chatgpt = match &removed.address {
+                    Some(address) => chatgpt.at(address),
+                    None => chatgpt,
+                };
+                chatgpt.sign_out().await;
             }
             format!("{} is removed.", removed.name)
         }

@@ -361,6 +361,29 @@ impl ChatGpt {
         Ok(email.unwrap_or_default())
     }
 
+    /// Ends the sign-in: OpenAI is told to take back what let the Agent
+    /// in, and nothing of it is kept, whether or not OpenAI could be told.
+    pub async fn sign_out(&self) {
+        if let Ok(kept) = self.kept()
+            && let (Some(refresh), Some(client)) = (&kept.refresh, &kept.client)
+        {
+            let form = form_written(&[
+                ("token", refresh),
+                ("token_type_hint", "refresh_token"),
+                ("client_id", client),
+            ]);
+            let _ = self
+                .http
+                .post(format!("{}/api/accounts/oauth/revoke", self.auth))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(form)
+                .timeout(Duration::from_secs(20))
+                .send()
+                .await;
+        }
+        let _ = self.secrets.remove(KEPT_AS);
+    }
+
     /// Alone, in this program and in any other of the same installation, to
     /// renew what lets the Agent in: a renewal used twice ends the sign-in.
     async fn renewing_alone(&self) -> Result<std::fs::File, ProviderError> {

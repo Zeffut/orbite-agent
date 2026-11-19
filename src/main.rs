@@ -303,7 +303,7 @@ async fn providers() -> Result<(), Failure> {
         }
         setup.run(Some(SetupStep::AnotherProvider)).await?;
     } else {
-        println!("{}", orbite::change_providers(&home()?, &asked)?);
+        println!("{}", orbite::change_providers(&home()?, &asked).await?);
     }
     println!(
         "It applies at the next start of Orbite (as a service: sudo systemctl restart orbite)."

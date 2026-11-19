@@ -598,3 +598,28 @@ async fn a_sign_in_that_ended_is_made_again_from_the_conversation() {
     assert!(ChatGpt::kept_in(home.path(), "gpt-test").is_signed_in());
     assert_eq!(asked.times_asked(), 0, "the address is not shown to a model");
 }
+
+#[tokio::test]
+async fn removing_the_plan_from_the_providers_signs_out_at_openai_too() {
+    let server = MockServer::start().await;
+    let (home, chatgpt) = signed_in(&server, 3600).await;
+    let config = json!({
+        "provider": { "name": "chatgpt", "model": "gpt-test", "address": server.uri() },
+        "fallbacks": [{ "name": "ollama", "model": "some-model" }],
+    });
+    std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/oauth/revoke"))
+        .and(body_string_contains("token=refresh-first"))
+        .and(body_string_contains("token_type_hint=refresh_token"))
+        .and(body_string_contains(format!("client_id={ISSUED}")))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    orbite::change_providers(home.path(), &["remove", "chatgpt"]).await.unwrap();
+
+    assert!(!chatgpt.is_signed_in());
+    assert_eq!(Secrets::kept_in(home.path()).get("ORBITE_CHATGPT").unwrap(), None);
+}

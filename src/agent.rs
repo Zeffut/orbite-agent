@@ -599,7 +599,7 @@ impl<P: Provider + 'static> Agent<P> {
                 let used = self.store.tokens_used_on(&today).unwrap_or_default();
                 let changed = match asked.is_empty() {
                     true => None,
-                    false => Some(crate::change_providers(&home, &asked)),
+                    false => Some(crate::change_providers(&home, &asked).await),
                 };
                 let mut said = match &changed {
                     Some(Ok(done)) => format!("✅ {done}\n\n"),
