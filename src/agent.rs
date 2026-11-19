@@ -543,14 +543,8 @@ impl<P: Provider + 'static> Agent<P> {
         open
     }
 
-    /// Thinks and acts, turn after turn, until the model has nothing left to
-    /// do. `initiated` is true when the Agent acts on its own initiative
-    /// rather than in answer to its Owner.
-    async fn respond(
-        &mut self,
-        channel: &mut impl Channel,
-        initiated: bool,
-    ) -> Result<bool, StoreError> {
+    /// The Actions on offer right now, as told to the model.
+    fn actions(&mut self) -> Result<Vec<ActionSpec>, StoreError> {
         let mut actions = self.host.specs();
         actions.push(search_spec());
         actions.push(send_file_spec());
@@ -564,7 +558,21 @@ impl<P: Provider + 'static> Agent<P> {
         for report in self.host.extensions.iter().flat_map(|extensions| extensions.take_reports()) {
             self.store.append(&Message::Notice(report))?;
         }
+        Ok(actions)
+    }
+
+    /// Thinks and acts, turn after turn, until the model has nothing left to
+    /// do. `initiated` is true when the Agent acts on its own initiative
+    /// rather than in answer to its Owner.
+    async fn respond(
+        &mut self,
+        channel: &mut impl Channel,
+        initiated: bool,
+    ) -> Result<bool, StoreError> {
         for _ in 0..STEPS_BEFORE_STOPPING {
+            // Asked afresh on every step: the Agent may just have written
+            // itself an Extension.
+            let actions = self.actions()?;
             self.fit(channel, &actions).await?;
             let mut conversation = self.store.conversation()?;
             // Every protocol expects the Owner to speak first.

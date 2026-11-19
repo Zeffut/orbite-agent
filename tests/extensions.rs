@@ -10,7 +10,7 @@ use std::time::Duration;
 use orbite::{Agent, Message, Store};
 use serde_json::json;
 use support::{Owner, ScriptedProvider, memory_channel};
-use wiremock::matchers::method;
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn agent_extended_in(extensions: &Path, provider: &ScriptedProvider) -> Owner {
@@ -397,4 +397,63 @@ async fn an_error_an_extension_throws_is_told_to_the_model_and_the_extension_sta
     owner.says("Hi");
     owner.hears().await;
     assert!(provider.last_offered().contains(&"tasks_done".to_owned()));
+}
+
+#[tokio::test]
+async fn a_redirection_is_followed_only_to_a_host_that_was_granted() {
+    let extensions = tempfile::tempdir().unwrap();
+    install(
+        extensions.path(),
+        "fetcher",
+        json!({ "description": "Fetches.", "hosts": ["localhost"] }),
+        FETCHER,
+    );
+    let server = MockServer::start().await;
+    let port = server.address().port();
+    Mock::given(method("GET"))
+        .and(path("/moved"))
+        .respond_with(ResponseTemplate::new(301).insert_header("location", "/here"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/here"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("found"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/elsewhere"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("location", format!("http://127.0.0.1:{port}/here").as_str()),
+        )
+        .mount(&server)
+        .await;
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("fetcher_get", json!({ "url": format!("http://localhost:{port}/moved") }))])
+        .then_acts([(
+            "fetcher_get",
+            json!({ "url": format!("http://localhost:{port}/elsewhere") }),
+        )])
+        .then(Ok("Done.".into()));
+    let mut owner = agent_extended_in(extensions.path(), &provider);
+
+    owner.says("Fetch both.");
+    owner.hears().await;
+
+    let outcomes: Vec<String> = provider
+        .last_asked()
+        .into_iter()
+        .filter_map(|message| match message {
+            Message::Outcome { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(outcomes[0], "200 found");
+    // The model is told where it leads, so that it can ask for that host.
+    assert!(
+        outcomes[1].contains("redirects to 127.0.0.1") && outcomes[1].contains("not granted"),
+        "{}",
+        outcomes[1]
+    );
 }

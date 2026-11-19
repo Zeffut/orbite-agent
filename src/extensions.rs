@@ -28,6 +28,9 @@ const MEMORY_LIMIT: usize = 32 * 1024 * 1024;
 /// The longest text an Extension is given back from a host.
 const BODY_LIMIT: usize = 200_000;
 
+/// How many redirections in a row an Extension's request follows.
+const REDIRECTIONS_FOLLOWED: usize = 6;
+
 /// The reason kept for an Extension its Owner turned off.
 pub(crate) const BY_THE_OWNER: &str = "by the Owner";
 
@@ -180,7 +183,7 @@ impl Extensions {
         for extension in self.all().iter().filter(|extension| extension.off.is_none()) {
             for action in self.describe(extension).unwrap_or_default() {
                 specs.push(ActionSpec {
-                    name: format!("{}_{}", extension.name, action.name),
+                    name: format!("{}_{}", prefix(&extension.name), action.name),
                     description: action.description,
                     input: action.input,
                 });
@@ -195,25 +198,102 @@ impl Extensions {
         if let Some(known) = self.described.lock().unwrap().get(&key) {
             return Some(known.clone());
         }
-        let said = self
-            .run(extension, "JSON.stringify(describe())".into(), None)
-            .and_then(|said| understand(&said).map_err(Failure::Broke));
-        match said {
+        match self.described(extension) {
             Ok(described) => {
                 self.described.lock().unwrap().insert(key, described.clone());
                 Some(described)
             }
-            Err(Failure::Threw(problem) | Failure::Broke(problem)) => {
+            Err(problem) => {
                 self.turn_off(&extension.name, &format!("it could not be loaded: {problem}"));
                 None
             }
         }
     }
 
+    /// What `extension` says it adds, or why it cannot be loaded.
+    fn described(&self, extension: &Extension) -> Result<Vec<Described>, String> {
+        match self.run(extension, "JSON.stringify(describe())".into(), None) {
+            Ok(said) => understand(&said),
+            Err(Failure::Threw(problem) | Failure::Broke(problem)) => Err(problem),
+        }
+    }
+
+    /// The Actions an Extension called `name` running `script` would add, or
+    /// what is wrong with it. Nothing is kept.
+    pub(crate) fn check(&self, name: &str, script: &str) -> Result<Vec<String>, String> {
+        if slug(name).ok().as_deref() != Some(name) {
+            return Err(format!(
+                "\"{name}\" cannot name an Extension: use a few lowercase words joined by dashes."
+            ));
+        }
+        if OFFICIAL.iter().any(|(official, ..)| *official == name) {
+            return Err(format!("{name} comes with Orbite: choose another name."));
+        }
+        let extension = Extension {
+            name: name.to_owned(),
+            description: String::new(),
+            description_fr: None,
+            hosts: Vec::new(),
+            script: script.to_owned(),
+            official: false,
+            off: None,
+        };
+        let described = self.described(&extension).map_err(|problem| {
+            format!(
+                "The script does not load: {problem}. It must define two global functions: \
+                 describe(), returning a list of {{ name, description, parameters }}, and run(action, input)."
+            )
+        })?;
+        if described.is_empty() {
+            return Err("describe() returns no action: the Extension would add nothing.".into());
+        }
+        Ok(described.iter().map(|action| format!("{}_{}", prefix(name), action.name)).collect())
+    }
+
+    /// True when the installation has an Extension called `name`.
+    pub(crate) fn has(&self, name: &str) -> bool {
+        self.all().iter().any(|extension| extension.name == name)
+    }
+
+    /// Keeps an Extension, in place of the one of the same name if any; what
+    /// that one kept stays, and it is turned on.
+    pub(crate) fn write(
+        &self,
+        name: &str,
+        description: &str,
+        hosts: &[String],
+        script: &str,
+    ) -> std::io::Result<()> {
+        let folder = self.folder.join(name);
+        fs::create_dir_all(&folder)?;
+        let manifest = json!({ "description": description, "hosts": hosts });
+        fs::write(folder.join("extension.json"), serde_json::to_string_pretty(&manifest)? + "\n")?;
+        fs::write(folder.join("main.js"), script)?;
+        match fs::remove_file(folder.join("off")) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        }
+    }
+
+    /// An Extension as its author needs to see it to repair it.
+    pub(crate) fn read(&self, name: &str) -> Option<String> {
+        let extension = self.all().into_iter().find(|extension| extension.name == name)?;
+        let state = match &extension.off {
+            None => "It is on.".to_owned(),
+            Some(reason) => format!("It is turned off: {reason}."),
+        };
+        Some(format!(
+            "{name}: {}\nReaches: {}\n{state}\n\n{}",
+            extension.description,
+            listed(&extension.hosts),
+            extension.script
+        ))
+    }
+
     /// The Extension and Action a request is for, when it is for one.
     fn find(&self, request: &ActionRequest) -> Option<(Extension, Described)> {
         self.all().into_iter().filter(|extension| extension.off.is_none()).find_map(|extension| {
-            let action = request.name.strip_prefix(&extension.name)?.strip_prefix('_')?;
+            let action = request.name.strip_prefix(&prefix(&extension.name))?.strip_prefix('_')?;
             let described =
                 self.describe(&extension)?.into_iter().find(|known| known.name == action)?;
             Some((extension, described))
@@ -470,6 +550,12 @@ fn lend<'js>(
     ctx.globals().set(name, function.map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
+/// What the names of an Extension's Actions start with: its own name, in
+/// the letters every model accepts in the name of an Action.
+fn prefix(name: &str) -> String {
+    name.replace('-', "_")
+}
+
 /// Why an Extension was not removed.
 pub(crate) enum Unremovable {
     Unknown,
@@ -504,34 +590,62 @@ async fn reach(
         body: Option<String>,
     }
     let asked: Asked = serde_json::from_str(request).map_err(|error| error.to_string())?;
-    let url =
+    let mut url =
         url::Url::parse(&asked.url).map_err(|_| format!("{} is not an address", asked.url))?;
-    let host = url.host_str().unwrap_or_default().to_lowercase();
-    if !matches!(url.scheme(), "http" | "https")
-        || !hosts.iter().any(|granted| granted.to_lowercase() == host)
-    {
-        return Err(format!(
-            "this Extension was not granted {host}: it can only reach {}",
-            listed(hosts)
-        ));
-    }
-    let method =
+    let mut method =
         reqwest::Method::from_bytes(asked.method.as_bytes()).map_err(|error| error.to_string())?;
-    let mut sending =
-        http.request(method, url).timeout(deadline.saturating_duration_since(Instant::now()));
-    for (name, value) in &asked.headers {
-        sending = sending.header(name, value);
+    let mut body = asked.body;
+    let granted = |url: &url::Url| {
+        let host = url.host_str().unwrap_or_default().to_lowercase();
+        let known = matches!(url.scheme(), "http" | "https")
+            && hosts.iter().any(|granted| granted.to_lowercase() == host);
+        if known { Ok(host) } else { Err(host) }
+    };
+    let mut host = granted(&url).map_err(|host| {
+        format!("this Extension was not granted {host}: it can only reach {}", listed(hosts))
+    })?;
+    // A redirection is followed by hand, and only to a host that was granted.
+    for _ in 0..REDIRECTIONS_FOLLOWED {
+        let mut sending = http
+            .request(method.clone(), url.clone())
+            .timeout(deadline.saturating_duration_since(Instant::now()));
+        for (name, value) in &asked.headers {
+            sending = sending.header(name, value);
+        }
+        if let Some(body) = &body {
+            sending = sending.body(body.clone());
+        }
+        let answer = sending
+            .send()
+            .await
+            .map_err(|error| format!("{host} could not be reached: {error}"))?;
+        let status = answer.status();
+        let moved = answer
+            .headers()
+            .get("location")
+            .and_then(|to| to.to_str().ok())
+            .and_then(|to| url.join(to).ok());
+        if let (true, Some(to)) = (status.is_redirection(), moved) {
+            host = granted(&to).map_err(|other| {
+                format!(
+                    "{host} redirects to {other}, which this Extension was not granted: it can only reach {}",
+                    listed(hosts)
+                )
+            })?;
+            // As browsers do: what was sent is sent again only when asked to.
+            if !matches!(status.as_u16(), 307 | 308) {
+                method = reqwest::Method::GET;
+                body = None;
+            }
+            url = to;
+            continue;
+        }
+        let text =
+            answer.text().await.map_err(|error| format!("{host} did not answer whole: {error}"))?;
+        let text: String = text.chars().take(BODY_LIMIT).collect();
+        return Ok(json!({ "status": status.as_u16(), "body": text }));
     }
-    if let Some(body) = asked.body {
-        sending = sending.body(body);
-    }
-    let answer =
-        sending.send().await.map_err(|error| format!("{host} could not be reached: {error}"))?;
-    let status = answer.status().as_u16();
-    let body =
-        answer.text().await.map_err(|error| format!("{host} did not answer whole: {error}"))?;
-    let body: String = body.chars().take(BODY_LIMIT).collect();
-    Ok(json!({ "status": status, "body": body }))
+    Err(format!("{host} redirects again and again"))
 }
 
 fn listed(hosts: &[String]) -> String {

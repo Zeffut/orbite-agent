@@ -13,7 +13,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::Language;
-use crate::extensions::Extensions;
+use crate::extensions::{Extensions, Unremovable};
 use crate::memory::Memory;
 use crate::secrets::Secrets;
 use crate::skills::{Skill, Skills};
@@ -28,6 +28,8 @@ const FILE_KEPT: usize = 100_000;
 const PREVIEW_KEPT: usize = 1_500;
 
 const NO_SKILLS: &str = "There is nowhere to keep skills.";
+
+const NO_EXTENSIONS: &str = "There is nowhere to keep Extensions.";
 
 /// What the gate decided about an Action.
 pub(crate) enum Review {
@@ -83,6 +85,20 @@ struct SaveSkill {
 }
 
 #[derive(Deserialize)]
+struct CreateExtension {
+    name: String,
+    description: String,
+    #[serde(default)]
+    hosts: Vec<String>,
+    script: String,
+}
+
+#[derive(Deserialize)]
+struct NamedExtension {
+    name: String,
+}
+
+#[derive(Deserialize)]
 struct Remember {
     name: String,
     text: String,
@@ -129,6 +145,9 @@ enum Action {
     ReadPage(ReadPage),
     SearchWeb(SearchWeb),
     ListSecrets,
+    CreateExtension(CreateExtension),
+    ReadExtension(NamedExtension),
+    RemoveExtension(NamedExtension),
 }
 
 impl Host {
@@ -237,6 +256,45 @@ impl Host {
                 "remove_skill",
                 "Deletes a skill and its files. Needs the Owner's approval.",
                 json!({ "name": text("The skill's name, as listed in your skills.") }),
+            ));
+        }
+        if self.extensions.is_some() {
+            specs.push(ActionSpec {
+                name: "create_extension".into(),
+                description: "Writes yourself an Extension: a small JavaScript program that adds Actions \
+                    you can then use, such as a connector to a web service your Owner uses often. Also \
+                    replaces one of the same name, to repair or improve it; what it kept stays. Your \
+                    Owner is always shown the script and asked first. The script defines two global \
+                    functions. describe() returns a list of { name, description, parameters }, where \
+                    parameters maps each parameter's name (ending in ? when it may be left out) to \
+                    its description. run(action, input) does the Action called `action` and returns \
+                    its result as a text or an object; it may be async and may throw an Error to \
+                    say what went wrong. It can only use plain JavaScript and what Orbite lends: \
+                    store.get(key), store.set(key, value), store.remove(key), store.keys() for data \
+                    it keeps, and http.get(url, { headers }), http.post(url, body, { headers }), \
+                    also put, patch and delete, which return { status, body, json() } and only \
+                    reach the hosts listed. There is no fetch, require, file or timer."
+                    .into(),
+                input: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": text("A few lowercase words joined by dashes, such as \"weather\". Its Actions are called name_action."),
+                        "description": text("One sentence for your Owner: what it is for."),
+                        "hosts": { "type": "array", "items": { "type": "string" }, "description": "The hosts it needs to reach, by name, such as \"api.example.com\"; none when it reaches nothing." },
+                        "script": text("The whole JavaScript program."),
+                    },
+                    "required": ["name", "description", "hosts", "script"],
+                }),
+            });
+            specs.push(spec(
+                "read_extension",
+                "Shows an Extension's script and state, to repair or improve it.",
+                json!({ "name": text("The Extension's name.") }),
+            ));
+            specs.push(spec(
+                "remove_extension",
+                "Removes an Extension and everything it kept. Needs the Owner's approval.",
+                json!({ "name": text("The Extension's name.") }),
             ));
         }
         specs
@@ -384,6 +442,75 @@ impl Host {
                     ..Approval::default()
                 }),
             },
+            Action::CreateExtension(wanted) => {
+                let Some(extensions) = &self.extensions else {
+                    return Review::Refuse(NO_EXTENSIONS.into());
+                };
+                let adds = match extensions.check(&wanted.name, &wanted.script) {
+                    Ok(adds) => adds,
+                    Err(problem) => return Review::Refuse(problem),
+                };
+                let replaces = extensions.has(&wanted.name);
+                let summary = if replaces {
+                    self.language.say("Replace an extension", "Remplacer une extension")
+                } else {
+                    self.language.say("Create an extension", "Créer une extension")
+                };
+                let reaches = if wanted.hosts.is_empty() {
+                    self.language
+                        .say(
+                            "Reaches nothing outside this machine.",
+                            "N'atteint rien hors de cette machine.",
+                        )
+                        .to_owned()
+                } else {
+                    format!(
+                        "{} {}",
+                        self.language.say("Reaches:", "Atteint :"),
+                        wanted.hosts.join(", ")
+                    )
+                };
+                // Code the Agent wrote for itself is shown to its Owner at
+                // every Permission Level, and never allowed once and for all.
+                Review::Ask(Approval {
+                    summary: summary.into(),
+                    detail: format!(
+                        "{}: {}\n{reaches}\n{} {}\n\n{}",
+                        wanted.name,
+                        wanted.description,
+                        self.language.say("Adds:", "Ajoute :"),
+                        adds.join(", "),
+                        preview(&wanted.script)
+                    ),
+                    irreversible: replaces,
+                    critical: true,
+                    contained: true,
+                })
+            }
+            Action::ReadExtension(_) => Review::Free,
+            Action::RemoveExtension(named) => match &self.extensions {
+                None => Review::Refuse(NO_EXTENSIONS.into()),
+                Some(extensions) => match extensions.read(&named.name) {
+                    None => Review::Refuse(format!("There is no Extension called {}.", named.name)),
+                    Some(_) => Review::Ask(Approval {
+                        summary: self
+                            .language
+                            .say("Remove an extension", "Supprimer une extension")
+                            .into(),
+                        detail: format!(
+                            "{}\n\n{}",
+                            named.name,
+                            self.language.say(
+                                "Everything it kept is removed with it.",
+                                "Tout ce qu'elle gardait est supprimé avec elle."
+                            )
+                        ),
+                        irreversible: true,
+                        contained: true,
+                        ..Approval::default()
+                    }),
+                },
+            },
             // Memory is the Agent's own, and its Owner can read and undo all of it.
             Action::Remember(_) | Action::Forget(_) => Review::Free,
             Action::EditFile(edit) => match self.edited(&edit) {
@@ -469,6 +596,46 @@ impl Host {
                     Ok(true) => format!("Removed the skill \"{}\".", skill.name),
                     Ok(false) => format!("There is no skill called \"{}\".", skill.name),
                     Err(error) => format!("Could not remove the skill: {error}."),
+                },
+            },
+            Ok(Action::CreateExtension(wanted)) => match &self.extensions {
+                None => NO_EXTENSIONS.into(),
+                Some(extensions) => {
+                    match extensions.check(&wanted.name, &wanted.script).and_then(|adds| {
+                        extensions
+                            .write(&wanted.name, &wanted.description, &wanted.hosts, &wanted.script)
+                            .map(|()| adds)
+                            .map_err(|error| format!("Could not keep the Extension: {error}."))
+                    }) {
+                        Ok(adds) => format!(
+                            "The Extension {} is in place and adds: {}. Try each of them now, before telling \
+                         your Owner it works.",
+                            wanted.name,
+                            adds.join(", ")
+                        ),
+                        Err(problem) => problem,
+                    }
+                }
+            },
+            Ok(Action::ReadExtension(named)) => self
+                .extensions
+                .as_ref()
+                .and_then(|extensions| extensions.read(&named.name))
+                .unwrap_or_else(|| format!("There is no Extension called {}.", named.name)),
+            Ok(Action::RemoveExtension(named)) => match &self.extensions {
+                None => NO_EXTENSIONS.into(),
+                Some(extensions) => match extensions.remove(&named.name) {
+                    Ok(()) => {
+                        format!("Removed the Extension {} and everything it kept.", named.name)
+                    }
+                    Err(Unremovable::Official) => format!(
+                        "{} comes with Orbite and cannot be removed; your Owner can turn it off with \
+                         /extensions off {}.",
+                        named.name, named.name
+                    ),
+                    Err(Unremovable::Unknown) => {
+                        format!("There is no Extension called {}.", named.name)
+                    }
                 },
             },
             Ok(Action::Forget(entry)) => self.forget(&entry.name),
@@ -694,6 +861,9 @@ fn understand(request: &ActionRequest) -> Result<Action, String> {
         "read_page" => input(request).map(Action::ReadPage),
         "search_web" => input(request).map(Action::SearchWeb),
         "list_secrets" => Ok(Action::ListSecrets),
+        "create_extension" => input(request).map(Action::CreateExtension),
+        "read_extension" => input(request).map(Action::ReadExtension),
+        "remove_extension" => input(request).map(Action::RemoveExtension),
         "save_skill" => input(request).map(Action::SaveSkill),
         "remove_skill" => input(request).map(Action::RemoveSkill),
         other => Err(format!("{NO_SUCH_ACTION} {other}.")),
