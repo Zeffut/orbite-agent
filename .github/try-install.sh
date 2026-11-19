@@ -54,6 +54,11 @@ printf '%s\n' "a-value-for-the-install-trial" | /usr/local/bin/orbite secret set
 as_orbite /usr/local/bin/orbite secret list | grep -q TRIAL_KEY
 as_orbite /usr/local/bin/orbite settings | grep -q "quiet = 22:00-07:00"
 
+# The Agent's Computer was set up, and works under the Agent's own account.
+command -v Xvfb >/dev/null && command -v xdotool >/dev/null && command -v firefox >/dev/null
+/usr/local/bin/orbite computer check
+[ "$(stat -c '%U' /var/lib/orbite/computer/check.png)" = "orbite" ]
+
 # It keeps itself up to date.
 [ "$(systemctl is-enabled orbite-update.timer)" = "enabled" ]
 [ "$(systemctl is-active orbite-update.timer)" = "active" ]

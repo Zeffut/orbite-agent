@@ -38,7 +38,7 @@ Reading the web is done by fetching pages, which is fast. For what that cannot d
 - Where a site asks for a verification code, or for proof of being a person, the agent asks you. Orbite does not disguise its browser and does not solve such challenges.
 - The model must be one that sees images.
 
-The installer does not set the computer up yet. The agent has one when the machine has `Xvfb`, `xdotool` and a browser (Firefox, Chrome or Chromium); on Debian and Ubuntu, `sudo apt install xvfb xdotool` and a browser installed from its maker's packages, then `sudo systemctl restart orbite`.
+The installer sets the computer up: a virtual screen, Firefox from Mozilla's own packages, and fonts. `sudo orbite computer check` says whether it works on your machine. An Orbite installed with `ORBITE_WITHOUT_COMPUTER=1` has none; running the installer again without it adds one.
 
 ## Commands
 

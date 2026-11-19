@@ -72,6 +72,15 @@ jobs:
       - name: Install and try the service (Ubuntu, this machine)
         if: matrix.system == 'ubuntu'
         run: sudo sh release/try-install.sh "$PWD/release"
+      - name: Keep what the Computer saw
+        if: always() && matrix.system == 'ubuntu'
+        run: sudo cp /var/lib/orbite/computer/check.png "$RUNNER_TEMP/computer-check.png" 2>/dev/null || true
+      - if: always() && matrix.system == 'ubuntu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: computer-check
+          path: ${{ runner.temp }}/computer-check.png
+          if-no-files-found: ignore
       - name: Install and try the service (Debian, a machine of its own)
         if: matrix.system == 'debian'
         run: |

@@ -19,6 +19,7 @@ Commands:
   providers  list the Providers known by name
   version    say which version this is
   setup      set Orbite up, or one part again (language, provider, telegram, name)
+  computer   check that the agent's own computer works on this machine (computer check)
   tryout     try the chosen model (or: tryout MODEL) out on a few real tasks and say what to expect of it
   settings   list the settings, or change one (settings NAME VALUE)
   export     write everything of the Agent to a file (export FILE), to move it to another Host
@@ -67,6 +68,7 @@ async fn main() -> ExitCode {
         Some("update") => update().await,
         Some("settings") => settings(),
         Some("tryout") => tryout().await,
+        Some("computer") => computer(),
         Some("export") => moving(true),
         Some("restore") => moving(false),
         Some("uninstall") => uninstall(),
@@ -372,6 +374,61 @@ fn uninstall() -> Result<(), Failure> {
     }
     let _ = std::process::Command::new("userdel").arg("orbite").status();
     println!("Orbite is removed, with the Agent's data.");
+    println!(
+        "The packages installed for the agent's computer (Firefox, xvfb, xdotool, fonts) were left: remove \
+         them with apt if nothing else uses them."
+    );
+    Ok(())
+}
+
+/// Starts the Agent's Computer, opens an empty page in its browser, pictures
+/// the screen and says whether that worked.
+fn computer() -> Result<(), Failure> {
+    if env::args().nth(2).as_deref() != Some("check") {
+        return Err("Usage: orbite computer check".into());
+    }
+    let folder = home()?.join("computer");
+    // A profile of its own: the Agent's sign-ins are not touched by a check.
+    let profile = folder.join("check-profile");
+    let failed = |what: &str, error: std::io::Error| -> Failure {
+        format!(
+            "The agent's computer does not work on this machine: {what} ({error}). It needs Xvfb, xdotool \
+             and a browser; running the installer again sets them up."
+        )
+        .into()
+    };
+    let mut computer = orbite::Computer::start(&profile, 1280, 800)
+        .map_err(|error| failed("it did not start", error))?;
+    computer.open("about:blank").map_err(|error| failed("its browser did not open", error))?;
+    // A browser shows itself within a few seconds: its window is not the
+    // plain black of an empty screen.
+    let empty = computer
+        .screen()
+        .picture()
+        .map_err(|error| failed("its screen could not be pictured", error))?;
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(40);
+    let mut seen = empty.clone();
+    while seen == empty && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        seen = computer
+            .screen()
+            .picture()
+            .map_err(|error| failed("its screen could not be pictured", error))?;
+    }
+    computer.close_browser();
+    drop(computer);
+    let _ = fs::remove_dir_all(&profile);
+    fs::write(folder.join("check.png"), &seen)?;
+    if seen == empty {
+        return Err(failed(
+            "its browser showed nothing",
+            std::io::Error::other("the screen stayed empty"),
+        ));
+    }
+    println!(
+        "The agent's computer works. What it saw is in {}.",
+        folder.join("check.png").display()
+    );
     Ok(())
 }
 

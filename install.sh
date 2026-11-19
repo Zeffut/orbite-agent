@@ -155,6 +155,41 @@ systemctl daemon-reload
 systemctl enable orbite >/dev/null 2>&1 || systemctl enable orbite
 systemctl enable --now orbite-update.timer >/dev/null 2>&1 || systemctl enable --now orbite-update.timer
 
+# --- The Agent's Computer: a screen of its own, a browser, and fonts ---
+#
+# The browser is Firefox from Mozilla's own packages: the only one packaged
+# for every machine Orbite installs on (Ubuntu ships browsers as snaps, which
+# a service account cannot run). ORBITE_WITHOUT_COMPUTER=1 leaves all of this
+# out. Orbite is installed whether or not this part succeeds.
+
+computer() {
+    mkdir -p "$ROOT/etc/apt/keyrings" "$ROOT/etc/apt/sources.list.d" "$ROOT/etc/apt/preferences.d"
+    KEYRING=/etc/apt/keyrings/packages.mozilla.org.asc
+    if [ ! -s "$ROOT$KEYRING" ]; then
+        curl -fsSL "${ORBITE_MOZILLA_KEY_URL:-https://packages.mozilla.org/apt/repo-signing-key.gpg}" \
+            -o "$ROOT$KEYRING.new" && mv "$ROOT$KEYRING.new" "$ROOT$KEYRING" || return 1
+    fi
+    echo "deb [signed-by=$KEYRING] https://packages.mozilla.org/apt mozilla main" \
+        >"$ROOT/etc/apt/sources.list.d/mozilla.list"
+    printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' \
+        >"$ROOT/etc/apt/preferences.d/mozilla"
+    apt-get update -qq || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends --allow-downgrades \
+        xvfb xdotool firefox fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
+        >/dev/null || return 1
+}
+
+if [ "${ORBITE_WITHOUT_COMPUTER:-}" = "1" ]; then
+    say "Left out, as asked: the agent's own computer. Without it the agent cannot use sites that need"
+    say "signing in or a person's gestures. Run this installer again without ORBITE_WITHOUT_COMPUTER to add it."
+else
+    say "Setting up the agent's own computer (a screen, Firefox and fonts)..."
+    if ! computer; then
+        say "Note: the agent's computer could not be set up. Orbite works without it; run this installer"
+        say "again later to add it."
+    fi
+fi
+
 if [ "$UPDATING" = yes ]; then
     systemctl restart orbite
     say "Orbite is updated and running."

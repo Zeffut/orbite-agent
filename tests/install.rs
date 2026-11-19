@@ -93,6 +93,13 @@ impl Machine {
 
     /// Runs the installer on this machine.
     fn install(&self) -> Output {
+        self.install_with(&[])
+    }
+
+    /// Runs the installer with more said in its environment.
+    fn install_with(&self, said: &[(&str, &str)]) -> Output {
+        // Mozilla's key, as a file of this machine rather than fetched.
+        self.write("mozilla.key", "a key");
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh");
         let path =
             format!("{}:{}", self.path("stand-ins").display(), std::env::var("PATH").unwrap());
@@ -106,6 +113,8 @@ impl Machine {
                 fs::read_to_string(self.path("release/signing.pub")).unwrap(),
             )
             .env("ORBITE_SKIP_SETUP", "1")
+            .env("ORBITE_MOZILLA_KEY_URL", format!("file://{}", self.path("mozilla.key").display()))
+            .envs(said.iter().copied())
             .output()
             .unwrap()
     }
@@ -268,4 +277,65 @@ fn hex(written: &str) -> Vec<u8> {
         .step_by(2)
         .map(|at| u8::from_str_radix(&written[at..at + 2], 16).unwrap())
         .collect()
+}
+
+#[test]
+fn the_agents_computer_is_set_up_with_a_screen_a_browser_and_fonts() {
+    let machine = Machine::debian();
+
+    let installed = machine.install();
+
+    assert!(installed.status.success(), "{}", shown(&installed));
+    let calls = machine.calls();
+    let computer = calls
+        .lines()
+        .find(|call| call.starts_with("apt-get install") && call.contains("firefox"))
+        .unwrap_or_else(|| panic!("the Computer's packages were not installed:\n{calls}"));
+    for package in ["xvfb", "xdotool", "fonts-liberation", "fonts-noto-color-emoji"] {
+        assert!(computer.contains(package), "{package} is missing from: {computer}");
+    }
+    // The browser comes from its maker's own packages, pinned so that the
+    // system's own packaging of it is not taken instead.
+    let source = fs::read_to_string(machine.path("etc/apt/sources.list.d/mozilla.list")).unwrap();
+    assert!(
+        source.contains("https://packages.mozilla.org/apt") && source.contains("signed-by="),
+        "{source}"
+    );
+    assert_eq!(
+        fs::read_to_string(machine.path("etc/apt/keyrings/packages.mozilla.org.asc")).unwrap(),
+        "a key"
+    );
+    assert!(
+        fs::read_to_string(machine.path("etc/apt/preferences.d/mozilla"))
+            .unwrap()
+            .contains("packages.mozilla.org")
+    );
+}
+
+#[test]
+fn the_computer_can_be_left_out_and_then_nothing_of_it_is_touched() {
+    let machine = Machine::debian();
+
+    let installed = machine.install_with(&[("ORBITE_WITHOUT_COMPUTER", "1")]);
+
+    assert!(installed.status.success(), "{}", shown(&installed));
+    assert!(!machine.calls().contains("firefox"), "{}", machine.calls());
+    assert!(!machine.path("etc/apt/sources.list.d/mozilla.list").exists());
+    assert!(
+        shown(&installed).contains("computer"),
+        "the Owner is told what the Agent goes without"
+    );
+}
+
+#[test]
+fn orbite_is_installed_even_when_the_computer_cannot_be() {
+    let machine = Machine::debian();
+    // The package manager fails on the browser, as when a mirror is down.
+    machine.stand_in("apt-get", "case \"$*\" in *firefox*) exit 100;; esac; exit 0");
+
+    let installed = machine.install();
+
+    assert!(installed.status.success(), "{}", shown(&installed));
+    assert!(machine.path("usr/local/bin/orbite").exists());
+    assert!(shown(&installed).contains("computer could not be set up"), "{}", shown(&installed));
 }

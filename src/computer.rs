@@ -252,6 +252,12 @@ impl Computer {
             .env_remove("XDG_SESSION_TYPE")
             .env_remove("XAUTHORITY")
             .env("MOZ_ENABLE_WAYLAND", "0")
+            // Whatever the browser keeps outside its profile stays with it,
+            // in the Agent's folder, whoever asked for it to be started.
+            .env("HOME", self.profile.parent().unwrap_or(&self.profile))
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("XDG_CACHE_HOME")
+            .env_remove("XDG_RUNTIME_DIR")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());

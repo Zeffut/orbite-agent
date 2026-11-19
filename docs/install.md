@@ -31,7 +31,8 @@ The installer:
 - checks the machine, and stops with an explanation if it cannot host Orbite;
 - downloads Orbite and verifies that it is signed by Orbite's key;
 - creates an account called `orbite`, which the agent runs as, and its folder `/var/lib/orbite`;
-- installs a service that starts with the machine and comes back by itself after a crash, and a daily check for updates.
+- installs a service that starts with the machine and comes back by itself after a crash, and a daily check for updates;
+- sets up the agent's own computer: a virtual screen (`xvfb`, `xdotool`), fonts, and Firefox from Mozilla's own package repository, which it adds to the machine's package sources. To install Orbite without it, put `ORBITE_WITHOUT_COMPUTER=1` before `sh`. If this part fails, Orbite is installed all the same, and running the installer again later adds it.
 
 ## 3. Answer the setup's questions
 
@@ -51,7 +52,7 @@ If you close the terminal half-way, run `sudo orbite setup` to carry on where yo
 - **Updates.** Once a day Orbite installs the latest release, only if Orbite's key signed it, and goes back to the previous one if the new one does not start; your agent tells you when it happened. `sudo orbite update` updates now; `sudo orbite update off` turns automatic updates off.
 - **Looking at the service.** `systemctl status orbite` shows whether it runs, and `journalctl -u orbite` what it said.
 - **Moving to another machine.** `sudo orbite export FILE` writes everything of your agent to one file. Keep that file to yourself: it holds the agent's secrets. On the new machine, install without the setup (`curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo ORBITE_SKIP_SETUP=1 sh`), then `sudo orbite restore FILE` and `sudo systemctl restart orbite`.
-- **Removing Orbite.** `sudo orbite uninstall` removes the service, the program, the account and the agent's data, after asking. Add `--keep-data` to keep the data in `/var/lib/orbite`.
+- **Removing Orbite.** `sudo orbite uninstall` removes the service, the program, the account and the agent's data, after asking. Add `--keep-data` to keep the data in `/var/lib/orbite`. The packages the installer added for the agent's computer (Firefox, `xvfb`, `xdotool`, fonts) and Mozilla's package source are left in place: remove them with `apt` if nothing else uses them.
 
 On the machine, the `orbite` command is run with `sudo`: it then works on the installed Orbite, as the agent's own account. `orbite` with no argument lists what it can do.
 

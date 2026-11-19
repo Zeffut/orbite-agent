@@ -235,3 +235,28 @@ mod browser {
         assert!(becomes(&computer, (0, 0, 255)), "the browser forgot what the site kept");
     }
 }
+
+#[test]
+fn the_command_says_whether_the_computer_works_on_this_machine() {
+    if screen().is_none() {
+        return;
+    }
+    let home = tempfile::tempdir().unwrap();
+
+    let checked = std::process::Command::new(env!("CARGO_BIN_EXE_orbite"))
+        .args(["computer", "check"])
+        .env("ORBITE_HOME", home.path())
+        .output()
+        .unwrap();
+
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&checked.stdout),
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    assert!(checked.status.success(), "{said}");
+    assert!(said.contains("works"), "{said}");
+    // It leaves a picture of what it saw, and nothing running.
+    let picture = std::fs::read(home.path().join("computer/check.png")).unwrap();
+    assert_eq!(&picture[1..4], b"PNG");
+}
