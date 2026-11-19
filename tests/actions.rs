@@ -12,13 +12,22 @@ use support::{Owner, ScriptedProvider, memory_channel};
 
 /// Starts an Agent working in `workspace`, thinking with `provider`.
 fn agent_in(workspace: &Path, provider: &ScriptedProvider) -> Owner {
+    // Long enough for a quick command on a machine busy with other things.
+    agent_stopping_commands_after(Duration::from_secs(20), workspace, provider)
+}
+
+fn agent_stopping_commands_after(
+    patience: Duration,
+    workspace: &Path,
+    provider: &ScriptedProvider,
+) -> Owner {
     let (mut channel, owner) = memory_channel();
     let provider = provider.clone();
     let workspace = workspace.to_owned();
     tokio::spawn(async move {
         Agent::new(provider, Store::in_memory())
             .working_in(workspace)
-            .stopping_commands_after(Duration::from_millis(400))
+            .stopping_commands_after(patience)
             .converse(&mut channel)
             .await
     });
@@ -165,7 +174,8 @@ async fn a_command_that_hangs_is_stopped_and_the_conversation_goes_on() {
     provider
         .then_acts([("run_command", json!({ "command": "echo started; sleep 30" }))])
         .then(Ok("It hung.".into()));
-    let mut owner = agent_in(workspace.path(), &provider);
+    let mut owner =
+        agent_stopping_commands_after(Duration::from_millis(400), workspace.path(), &provider);
 
     owner.says("Run it.");
     owner.is_asked().await;
