@@ -81,6 +81,12 @@ for name in "$FILE" SHA256SUMS SHA256SUMS.sig; do
 done
 
 # The list of checksums is signed; the program must match its checksum.
+# Checking the signature takes OpenSSL 3: an older one fails on a sound release.
+HAS="$(openssl version 2>/dev/null | awk '{print $2}')"
+case "$HAS" in
+    [3-9].* | [1-9][0-9].*) ;;
+    *) refuse "this machine has OpenSSL ${HAS:-of an unknown version}, which cannot check Orbite's signature. It takes OpenSSL 3 or later, as on Debian 12 and Ubuntu 22.04." ;;
+esac
 printf '%s\n' "$KEY" >"$WORK/orbite.pub"
 openssl pkeyutl -verify -pubin -inkey "$WORK/orbite.pub" -rawin \
     -in "$WORK/SHA256SUMS" -sigfile "$WORK/SHA256SUMS.sig" >/dev/null 2>&1 ||

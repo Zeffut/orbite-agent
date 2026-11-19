@@ -352,3 +352,22 @@ fn installing_again_does_not_start_an_orbite_that_was_never_set_up() {
     assert!(!machine.calls().contains("systemctl restart orbite"), "{}", machine.calls());
     assert!(shown(&again).contains("orbite setup"), "{}", shown(&again));
 }
+
+#[test]
+fn a_machine_whose_openssl_cannot_check_the_signature_is_told_so_and_not_that_the_release_is_unsigned()
+ {
+    let machine = Machine::debian();
+    // As OpenSSL 1.1.1 answers: it does not know how to check such a signature.
+    machine.stand_in(
+        "openssl",
+        "[ \"$1\" = version ] && { echo 'OpenSSL 1.1.1w  11 Sep 2023'; exit 0; }; exit 1",
+    );
+
+    let refused = machine.install();
+
+    assert!(!refused.status.success(), "{}", shown(&refused));
+    assert!(shown(&refused).contains("OpenSSL 1.1.1w"), "{}", shown(&refused));
+    assert!(shown(&refused).contains("OpenSSL 3"), "{}", shown(&refused));
+    assert!(!shown(&refused).contains("not signed"), "{}", shown(&refused));
+    assert!(!machine.path("usr/local/bin/orbite").exists());
+}
