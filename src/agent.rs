@@ -1064,7 +1064,9 @@ impl<P: Provider + 'static> Agent<P> {
             // costly, and only the latest one tells what is there now.
             if let Some(picture) = screen {
                 self.store.append(&Message::Notice(format!(
-                    "The Computer's screen now:\n{}",
+                    "The Computer's screen now. If what it shows stops you (a page asking to \
+                     verify that a person is there, an error, a sign-in), tell your Owner exactly \
+                     what it shows, in those words, not that you could not read it:\n{}",
                     crate::attached(&picture)
                 )))?;
             }
@@ -1248,7 +1250,7 @@ fn wake_ups_spec() -> ActionSpec {
             .into(),
         input: serde_json::json!({
             "type": "object",
-            "properties": { "every_minutes": { "type": "integer", "description": "Minutes between wake-ups; 0 for never." } },
+            "properties": { "every_minutes": { "type": "integer" } },
             "required": ["every_minutes"],
         }),
     }
@@ -1263,8 +1265,8 @@ fn quiet_hours_spec() -> ActionSpec {
         input: serde_json::json!({
             "type": "object",
             "properties": {
-                "from": { "type": "string", "description": "When they start, as HH:MM in your Owner's time." },
-                "until": { "type": "string", "description": "When they end, as HH:MM in your Owner's time." },
+                "from": { "type": "string", "description": "HH:MM in your Owner's time." },
+                "until": { "type": "string", "description": "HH:MM." },
             },
             "required": ["from", "until"],
         }),
@@ -2463,14 +2465,15 @@ fn folded(actions: Vec<ActionSpec>) -> Vec<ActionSpec> {
                 offered.push(ActionSpec {
                     name: "computer".into(),
                     description: "Your own Computer, with a web browser: use it whenever you are asked to \
-                        go to a site, click, type, search on a site or sign in. It is a real screen that \
-                        you see through pictures, 853 by 533, and act on with mouse and keyboard. `do` is \
+                        go to a site, click, type, search on a site or sign in. A real screen, seen \
+                        through pictures (853 by 533) and acted on with mouse and keyboard. `do` is \
                         open (an address; your Owner is asked first), look, click (at x, y of the last \
                         picture), type (a text where the cursor is; {{NAME}} types a secret you never \
                         see, once your Owner agrees), key (such as Return, Tab, ctrl+l) or scroll \
                         (notches, positive for down). Each answers with a picture of the screen. Before \
-                        anything that pays, sends or deletes, and when a site asks for a code or a \
-                        person, ask your Owner."
+                        anything that pays, sends or deletes, and when a site asks for a code, ask \
+                        your Owner. A page that wants proof of a person (a puzzle, \"verification \
+                        required\") is not yours to pass: say so plainly and offer another way."
                         .into(),
                     input: serde_json::json!({
                         "type": "object",
