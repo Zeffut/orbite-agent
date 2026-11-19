@@ -166,6 +166,9 @@ pub struct Agent<P> {
     /// The installation's folder, where the settings not kept with the
     /// Conversation are.
     home: Option<PathBuf>,
+    /// True when ending the Conversation gets Orbite started again, as a
+    /// service does.
+    restarted: bool,
     /// True when a notice was added that the Agent has yet to respond to.
     owed: bool,
     /// How often the Agent wakes up when its Owner has set no pace, in
@@ -209,6 +212,7 @@ impl<P: Provider + 'static> Agent<P> {
             time_check: Duration::from_secs(20),
             notices: None,
             home: None,
+            restarted: false,
             owed: false,
             wake_up_pace: 0,
             last_active: 0,
@@ -271,6 +275,13 @@ impl<P: Provider + 'static> Agent<P> {
     /// The installation's folder, for the settings kept in it.
     pub fn configured_in(mut self, home: impl Into<PathBuf>) -> Self {
         self.home = Some(home.into());
+        self
+    }
+
+    /// Says that Orbite is started again whenever it ends, as its service
+    /// does: the Agent then ends by itself to take a setting read at start.
+    pub fn restarted_by_its_service(mut self) -> Self {
+        self.restarted = true;
         self
     }
 
@@ -423,8 +434,25 @@ impl<P: Provider + 'static> Agent<P> {
                 None => {}
             }
             if let Some(asked) = text.trim().strip_prefix("/settings") {
-                let (said, choices) = self.settings(asked);
-                if channel.offer(&said, &choices).await.is_err() {
+                let (mut said, choices) = self.settings(asked);
+                // A setting read at start was changed.
+                let changed = asked.split_whitespace().next().unwrap_or_default();
+                let restart = said.starts_with('✅') && crate::TAKES_A_RESTART.contains(&changed);
+                if restart {
+                    said.push_str("\n\n");
+                    said.push_str(if self.restarted {
+                        self.language.say(
+                            "I restart to take it: back in a moment.",
+                            "Je redémarre pour l'appliquer : je reviens dans un instant.",
+                        )
+                    } else {
+                        self.language.say(
+                            "It applies at the next start of Orbite.",
+                            "Ce sera appliqué au prochain démarrage d'Orbite.",
+                        )
+                    });
+                }
+                if channel.offer(&said, &choices).await.is_err() || (restart && self.restarted) {
                     return;
                 }
                 continue;
@@ -1332,6 +1360,7 @@ impl<P: Provider + 'static> Agent<P> {
                 format!("🔑 {}", say("Secrets in the conversation", "Secrets dans la discussion"))
             }
             "updates" => format!("⬆️ {}", say("Automatic updates", "Mises à jour automatiques")),
+            "model" => format!("🧠 {}", say("Model", "Modèle")),
             _ => format!("🌐 {}", say("Language", "Langue")),
         };
         // A value as an Owner reads it; what is written to set it stays as it is.
@@ -1374,9 +1403,11 @@ impl<P: Provider + 'static> Agent<P> {
                     "\nAnother pace: /settings wakeups 90",
                     "\nAutre rythme : /settings wakeups 90",
                 )),
-                "language" => text.push_str(&say(
-                    "\nApprovals and buttons follow when Orbite next starts.",
-                    "\nLes autorisations et les boutons suivront au prochain démarrage d'Orbite.",
+                "model" => text.push_str(&say(
+                    "\nAnother model of the same Provider: /settings model NAME\nTo see what to expect of one \
+                     first, on the machine: orbite tryout NAME",
+                    "\nAutre modèle du même fournisseur : /settings model NOM\nPour savoir d'abord à quoi vous \
+                     attendre, sur la machine : orbite tryout NOM",
                 )),
                 _ => {}
             }

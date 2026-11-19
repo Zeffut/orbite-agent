@@ -8,8 +8,11 @@ use chrono::NaiveTime;
 use crate::{Config, Store};
 
 /// The settings, in the order they are shown.
-pub const SETTINGS: [&str; 6] =
-    ["permission", "quiet", "wakeups", "secrets", "updates", "language"];
+pub const SETTINGS: [&str; 7] =
+    ["permission", "quiet", "wakeups", "secrets", "updates", "language", "model"];
+
+/// The settings that are read when Orbite starts: changing one takes a restart.
+pub const TAKES_A_RESTART: [&str; 2] = ["language", "model"];
 
 /// The settings of one installation.
 pub struct Settings<'a> {
@@ -55,6 +58,7 @@ impl<'a> Settings<'a> {
             "secrets" => on_or_off(self.kept("secrets_in_conversation")?.is_some()).into(),
             "updates" => on_or_off(self.config().automatic_updates != Some(false)).into(),
             "language" => self.config().language.unwrap_or_else(|| "en".into()),
+            "model" => self.config().provider.map_or_else(|| "none".into(), |chosen| chosen.model),
             other => return Err(unknown(other)),
         })
     }
@@ -73,8 +77,8 @@ impl<'a> Settings<'a> {
 
     /// Gives the setting called `key` the value `value`; the error says what
     /// it can be given.
-    pub fn set(&self, key: &str, value: &str) -> Result<(), String> {
-        let value = value.trim().to_lowercase();
+    pub fn set(&self, key: &str, written: &str) -> Result<(), String> {
+        let value = written.trim().to_lowercase();
         let keep = |name: &str, value: Option<&str>| {
             self.store.set_setting(name, value).map_err(|error| error.to_string())
         };
@@ -130,6 +134,27 @@ impl<'a> Settings<'a> {
                 } else {
                     config.language = Some(value);
                 }
+                config.save(home).map_err(|error| error.to_string())
+            }
+            "model" => {
+                // As written: the names of models tell capitals apart.
+                let model = written.trim();
+                let Some(home) = self.home else {
+                    return Err("model is kept in Orbite's folder, and there is none here.".into());
+                };
+                let mut config = Config::load(home).map_err(|error| error.to_string())?;
+                let Some(chosen) = config.provider.as_mut() else {
+                    return Err(
+                        "No Provider is set up yet: run `orbite setup` on the machine.".into()
+                    );
+                };
+                if model.is_empty() || model.contains(char::is_whitespace) {
+                    return Err(
+                        "model is the name of a model of your Provider, such as the one shown."
+                            .into(),
+                    );
+                }
+                chosen.model = model.to_owned();
                 config.save(home).map_err(|error| error.to_string())
             }
             other => Err(unknown(other)),

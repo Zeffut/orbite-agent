@@ -128,3 +128,51 @@ fn the_command_refuses_what_makes_no_sense() {
     assert!(refused.contains("careful") && refused.contains("free"), "{refused}");
     assert!(orbite(home.path(), &["settings"]).contains("permission = careful"));
 }
+
+#[tokio::test]
+async fn the_model_is_changed_from_the_conversation_and_orbite_restarts_to_take_it() {
+    let home = tempfile::tempdir().unwrap();
+    let chosen =
+        orbite::ProviderChoice { name: "groq".into(), model: "first-model".into(), address: None };
+    Config { provider: Some(chosen), ..Config::default() }.save(home.path()).unwrap();
+    let (mut channel, mut owner) = memory_channel();
+    let store = Store::open(home.path().join("orbite.db")).unwrap();
+    let folder = home.path().to_owned();
+    let running = tokio::spawn(async move {
+        Agent::new(ScriptedProvider::default(), store)
+            .configured_in(&folder)
+            .restarted_by_its_service()
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("/settings");
+    assert!(owner.hears().await.contains("first-model"));
+    owner.says("/settings model second-model");
+    let said = owner.hears().await;
+
+    assert!(said.contains("second-model") && said.to_lowercase().contains("restart"), "{said}");
+    assert_eq!(Config::load(home.path()).unwrap().provider.unwrap().model, "second-model");
+    // The Agent ends so that its service starts it again with the new model.
+    tokio::time::timeout(std::time::Duration::from_secs(2), running)
+        .await
+        .expect("it kept running")
+        .unwrap();
+    assert!(orbite(home.path(), &["settings"]).contains("model = second-model"));
+}
+
+#[tokio::test]
+async fn without_a_service_to_restart_it_the_agent_says_when_the_change_applies() {
+    let home = tempfile::tempdir().unwrap();
+    let chosen =
+        orbite::ProviderChoice { name: "groq".into(), model: "first-model".into(), address: None };
+    Config { provider: Some(chosen), ..Config::default() }.save(home.path()).unwrap();
+    let mut owner = agent_in(home.path(), &ScriptedProvider::answering(["Still here."]));
+
+    owner.says("/settings model second-model");
+    let said = owner.hears().await;
+    assert!(said.contains("next start"), "{said}");
+
+    owner.says("Hello");
+    assert_eq!(owner.hears().await, "Still here.");
+}

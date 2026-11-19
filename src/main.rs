@@ -110,7 +110,7 @@ async fn run() -> Result<(), Failure> {
         let terminal = Terminal::new(BufReader::new(stdin()), stdout());
         agent.converse(&mut Both::new(telegram, terminal)).await;
     } else {
-        agent.converse(&mut telegram).await;
+        agent.restarted_by_its_service().converse(&mut telegram).await;
     }
     Ok(())
 }
