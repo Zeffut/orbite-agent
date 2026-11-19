@@ -98,4 +98,16 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" release/* --title "Orbite ${GITHUB_REF_NAME#v}" --generate-notes --prerelease
+        run: |
+          cat > notes.md <<'NOTES'
+          Orbite is in early development: versions before 1.0 are for trying it out, and things will change.
+
+          Install on Debian or Ubuntu (x86_64 or aarch64):
+
+          ```sh
+          curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh
+          ```
+
+          The installer checks that what it downloads is signed by Orbite's key before installing it.
+          NOTES
+          gh release create "${GITHUB_REF_NAME}" release/* --title "Orbite ${GITHUB_REF_NAME#v}" --notes-file notes.md --generate-notes

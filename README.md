@@ -2,7 +2,17 @@
 
 An open-source personal AI agent that lives on a machine you control, uses the AI you already pay for, and adapts to you over time.
 
-> **Status: early development.** Nothing is installable yet. The Agent itself works, in a terminal and in Telegram: it acts on its machine behind Approvals, remembers, learns Skills, runs Routines and Sub-agents, reads the web and wakes up by itself. Version 1.0 is specified in the issue tracker; versions before it are numbered 0.x.
+> **Status: early development.** Versions before 1.0 are for trying it out. The Agent itself works, in a terminal and in Telegram: it acts on its machine behind Approvals, remembers, learns Skills, runs Routines and Sub-agents, reads the web and wakes up by itself. Version 1.0 is specified in the issue tracker; versions before it are numbered 0.x.
+
+## Trying it
+
+On a Debian or Ubuntu machine (x86_64 or aarch64), as root:
+
+```sh
+curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh
+```
+
+The installer checks the machine before changing anything, verifies that what it downloads is signed by Orbite's key, gives Orbite an account of its own and a service that restarts by itself, then asks a few questions: which AI to think with, your Telegram bot, your agent's name. Running it again updates Orbite and keeps everything else.
 
 ## What 1.0 will be
 

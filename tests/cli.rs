@@ -113,3 +113,15 @@ async fn once_set_up_the_command_needs_no_setting_from_the_environment() {
     let body: serde_json::Value = serde_json::from_slice(&asked[0].body).unwrap();
     assert!(body["messages"][0]["content"].as_str().unwrap().contains("Your name is Nova"));
 }
+
+#[test]
+fn the_command_says_which_version_it_is() {
+    let home = tempfile::tempdir().unwrap();
+
+    let said = orbite(home.path(), &["version"], "");
+
+    assert_eq!(
+        String::from_utf8_lossy(&said.stdout).trim(),
+        format!("orbite {}", env!("CARGO_PKG_VERSION"))
+    );
+}

@@ -16,6 +16,7 @@ Commands:
   run    hold the Conversation in Telegram (add --terminal to open it here as well)
   chat   hold the Conversation in this terminal
   providers  list the Providers known by name
+  version    say which version this is
   setup      set Orbite up, or one part again (language, provider, telegram, name)
   secret     enter (set NAME), list or remove the secrets the Agent uses without seeing them
 
@@ -39,6 +40,10 @@ type Failure = Box<dyn std::error::Error>;
 async fn main() -> ExitCode {
     let outcome = match env::args().nth(1).as_deref() {
         Some("run") => run().await,
+        Some("version" | "--version" | "-V") => {
+            println!("orbite {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Some("chat") => chat().await,
         Some("secret") => secret(),
         Some("setup") => setup().await,
