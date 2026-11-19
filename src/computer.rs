@@ -228,7 +228,7 @@ impl Computer {
 
     /// How far down the screen a page starts, below the browser's own bars.
     pub fn page_top(&self) -> u16 {
-        if self.browser.1 { 87 } else { 85 }
+        if self.browser.1 { 87 } else { 72 }
     }
 
     /// Shows `address` in the browser, starting the browser when it is not running.
@@ -289,6 +289,14 @@ impl Computer {
     /// Asks the browser to close, giving it time to keep what it has to.
     pub fn close_browser(&mut self) {
         let Some(mut browser) = self.running.take() else { return };
+        // Firefox is asked as a person would, by its own shortcut: stopped
+        // from outside, it does not always write down what sites just kept.
+        if !self.browser.1 && self.screen.key("ctrl+q").is_ok() {
+            let until = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < until && matches!(browser.try_wait(), Ok(None)) {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
         // SAFETY: a signal sent to a program this one started.
         unsafe { libc::kill(browser.id() as libc::pid_t, libc::SIGTERM) };
         let until = Instant::now() + Duration::from_secs(10);
