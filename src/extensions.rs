@@ -12,6 +12,7 @@ use rquickjs::{Context, Function, Runtime};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::secrets::Secrets;
 use crate::slug::slug;
 use crate::{ActionRequest, ActionSpec, Approval};
 
@@ -74,6 +75,9 @@ struct Manifest {
     /// The hosts the Extension may reach, by name.
     #[serde(default)]
     hosts: Vec<String>,
+    /// The secrets it may send to those hosts, by name.
+    #[serde(default)]
+    secrets: Vec<String>,
 }
 
 /// One Extension of this installation.
@@ -82,6 +86,7 @@ pub(crate) struct Extension {
     pub(crate) description: String,
     pub(crate) description_fr: Option<String>,
     hosts: Vec<String>,
+    secrets: Vec<String>,
     script: String,
     /// True for an Extension shipped with Orbite.
     pub(crate) official: bool,
@@ -144,6 +149,7 @@ impl Extensions {
                     description: manifest.description,
                     description_fr: manifest.description_fr,
                     hosts: manifest.hosts,
+                    secrets: manifest.secrets,
                     script: (*script).to_owned(),
                     official: true,
                     off: off(name),
@@ -167,6 +173,7 @@ impl Extensions {
                 description: manifest.description,
                 description_fr: manifest.description_fr,
                 hosts: manifest.hosts,
+                secrets: manifest.secrets,
                 script: fs::read_to_string(folder.join("main.js")).unwrap_or_default(),
                 official: false,
                 off: off(&name),
@@ -234,6 +241,7 @@ impl Extensions {
             description: String::new(),
             description_fr: None,
             hosts: Vec::new(),
+            secrets: Vec::new(),
             script: script.to_owned(),
             official: false,
             off: None,
@@ -262,11 +270,12 @@ impl Extensions {
         name: &str,
         description: &str,
         hosts: &[String],
+        secrets: &[String],
         script: &str,
     ) -> std::io::Result<()> {
         let folder = self.folder.join(name);
         fs::create_dir_all(&folder)?;
-        let manifest = json!({ "description": description, "hosts": hosts });
+        let manifest = json!({ "description": description, "hosts": hosts, "secrets": secrets });
         fs::write(folder.join("extension.json"), serde_json::to_string_pretty(&manifest)? + "\n")?;
         fs::write(folder.join("main.js"), script)?;
         match fs::remove_file(folder.join("off")) {
@@ -314,8 +323,19 @@ impl Extensions {
     }
 
     /// Carries out `request` when it is for an Extension; the text is its Outcome.
-    pub(crate) async fn carry_out(self: &Arc<Self>, request: &ActionRequest) -> Option<String> {
+    pub(crate) async fn carry_out(
+        self: &Arc<Self>,
+        request: &ActionRequest,
+        secrets: Option<&Secrets>,
+    ) -> Option<String> {
         let (extension, action) = self.find(request)?;
+        // The secrets it was granted are filled in on the way out: the
+        // script names them and never holds them.
+        let lent: Vec<(String, String)> = extension
+            .secrets
+            .iter()
+            .filter_map(|name| Some((name.clone(), secrets?.get(name).ok()??)))
+            .collect();
         let call = format!(
             "globalThis.__settled = null;
              Promise.resolve().then(() => run({}, {})).then(
@@ -329,7 +349,8 @@ impl Extensions {
         let runner = Arc::clone(self);
         let handle = tokio::runtime::Handle::current();
         let ran =
-            tokio::task::spawn_blocking(move || runner.run(&extension, call, Some(handle))).await;
+            tokio::task::spawn_blocking(move || runner.run(&extension, call, Some((handle, lent))))
+                .await;
         Some(match ran {
             Ok(Ok(settled)) => match serde_json::from_str::<Value>(&settled) {
                 Ok(Value::Object(settled)) if settled.contains_key("ok") => {
@@ -406,7 +427,7 @@ impl Extensions {
         &self,
         extension: &Extension,
         call: String,
-        reaching: Option<tokio::runtime::Handle>,
+        reaching: Option<(tokio::runtime::Handle, Vec<(String, String)>)>,
     ) -> Result<String, Failure> {
         // Saying what it adds takes an Extension no time at all.
         let limit = if reaching.is_some() {
@@ -489,7 +510,9 @@ impl Extensions {
                             Err("nothing can be reached while an Extension describes itself"
                                 .to_owned())
                         }
-                        Some(handle) => handle.block_on(reach(&http, &hosts, &request, deadline)),
+                        Some((handle, lent)) => {
+                            handle.block_on(reach(&http, &hosts, lent, &request, deadline))
+                        }
                     };
                     answer.unwrap_or_else(|problem| json!({ "error": problem })).to_string()
                 }),
@@ -578,6 +601,7 @@ fn caught(ctx: &rquickjs::Ctx) -> String {
 async fn reach(
     http: &reqwest::Client,
     hosts: &[String],
+    lent: &[(String, String)],
     request: &str,
     deadline: Instant,
 ) -> Result<Value, String> {
@@ -589,7 +613,14 @@ async fn reach(
         headers: BTreeMap<String, String>,
         body: Option<String>,
     }
-    let asked: Asked = serde_json::from_str(request).map_err(|error| error.to_string())?;
+    let mut asked: Asked = serde_json::from_str(request).map_err(|error| error.to_string())?;
+    asked.url = filled(&asked.url, lent)?;
+    for value in asked.headers.values_mut() {
+        *value = filled(value, lent)?;
+    }
+    if let Some(body) = &mut asked.body {
+        *body = filled(body, lent)?;
+    }
     let mut url =
         url::Url::parse(&asked.url).map_err(|_| format!("{} is not an address", asked.url))?;
     let mut method =
@@ -615,10 +646,10 @@ async fn reach(
         if let Some(body) = &body {
             sending = sending.body(body.clone());
         }
-        let answer = sending
-            .send()
-            .await
-            .map_err(|error| format!("{host} could not be reached: {error}"))?;
+        let answer = sending.send().await.map_err(|error| {
+            // Without the address, which may carry a secret.
+            format!("{host} could not be reached: {}", error.without_url())
+        })?;
         let status = answer.status();
         let moved = answer
             .headers()
@@ -640,12 +671,45 @@ format!(
             url = to;
             continue;
         }
-        let text =
-            answer.text().await.map_err(|error| format!("{host} did not answer whole: {error}"))?;
+        let text = answer
+            .text()
+            .await
+            .map_err(|error| format!("{host} did not answer whole: {}", error.without_url()))?;
         let text: String = text.chars().take(BODY_LIMIT).collect();
+        // A service that sends a secret back does not hand it to the script.
+        let mut text = text;
+        for (name, value) in lent {
+            text = text.replace(value.as_str(), &format!("[{name}]"));
+        }
         return Ok(json!({ "status": status.as_u16(), "body": text }));
     }
     Err(format!("{host} redirects again and again"))
+}
+
+/// `text` with each {{NAME}} replaced by the secret of that name, when the
+/// Extension was granted it.
+fn filled(text: &str, lent: &[(String, String)]) -> Result<String, String> {
+    let mut filled = String::new();
+    let mut rest = text;
+    while let Some((before, after)) = rest.split_once("{{") {
+        filled.push_str(before);
+        let Some((name, after)) = after.split_once("}}") else {
+            filled.push_str("{{");
+            rest = after;
+            continue;
+        };
+        match lent.iter().find(|(granted, _)| granted == name) {
+            Some((_, value)) => filled.push_str(value),
+            None => {
+                return Err(format!(
+                    "this Extension was not granted the secret {name}, or your Owner has not entered it yet \
+                     (orbite secret set {name})"
+                ));
+            }
+        }
+        rest = after;
+    }
+    Ok(filled + rest)
 }
 
 fn listed(hosts: &[String]) -> String {

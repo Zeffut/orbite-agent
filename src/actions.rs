@@ -93,6 +93,8 @@ struct CreateExtension {
     description: String,
     #[serde(default)]
     hosts: Vec<String>,
+    #[serde(default)]
+    secrets: Vec<String>,
     script: String,
 }
 
@@ -276,7 +278,9 @@ impl Host {
                     store.get(key), store.set(key, value), store.remove(key), store.keys() for data \
                     it keeps, and http.get(url, { headers }), http.post(url, body, { headers }), \
                     also put, patch and delete, which return { status, body, json() } and only \
-                    reach the hosts listed. There is no fetch, require, file or timer."
+                    reach the hosts listed. To send a secret (see list_secrets), it writes {{NAME}} in an \
+                    address, a header or a body: Orbite fills it in on the way, and the script never \
+                    holds its value. There is no fetch, require, file or timer."
                     .into(),
                 input: json!({
                     "type": "object",
@@ -284,6 +288,7 @@ impl Host {
                         "name": text("A few lowercase words joined by dashes, such as \"weather\". Its Actions are called name_action."),
                         "description": text("One sentence for your Owner: what it is for."),
                         "hosts": { "type": "array", "items": { "type": "string" }, "description": "The hosts it needs to reach, by name, such as \"api.example.com\"; none when it reaches nothing." },
+                        "secrets": { "type": "array", "items": { "type": "string" }, "description": "The names of the secrets it sends to those hosts; none when it needs none." },
                         "script": text("The whole JavaScript program."),
                     },
                     "required": ["name", "description", "hosts", "script"],
@@ -473,6 +478,15 @@ impl Host {
                         wanted.hosts.join(", ")
                     )
                 };
+                let reaches = if wanted.secrets.is_empty() {
+                    reaches
+                } else {
+                    format!(
+                        "{reaches}\n{} {}",
+                        self.language.say("Sends them the secrets:", "Leur envoie les secrets :"),
+                        wanted.secrets.join(", ")
+                    )
+                };
                 // Code the Agent wrote for itself is shown to its Owner at
                 // every Permission Level, and never allowed once and for all.
                 Review::Ask(Approval {
@@ -550,7 +564,7 @@ impl Host {
     async fn do_it(&self, request: &ActionRequest) -> String {
         if !is_own(&request.name) {
             if let Some(extensions) = &self.extensions
-                && let Some(outcome) = extensions.carry_out(request).await
+                && let Some(outcome) = extensions.carry_out(request, self.secrets.as_ref()).await
             {
                 return outcome;
             }
@@ -613,7 +627,13 @@ impl Host {
                 Some(extensions) => {
                     match extensions.check(&wanted.name, &wanted.script).and_then(|adds| {
                         extensions
-                            .write(&wanted.name, &wanted.description, &wanted.hosts, &wanted.script)
+                            .write(
+                                &wanted.name,
+                                &wanted.description,
+                                &wanted.hosts,
+                                &wanted.secrets,
+                                &wanted.script,
+                            )
                             .map(|()| adds)
                             .map_err(|error| format!("Could not keep the Extension: {error}."))
                     }) {

@@ -458,3 +458,96 @@ async fn a_redirection_is_followed_only_to_a_host_that_was_granted() {
         outcomes[1]
     );
 }
+
+fn agent_with_secrets_in(home: &Path, provider: &ScriptedProvider) -> Owner {
+    let (mut channel, owner) = memory_channel();
+    let provider = provider.clone();
+    let home = home.to_owned();
+    tokio::spawn(async move {
+        Agent::new(provider, Store::in_memory())
+            .keeping_secrets_in(&home)
+            .extending_in(home.join("extensions"))
+            .converse(&mut channel)
+            .await
+    });
+    owner
+}
+
+/// An Extension that calls a service with a key it names but never holds.
+const KEYED: &str = r#"
+function describe() {
+  return [{ name: "ask", description: "Ask the service.", parameters: { url: "Its address" } }];
+}
+function run(action, input) {
+  const answer = http.get(input.url + "?key={{WEATHER_KEY}}", { headers: { Authorization: "Bearer {{WEATHER_KEY}}" } });
+  // What the script itself holds is the name, not the value.
+  return answer.body + " | held by the script: " + "{{WEATHER_KEY}}";
+}
+"#;
+
+#[tokio::test]
+async fn an_extension_uses_a_secret_it_was_granted_without_ever_holding_it() {
+    let home = tempfile::tempdir().unwrap();
+    let value = ["weather", "key", "for", "the", "test"].join("-");
+    orbite::Secrets::kept_in(home.path()).set("WEATHER_KEY", &value).unwrap();
+    install(
+        &home.path().join("extensions"),
+        "weather",
+        json!({ "description": "Weather.", "hosts": ["localhost"], "secrets": ["WEATHER_KEY"] }),
+        KEYED,
+    );
+    let server = MockServer::start().await;
+    // The service answers with the key it was sent, as some do.
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::header("authorization", format!("Bearer {value}").as_str()))
+        .and(wiremock::matchers::query_param("key", value.as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!("sunny for {value}")))
+        .mount(&server)
+        .await;
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([(
+            "weather_ask",
+            json!({ "url": format!("http://localhost:{}/now", server.address().port()) }),
+        )])
+        .then(Ok("Sunny.".into()));
+    let mut owner = agent_with_secrets_in(home.path(), &provider);
+
+    owner.says("What is the weather?");
+    owner.hears().await;
+
+    let told = outcome(&provider);
+    assert!(told.starts_with("sunny for "), "the service was not sent the secret: {told}");
+    assert!(told.ends_with("held by the script: {{WEATHER_KEY}}"), "{told}");
+    assert!(!told.contains(&value), "the secret reached the model: {told}");
+}
+
+#[tokio::test]
+async fn a_secret_that_was_not_granted_is_not_sent() {
+    let home = tempfile::tempdir().unwrap();
+    let value = ["weather", "key", "for", "the", "test"].join("-");
+    orbite::Secrets::kept_in(home.path()).set("WEATHER_KEY", &value).unwrap();
+    // The same script, but nobody granted it the secret.
+    install(
+        &home.path().join("extensions"),
+        "weather",
+        json!({ "description": "Weather.", "hosts": ["localhost"] }),
+        KEYED,
+    );
+    let server = page("anything").await;
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([(
+            "weather_ask",
+            json!({ "url": format!("http://localhost:{}/now", server.address().port()) }),
+        )])
+        .then(Ok("No.".into()));
+    let mut owner = agent_with_secrets_in(home.path(), &provider);
+
+    owner.says("What is the weather?");
+    owner.hears().await;
+
+    let told = outcome(&provider);
+    assert!(told.contains("WEATHER_KEY") && told.contains("not granted"), "{told}");
+    assert!(server.received_requests().await.unwrap().is_empty(), "a request went out anyway");
+}

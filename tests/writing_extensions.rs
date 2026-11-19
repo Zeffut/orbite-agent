@@ -234,3 +234,23 @@ async fn the_actions_of_an_extension_are_named_in_letters_every_model_accepts() 
 
     assert_eq!(outcomes(&provider)[1], "Count: 1");
 }
+
+#[tokio::test]
+async fn the_owner_is_told_which_secrets_an_extension_would_use() {
+    let extensions = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    let mut wanted = counter(COUNTER);
+    wanted["hosts"] = json!(["api.example.org"]);
+    wanted["secrets"] = json!(["WEATHER_KEY"]);
+    provider.then_acts([("create_extension", wanted)]).then(Ok("Made.".into()));
+    let mut owner = agent_extended_in(extensions.path(), &provider);
+
+    owner.says("Make yourself a weather connector.");
+    let asked = owner.is_asked().await;
+    assert!(asked.detail.contains("WEATHER_KEY"), "{asked:?}");
+    owner.allows();
+    owner.hears().await;
+
+    let kept = fs::read_to_string(extensions.path().join("counter/extension.json")).unwrap();
+    assert!(kept.contains("WEATHER_KEY"), "{kept}");
+}
