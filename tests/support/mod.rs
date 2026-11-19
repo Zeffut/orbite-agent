@@ -247,7 +247,11 @@ impl Channel for MemoryChannel {
     }
 
     async fn send_file(&mut self, file: &std::path::Path, caption: &str) -> std::io::Result<()> {
-        let content = std::fs::read_to_string(file)?;
+        // A file that is not text is told by its size.
+        let content = match std::fs::read_to_string(file) {
+            Ok(content) => content,
+            Err(_) => format!("{} bytes", std::fs::read(file)?.len()),
+        };
         self.to_owner
             .send(format!(
                 "(file {}: {content}) {caption}",

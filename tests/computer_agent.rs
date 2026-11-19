@@ -165,3 +165,32 @@ async fn a_secret_is_typed_by_name_after_asking_and_its_value_never_reaches_the_
     });
     assert!(!leaked, "the secret's value was told to the model in words");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_owner_is_sent_a_picture_of_the_screen_when_they_ask_for_one() {
+    if !has_a_computer() {
+        return;
+    }
+    let (_site, address) = site().await;
+    let home = tempfile::tempdir().unwrap();
+    let picture = home.path().join("computer/pictures/screen-0.png");
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("computer", json!({ "do": "open", "url": address, "purpose": "show the page" }))])
+        .then_acts([("send_file", json!({ "path": picture, "caption": "The page." }))])
+        .then(Ok("Sent.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Open that site and send me a picture of it.");
+    asked(&mut owner).await;
+    owner.allows();
+    let sent = heard(&mut owner).await;
+
+    assert!(sent.starts_with("(file screen-0.png: ") && sent.ends_with("The page."), "{sent}");
+    assert_eq!(heard(&mut owner).await, "Sent.");
+    // The model was told where the picture is, so that it can send it.
+    let told = provider.every_call().into_iter().flat_map(|(_, asked)| asked).any(|message| {
+        matches!(message, Message::Outcome { text, .. } if text.contains(picture.to_str().unwrap()))
+    });
+    assert!(told, "the model was never told where the picture of the screen is");
+}
