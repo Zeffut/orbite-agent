@@ -587,3 +587,45 @@ fn a_system_too_old_is_refused_before_anything_is_fetched_or_installed() {
         assert!(machine.install().status.success(), "{about}");
     }
 }
+
+#[test]
+fn what_is_installed_for_the_machine_is_readable_by_it_however_strict_the_account() {
+    use std::os::unix::fs::PermissionsExt;
+    let machine = Machine::debian();
+
+    // Run by an account that makes its own files for itself only.
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh");
+    machine.write("mozilla.key", "a key");
+    let path =
+        format!("{}:{}", machine.path("stand-ins").display(), std::env::var("PATH").unwrap());
+    let installed = Command::new("sh")
+        .arg("-c")
+        .arg(format!("umask 077; sh '{}'", script.display()))
+        .env("PATH", path)
+        .env("ORBITE_ROOT", machine.root.path())
+        .env("ORBITE_RELEASE_URL", format!("file://{}", machine.path("release").display()))
+        .env("ORBITE_SIGNING_KEY", fs::read_to_string(machine.path("release/signing.pub")).unwrap())
+        .env("ORBITE_SKIP_SETUP", "1")
+        .env("ORBITE_MOZILLA_KEY_URL", format!("file://{}", machine.path("mozilla.key").display()))
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{}", shown(&installed));
+
+    // apt reads these as another account than root.
+    for file in [
+        "etc/apt/keyrings/packages.mozilla.org.asc",
+        "etc/apt/sources.list.d/mozilla.list",
+        "etc/apt/preferences.d/mozilla",
+        "etc/systemd/system/orbite.service",
+        "etc/systemd/system/orbite-update.timer",
+    ] {
+        let mode = fs::metadata(machine.path(file)).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o644, "{file}");
+    }
+    let keyrings = fs::metadata(machine.path("etc/apt/keyrings")).unwrap().permissions().mode();
+    assert_eq!(keyrings & 0o777, 0o755);
+    assert_eq!(
+        fs::metadata(machine.path("usr/local/bin/orbite")).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+}

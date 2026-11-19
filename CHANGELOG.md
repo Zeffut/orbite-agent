@@ -5,6 +5,7 @@ What changed in each version of Orbite, for the people who run it.
 ## Unreleased
 
 - When the installer stops on something it did not foresee, or cannot set up the agent's computer, it offers a report: a link to a new issue, filled in with what stopped and the kind of system. Nothing is sent unless you open the link and send it.
+- On a machine whose accounts make files for themselves only (umask 077), the agent's computer could not be set up: the key of Mozilla's packages was written unreadable by apt. Found by installing on such a machine.
 - A system too old for Orbite (before Debian 12 or Ubuntu 22.04) is told so at once, before anything is fetched or installed.
 - Installed where there is no terminal to ask in (from a script), Orbite leaves setup for later instead of failing at the end.
 - The installer takes systems made from Debian or Ubuntu (Linux Mint, Kali, Raspberry Pi OS and the like) as it takes those two, and says so.

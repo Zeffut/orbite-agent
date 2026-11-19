@@ -7,6 +7,11 @@
 #
 # Running it again updates the program and keeps everything else.
 set -eu
+# What is installed for the whole machine is readable by it, however
+# strictly the account running this makes its own files: a key that apt
+# cannot read is a key apt does not trust. The Agent's folder is closed
+# to others further down, by name.
+umask 022
 
 # For trying the installer out: another root folder, another place to
 # download from, another key, no setup at the end.
@@ -31,9 +36,19 @@ refuse() {
     exit 1
 }
 
-# `$1` as it is written in an address.
+# `$1` as it is written in an address: letters and digits as they are,
+# everything else by its number.
 in_an_address() {
-    printf '%s' "$1" | od -An -v -tx1 | tr -d '\n' | sed 's/ \([0-9a-f][0-9a-f]\)/%\1/g'
+    printf '%s' "$1" | LC_ALL=C awk '
+        BEGIN { for (i = 1; i < 256; i++) written[sprintf("%c", i)] = sprintf("%%%02X", i) }
+        {
+            line = ""
+            for (i = 1; i <= length($0); i++) {
+                letter = substr($0, i, 1)
+                line = line (letter ~ /[A-Za-z0-9._~-]/ ? letter : written[letter])
+            }
+            printf "%s%s", (NR > 1 ? "%0A" : ""), line
+        }'
 }
 
 # When the installer stops on something it did not foresee, it offers a
