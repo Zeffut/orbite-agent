@@ -199,3 +199,87 @@ async fn the_owner_is_sent_a_picture_of_the_screen_when_they_ask_for_one() {
     });
     assert!(told, "the model was never told where the picture of the screen is");
 }
+
+/// True while a program of that number runs.
+fn alive(pid: &str) -> bool {
+    std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|command| !command.is_empty())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_orbite_closes_its_browser_and_its_screen() {
+    if !has_a_computer() {
+        return;
+    }
+    let (_site, address) = site().await;
+    // A Provider whose model opens the site, then takes its time.
+    let provider = MockServer::start().await;
+    let opening = json!({ "choices": [{ "message": { "role": "assistant", "content": null, "tool_calls": [{
+        "id": "call-1", "type": "function",
+        "function": { "name": "computer", "arguments": json!({ "do": "open", "url": address, "purpose": "look" }).to_string() },
+    }] } }] });
+    Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(opening))
+        .up_to_n_times(1)
+        .mount(&provider)
+        .await;
+    Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(120)))
+        .mount(&provider)
+        .await;
+    let home = tempfile::tempdir().unwrap();
+    let mut orbite = tokio::process::Command::new(env!("CARGO_BIN_EXE_orbite"))
+        .arg("chat")
+        .env("ORBITE_HOME", home.path())
+        .env("ORBITE_PROVIDER", "custom")
+        .env("ORBITE_BASE_URL", provider.uri())
+        .env("ORBITE_MODEL", "pretend")
+        .env("ORBITE_API_KEY", "none")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    use tokio::io::AsyncWriteExt;
+    let mut typed = orbite.stdin.take().unwrap();
+    // The request, then yes to going to the site.
+    typed.write_all(b"Open the site.\ny\n").await.unwrap();
+    typed.flush().await.unwrap();
+
+    // Its screen and its browser are running.
+    let noted = home.path().join("computer/profile.running");
+    let mut running: Vec<String> = Vec::new();
+    for _ in 0..120 {
+        running = std::fs::read_to_string(&noted)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        if running.len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert_eq!(running.len(), 2, "the Computer did not start: {running:?}");
+    assert!(running.iter().all(|pid| alive(pid)));
+
+    // Orbite is asked to stop, as its service does.
+    // SAFETY: a signal sent to the program this test started.
+    unsafe { libc::kill(orbite.id().unwrap() as libc::pid_t, libc::SIGTERM) };
+    let ended = tokio::time::timeout(Duration::from_secs(20), orbite.wait()).await;
+    assert!(ended.is_ok(), "Orbite did not stop when asked to");
+
+    for _ in 0..40 {
+        if !running.iter().any(|pid| alive(pid)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let left: Vec<&String> = running.iter().filter(|pid| alive(pid)).collect();
+    // What is left is stopped here, whatever the verdict, so that nothing outlives the test.
+    for pid in &left {
+        // SAFETY: as above.
+        unsafe { libc::kill(pid.parse().unwrap(), libc::SIGKILL) };
+    }
+    assert!(left.is_empty(), "left running after Orbite stopped: {left:?}");
+    drop(typed);
+}

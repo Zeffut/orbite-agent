@@ -381,6 +381,12 @@ impl Desk {
         }
     }
 
+    /// Closes the browser and the screen, when they were started.
+    pub(crate) fn stop(&self) {
+        let mut computer = self.computer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        drop(computer.take());
+    }
+
     /// What the screen shows now, to tell later whether it changed.
     pub(crate) fn glance(&self) -> io::Result<Vec<u8>> {
         self.with(|computer| computer.screen().points()).map(|(_, _, points)| points)

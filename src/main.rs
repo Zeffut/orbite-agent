@@ -121,17 +121,38 @@ async fn run() -> Result<(), Failure> {
     if env::args().any(|argument| argument == "--terminal") {
         // The same Conversation, open in this terminal as well.
         let terminal = Terminal::new(BufReader::new(stdin()), stdout());
-        agent.converse(&mut Both::new(telegram, terminal)).await;
+        until_asked_to_stop(agent.converse(&mut Both::new(telegram, terminal))).await;
+        agent.shut_down();
     } else {
-        agent.restarted_by_its_service().converse(&mut telegram).await;
+        let mut agent = agent.restarted_by_its_service();
+        until_asked_to_stop(agent.converse(&mut telegram)).await;
+        agent.shut_down();
     }
     Ok(())
 }
 
 async fn chat() -> Result<(), Failure> {
     let mut agent = agent()?;
-    agent.converse(&mut Terminal::new(BufReader::new(stdin()), stdout())).await;
+    until_asked_to_stop(agent.converse(&mut Terminal::new(BufReader::new(stdin()), stdout())))
+        .await;
+    agent.shut_down();
     Ok(())
+}
+
+/// Holds the Conversation until it ends, or until Orbite is asked to stop,
+/// as its service does or as Ctrl-C does in a terminal.
+async fn until_asked_to_stop(conversing: impl std::future::Future<Output = ()>) {
+    use tokio::signal::unix::{SignalKind, signal};
+    let (Ok(mut stop), Ok(mut interrupt)) =
+        (signal(SignalKind::terminate()), signal(SignalKind::interrupt()))
+    else {
+        return conversing.await;
+    };
+    tokio::select! {
+        () = conversing => {}
+        _ = stop.recv() => {}
+        _ = interrupt.recv() => {}
+    }
 }
 
 /// The Provider this installation was set up with, running `model` when one

@@ -373,6 +373,14 @@ impl<P: Provider + 'static> Agent<P> {
         self
     }
 
+    /// Closes what the Agent keeps running beside itself: its Computer.
+    /// For when Orbite is asked to stop in the middle of the Conversation.
+    pub fn shut_down(&self) {
+        if let Some(desk) = &self.host.computer {
+            desk.stop();
+        }
+    }
+
     /// Holds the Conversation on `channel` until the Channel closes.
     pub async fn converse(&mut self, channel: &mut impl Channel) {
         // Whatever was left unfinished when Orbite last stopped comes first.
