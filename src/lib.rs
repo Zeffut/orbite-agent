@@ -13,6 +13,7 @@ mod openai_compatible;
 mod provider;
 mod routed;
 mod routines;
+mod secrets;
 mod skills;
 mod slug;
 mod steps;
@@ -33,6 +34,7 @@ pub use provider::{
     ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request, Usage,
 };
 pub use routed::Routed;
+pub use secrets::{Secrets, SecretsError};
 pub use steps::Step;
 pub use store::{Entry, Store, StoreError};
 pub use telegram::Telegram;

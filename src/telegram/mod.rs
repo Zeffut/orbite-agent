@@ -42,6 +42,8 @@ pub struct Telegram {
     progress: Option<(i64, Vec<String>)>,
     /// The Approval being asked: its message and the text shown.
     open_approval: Option<(i64, String)>,
+    /// The message the Owner's latest words came in.
+    last_received: Option<i64>,
 }
 
 /// How to reach Telegram as the bot.
@@ -57,7 +59,8 @@ struct Bot {
 
 /// Something the Owner sent to the bot.
 enum Sent {
-    Text(String),
+    /// What they wrote, and the message it came in.
+    Text(String, i64),
     Tap(Tap),
 }
 
@@ -85,6 +88,7 @@ impl Telegram {
             taps: VecDeque::new(),
             progress: None,
             open_approval: None,
+            last_received: None,
         }
     }
 
@@ -117,7 +121,11 @@ impl Telegram {
             let (sending, sent) = mpsc::unbounded_channel();
             (sent, tokio::spawn(listen(bot.clone(), sending)))
         });
-        sent.recv().await
+        let received = sent.recv().await;
+        if let Some(Sent::Text(_, message)) = &received {
+            self.last_received = Some(*message);
+        }
+        received
     }
 
     /// Replaces the buttons of the Approval being asked by the decision, so
@@ -337,10 +345,14 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
                         let _ = bot.say("I can only read text and files for now.").await;
                         continue;
                     }
-                    None => Sent::Text(words),
+                    None => Sent::Text(words, message.message_id),
                     Some((file_id, name, size)) => match bot.fetch(&file_id, &name, size).await {
-                        Ok(saved) if words.is_empty() => Sent::Text(attached(&saved)),
-                        Ok(saved) => Sent::Text(format!("{words}\n{}", attached(&saved))),
+                        Ok(saved) if words.is_empty() => {
+                            Sent::Text(attached(&saved), message.message_id)
+                        }
+                        Ok(saved) => {
+                            Sent::Text(format!("{words}\n{}", attached(&saved)), message.message_id)
+                        }
                         Err(explanation) => {
                             let _ = bot.say(&explanation).await;
                             continue;
@@ -368,7 +380,7 @@ impl Channel for Telegram {
                 return Some(text);
             }
             match self.next().await? {
-                Sent::Text(text) => return Some(text),
+                Sent::Text(text, _) => return Some(text),
                 Sent::Tap(tap) => self.taps.push_back(tap),
             }
         }
@@ -396,6 +408,13 @@ impl Channel for Telegram {
 
     async fn settle(&mut self, _approval: &Approval, answer: &Answer) {
         self.close_approval(answer, " (elsewhere)").await;
+    }
+
+    async fn erase_last_received(&mut self) {
+        if let Some(message) = self.last_received.take() {
+            let body = json!({ "chat_id": self.bot.owner, "message_id": message });
+            let _ = self.bot.call::<Value>("deleteMessage", body).await;
+        }
     }
 
     async fn doing(&mut self, step: &Step) {
@@ -474,7 +493,7 @@ impl Channel for Telegram {
                 None => match self.next().await {
                     Some(Sent::Tap(tap)) => tap,
                     // Writing instead of tapping is an answer of its own.
-                    Some(Sent::Text(text)) => break Answer::Wrote(text),
+                    Some(Sent::Text(text, _)) => break Answer::Wrote(text),
                     None => return Err(io::Error::other("Telegram is no longer listened to")),
                 },
             };
@@ -499,7 +518,7 @@ impl Channel for Telegram {
                 return Some(text);
             }
             match self.next().await? {
-                Sent::Text(text) => return Some(text),
+                Sent::Text(text, _) => return Some(text),
                 Sent::Tap(tap) => self.taps.push_back(tap),
             }
         }
@@ -541,6 +560,7 @@ struct Message {
 
 #[derive(Deserialize)]
 struct Incoming {
+    message_id: i64,
     from: Option<Account>,
     chat: Account,
     text: Option<String>,

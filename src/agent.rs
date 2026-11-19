@@ -10,6 +10,7 @@ use crate::actions::{Host, Review};
 use crate::attachments::{attachments, is_showable_image};
 use crate::memory::Memory;
 use crate::routines::{self, Routine};
+use crate::secrets::Secrets;
 use crate::skills::Skills;
 use crate::slug::slug;
 use crate::subagents::{Report, Subagents};
@@ -178,6 +179,7 @@ impl<P: Provider + 'static> Agent<P> {
             skills: None,
             web: Web::new(),
             busy_wait: Duration::from_secs(1),
+            secrets: None,
         };
         let (subagents, reports) = Subagents::new();
         Self {
@@ -262,6 +264,12 @@ impl<P: Provider + 'static> Agent<P> {
         self
     }
 
+    /// The installation's folder, where its secrets are kept sealed.
+    pub fn keeping_secrets_in(mut self, home: impl AsRef<std::path::Path>) -> Self {
+        self.host_mut().secrets = Some(Secrets::kept_in(home));
+        self
+    }
+
     /// How long a busy Provider is first waited for; each further wait is
     /// twice the one before.
     pub fn waiting_for_a_busy_provider(mut self, first_wait: Duration) -> Self {
@@ -313,6 +321,29 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
             };
+            if let Some(choice) = text.trim().strip_prefix("/secrets") {
+                let said = match choice.trim() {
+                    "on" => self.store.set_setting("secrets_in_conversation", Some("on")).map(|()| {
+                        "Secrets in the conversation are on: what you paste here is shown to my AI \
+                         provider and stays in this conversation. /secrets off to go back."
+                    }),
+                    "off" => self.store.set_setting("secrets_in_conversation", None).map(|()| {
+                        "Secrets in the conversation are off: enter them on the machine with \
+                         `orbite secret set NAME`."
+                    }),
+                    _ => Ok("Say /secrets on or /secrets off."),
+                };
+                let said = said.map(str::to_owned).unwrap_or_else(|error| explain_storage(&error));
+                if channel.send(&said).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            match self.turn_away_a_secret(channel, &text).await {
+                Some(true) => continue,
+                Some(false) => return,
+                None => {}
+            }
             if text.trim() == "/usage" {
                 if channel.send(&self.usage()).await.is_err() {
                     return;
@@ -1203,6 +1234,24 @@ impl<P: Provider + 'static> Agent<P> {
             }
         }
         Ok(())
+    }
+
+    /// When what the Owner wrote holds a secret and they have not allowed
+    /// secrets here: it is not kept, not shown to the model and removed from
+    /// the Channel where that is possible, and the Owner is told where
+    /// secrets go. `None` when there is nothing to turn away; otherwise
+    /// whether the Channel is still open.
+    async fn turn_away_a_secret(&mut self, channel: &mut impl Channel, text: &str) -> Option<bool> {
+        let allowed = matches!(self.store.setting("secrets_in_conversation"), Ok(Some(_)));
+        if allowed || !crate::secrets::holds_a_secret(text) {
+            return None;
+        }
+        channel.erase_last_received().await;
+        let said = "That looks like a secret (a key, a token or a password). I did not keep it or show \
+                    it to my AI provider, and removed it from here where I could. Enter it on the \
+                    machine instead, with `orbite secret set NAME`: I can then use it by its name \
+                    without ever seeing it. To give secrets here anyway, say /secrets on.";
+        Some(channel.send(said).await.is_ok())
     }
 
     /// Tells the Owner, once, when another Provider than the usual one starts

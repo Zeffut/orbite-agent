@@ -3,7 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use orbite::{Agent, Both, Connected, Routed, Store, Telegram, Terminal, connect, known_providers};
+use orbite::{
+    Agent, Both, Connected, Routed, Secrets, Store, Telegram, Terminal, connect, known_providers,
+};
 use tokio::io::{BufReader, stdin, stdout};
 
 const USAGE: &str = "\
@@ -13,6 +15,7 @@ Commands:
   run    hold the Conversation in Telegram (add --terminal to open it here as well)
   chat   hold the Conversation in this terminal
   providers  list the Providers known by name
+  secret     enter (set NAME), list or remove the secrets the Agent uses without seeing them
 
 Read from the environment:
   ORBITE_PROVIDER        the Provider, by name (default: openai); see `orbite providers`
@@ -35,6 +38,7 @@ async fn main() -> ExitCode {
     let outcome = match env::args().nth(1).as_deref() {
         Some("run") => run().await,
         Some("chat") => chat().await,
+        Some("secret") => secret(),
         Some("providers") => {
             for provider in known_providers() {
                 println!("{:<11} {}", provider.name, provider.label);
@@ -131,8 +135,51 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .working_in(home.join("workspace"))
         .remembering_in(home.join("memory"))
         .learning_in(home.join("skills"))
+        .keeping_secrets_in(&home)
         .keeping_context_under(context)
         .waking_up_every_minutes(wake_ups))
+}
+
+/// Enters, lists or removes the secrets the Agent can use without seeing them.
+fn secret() -> Result<(), Failure> {
+    const HOW: &str =
+        "Usage: orbite secret set NAME | orbite secret list | orbite secret remove NAME";
+    let arguments: Vec<String> = env::args().skip(2).collect();
+    let secrets = Secrets::kept_in(home()?);
+    match arguments.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        ["set", name] => {
+            // Typed without being shown; read as a line when it is piped in.
+            let value = if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                rpassword::prompt_password(format!(
+                    "Value of {} (not shown): ",
+                    name.to_uppercase()
+                ))?
+            } else {
+                let mut line = String::new();
+                std::io::stdin().read_line(&mut line)?;
+                line
+            };
+            let value = value.trim_end_matches(['\n', '\r']);
+            if value.is_empty() {
+                return Err("The value is empty: nothing was kept.".into());
+            }
+            let name = secrets.set(name, value)?;
+            println!("Kept as {name}. The agent can use it by that name and never sees its value.");
+        }
+        ["list"] => {
+            for name in secrets.names()? {
+                println!("{name}");
+            }
+        }
+        ["remove", name] => {
+            if !secrets.remove(name)? {
+                return Err(format!("There is no secret called {}.", name.to_uppercase()).into());
+            }
+            println!("Removed {}.", name.to_uppercase());
+        }
+        _ => return Err(HOW.into()),
+    }
+    Ok(())
 }
 
 /// The folder that holds everything of this installation.

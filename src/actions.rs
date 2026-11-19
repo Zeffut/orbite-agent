@@ -12,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use crate::memory::Memory;
+use crate::secrets::Secrets;
 use crate::skills::{Skill, Skills};
 use crate::web::Web;
 use crate::{ActionRequest, ActionSpec, Approval};
@@ -48,6 +49,8 @@ pub(crate) struct Host {
     pub(crate) web: Web,
     /// How long a busy Provider is first waited for.
     pub(crate) busy_wait: Duration,
+    /// The secrets the Agent can use, when it has any.
+    pub(crate) secrets: Option<Secrets>,
 }
 
 #[derive(Deserialize)]
@@ -118,6 +121,7 @@ enum Action {
     RemoveSkill(NamedSkill),
     ReadPage(ReadPage),
     SearchWeb(SearchWeb),
+    ListSecrets,
 }
 
 impl Host {
@@ -190,6 +194,16 @@ impl Host {
                 "forget",
                 "Deletes an entry of your memory.",
                 json!({ "name": text("The entry's name, as listed in your memory.") }),
+            ));
+        }
+        if self.secrets.is_some() {
+            specs.push(spec(
+                "list_secrets",
+                "Lists the names of the secrets your Owner has entered (keys, tokens, passwords). \
+                 You never see their values: a command uses one by naming it as an environment \
+                 variable, such as $GITHUB_TOKEN, and its value is hidden from what you are \
+                 shown. Your Owner enters a secret on the machine with `orbite secret set NAME`.",
+                json!({}),
             ));
         }
         if self.skills.is_some() {
@@ -269,6 +283,7 @@ impl Host {
                     ..Approval::default()
                 })
             }
+            Action::ListSecrets => Review::Free,
             Action::SearchWeb(_) => Review::Free,
             Action::ReadPage(page) => match web_address(&page.url) {
                 Err(problem) => Review::Refuse(problem),
@@ -337,11 +352,30 @@ impl Host {
 
     /// Carries out an Action the gate let through; the text is its Outcome.
     pub(crate) async fn carry_out(&self, request: &ActionRequest) -> String {
+        let outcome = self.do_it(request).await;
+        // Whatever an Action brings back, no secret goes on to the model.
+        match &self.secrets {
+            Some(secrets) => secrets.hide(&outcome),
+            None => outcome,
+        }
+    }
+
+    async fn do_it(&self, request: &ActionRequest) -> String {
         match understand(request) {
             Err(problem) => problem,
             Ok(Action::RunCommand(run)) => self.run(&run.command).await,
             Ok(Action::ReadFile(read)) => self.read(&read.path),
             Ok(Action::WriteFile(write)) => self.write(&write.path, &write.content),
+            Ok(Action::ListSecrets) => match self.secrets.as_ref().map(Secrets::names) {
+                Some(Ok(names)) if names.is_empty() => {
+                    "No secret has been entered. Your Owner enters one on the machine with \
+                     `orbite secret set NAME`."
+                        .into()
+                }
+                Some(Ok(names)) => names.join("\n"),
+                Some(Err(error)) => format!("The secrets could not be read: {error}."),
+                None => "There is nowhere to keep secrets.".into(),
+            },
             Ok(Action::SearchWeb(search)) => self.web.search(&search.query).await,
             Ok(Action::ReadPage(page)) => match web_address(&page.url) {
                 Err(problem) => problem,
@@ -501,6 +535,17 @@ impl Host {
             // can be stopped with it.
             .process_group(0)
             .kill_on_drop(true);
+        // What Orbite itself was started with (its Provider's key, its bot's
+        // token) is not for the commands it runs.
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("ORBITE_") {
+                shell.env_remove(name);
+            }
+        }
+        // A secret reaches a command only when the command names it.
+        if let Some(secrets) = &self.secrets {
+            shell.envs(secrets.named_in(command));
+        }
         let mut child = match shell.spawn() {
             Ok(child) => child,
             Err(error) => return format!("Could not start the command: {error}."),
@@ -575,6 +620,7 @@ fn understand(request: &ActionRequest) -> Result<Action, String> {
         "use_skill" => input(request).map(Action::UseSkill),
         "read_page" => input(request).map(Action::ReadPage),
         "search_web" => input(request).map(Action::SearchWeb),
+        "list_secrets" => Ok(Action::ListSecrets),
         "save_skill" => input(request).map(Action::SaveSkill),
         "remove_skill" => input(request).map(Action::RemoveSkill),
         other => Err(format!("There is no Action called {other}.")),

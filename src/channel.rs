@@ -78,6 +78,13 @@ pub trait Channel: Send {
         async {}
     }
 
+    /// Removes from where the Conversation is shown what the Owner last
+    /// wrote, when it should not stay there. Does nothing where that is not
+    /// possible.
+    fn erase_last_received(&mut self) -> impl Future<Output = ()> + Send {
+        async {}
+    }
+
     /// Shows the Owner what the Agent is starting to do.
     fn doing(&mut self, step: &Step) -> impl Future<Output = ()> + Send {
         let _ = step;

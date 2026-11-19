@@ -264,6 +264,10 @@ impl Channel for MemoryChannel {
         let _ = self.to_owner.send(format!("(answered elsewhere) {answer:?}"));
     }
 
+    async fn erase_last_received(&mut self) {
+        self.shown.lock().unwrap().push("(erased what the Owner wrote)".to_string());
+    }
+
     async fn doing(&mut self, step: &Step) {
         self.shown.lock().unwrap().push(format!("{} {}", step.icon, step.text));
     }

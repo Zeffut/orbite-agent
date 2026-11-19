@@ -814,3 +814,23 @@ async fn an_approval_answered_elsewhere_loses_its_buttons_and_shows_the_decision
     assert!(edited["text"].as_str().unwrap().contains("elsewhere"), "{edited}");
     assert!(edited.get("reply_markup").is_none(), "the buttons must go: {edited}");
 }
+
+#[tokio::test]
+async fn what_the_owner_last_wrote_can_be_removed_from_the_chat() {
+    let server = telegram_delivering(vec![
+        text_from(100, OWNER, "first"),
+        text_from(101, OWNER, "my secret"),
+    ])
+    .await;
+    Mock::given(path("/botTOKEN/deleteMessage")).respond_with(ok(json!(true))).mount(&server).await;
+    let mut channel = telegram(&server);
+    received(&mut channel).await;
+    received(&mut channel).await;
+
+    channel.erase_last_received().await;
+
+    let calls = calls(&server).await;
+    let (_, erased) =
+        calls.iter().find(|(called, _)| called == "deleteMessage").expect("nothing was removed");
+    assert_eq!(erased, &json!({ "chat_id": OWNER, "message_id": 101 }));
+}
