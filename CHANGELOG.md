@@ -2,7 +2,9 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## Unreleased
+## 0.3.1
+
+Released on 2026-11-19.
 
 - The agent's screen no longer starts over each time nothing is connected to it: a browser that was starting then could be cut off, a click or a picture lost.
 - Two runs of one extension at once no longer lose what the other kept: a run waits for the one before.
