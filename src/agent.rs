@@ -532,6 +532,47 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 continue;
             }
+            if let Some(asked) = text.trim().strip_prefix("/providers")
+                && let Some(home) = self.home.clone()
+            {
+                let asked: Vec<&str> = asked.split_whitespace().collect();
+                let today = (self.clock)().format("%Y-%m-%d").to_string();
+                let used = self.store.tokens_used_on(&today).unwrap_or_default();
+                let changed = match asked.is_empty() {
+                    true => None,
+                    false => Some(crate::change_providers(&home, &asked)),
+                };
+                let mut said = match &changed {
+                    Some(Ok(done)) => format!("✅ {done}\n\n"),
+                    Some(Err(why)) => format!("{why}\n\n"),
+                    None => String::new(),
+                };
+                said.push_str(&crate::providers_shown(&home, self.language, &used));
+                let restart = matches!(changed, Some(Ok(_)));
+                said.push_str("\n\n");
+                said.push_str(match (restart, self.restarted) {
+                    (true, true) => self.language.say(
+                        "I restart to take it: back in a moment.",
+                        "Je redémarre pour l'appliquer : je reviens dans un instant.",
+                    ),
+                    (true, false) => self.language.say(
+                        "It applies at the next start of Orbite.",
+                        "Ce sera appliqué au prochain démarrage d'Orbite.",
+                    ),
+                    (false, _) => self.language.say(
+                        "Change them: /providers first NAME · /providers limit NAME 200000 (or \
+                         none) · /providers remove NAME\nAdd one, on the machine: orbite providers \
+                         add",
+                        "Les changer : /providers first NOM · /providers limit NOM 200000 (ou \
+                         none) · /providers remove NOM\nEn ajouter un, sur la machine : orbite \
+                         providers add",
+                    ),
+                });
+                if channel.send(&said).await.is_err() || (restart && self.restarted) {
+                    return;
+                }
+                continue;
+            }
             if text.trim() == "/usage" {
                 if channel.send(&self.usage()).await.is_err() {
                     return;

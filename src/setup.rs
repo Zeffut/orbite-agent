@@ -27,6 +27,8 @@ const NAMES: &[&str] = &["Nova", "Sol", "Mira", "Echo", "Orbi"];
 pub enum Step {
     Language,
     Provider,
+    /// One more Provider, asked after those already set up.
+    AnotherProvider,
     Telegram,
     Name,
 }
@@ -57,6 +59,8 @@ pub struct Setup<R, W> {
     /// Reads what must not be shown as it is typed; by default, a line of `typed`.
     hidden: Option<ReadHidden>,
     providers_at: Option<String>,
+    /// True when the Provider being set up is added to those there are.
+    adding: bool,
     telegram_at: String,
     code: Option<String>,
     look_every: Duration,
@@ -74,6 +78,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             shown,
             hidden: None,
             providers_at: None,
+            adding: false,
             telegram_at: "https://api.telegram.org".into(),
             code: None,
             look_every: Duration::from_secs(2),
@@ -133,6 +138,10 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         }
         let language = Language::of(config.language.as_deref());
         if wanted(Step::Provider, config.provider.is_some()) {
+            self.provider(&mut config, &secrets, language).await?;
+        }
+        if only == Some(Step::AnotherProvider) {
+            self.adding = true;
             self.provider(&mut config, &secrets, language).await?;
         }
         if wanted(Step::Telegram, config.telegram_owner.is_some() && has(TELEGRAM_TOKEN)?) {
@@ -317,11 +326,50 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             }
         };
 
-        if let Some(key) = &key {
+        let mut chosen = ProviderChoice {
+            name: known.name.into(),
+            model: model.clone(),
+            address,
+            key: None,
+            daily_tokens: None,
+        };
+        // With several Providers each keeps a key of its own.
+        if self.adding || !config.fallbacks.is_empty() {
+            crate::providers::give_each_its_key(config, secrets).map_err(stopped)?;
+            if let Some(key) = &key {
+                let named = crate::providers::key_of(known.name);
+                secrets.set(&named, key).map_err(stopped)?;
+                chosen.key = Some(named);
+            }
+        } else if let Some(key) = &key {
             secrets.set(PROVIDER_KEY, key).map_err(stopped)?;
         }
-        config.provider =
-            Some(ProviderChoice { name: known.name.into(), model: model.clone(), address });
+        if self.adding {
+            // Last in line, in place of one of the same name.
+            let mut all = config.providers();
+            all.retain(|provider| provider.name != chosen.name);
+            all.push(chosen);
+            let place = all.len();
+            config.set_providers(all);
+            config.save(&self.home).map_err(stopped)?;
+            return self.say(&format!(
+                "{} {} {place}. {}",
+                language.say("The AI answers. ✓", "L'IA répond. ✓"),
+                language.say(
+                    "It takes over when those before it cannot answer, at place",
+                    "Elle prend le relais quand celles d'avant ne peuvent pas répondre, à la place",
+                ),
+                language.say(
+                    "`orbite providers` shows the order and how to change it.",
+                    "`orbite providers` montre l'ordre et comment le changer.",
+                ),
+            ));
+        }
+        // Whatever takes over from the one replaced stays in line.
+        let after: Vec<ProviderChoice> =
+            config.fallbacks.iter().filter(|other| other.name != chosen.name).cloned().collect();
+        config.provider = Some(chosen);
+        config.fallbacks = after;
         config.light_model = None;
         config.save(&self.home).map_err(stopped)?;
         self.say(language.say("The AI answers. ✓", "L'IA répond. ✓"))?;

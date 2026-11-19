@@ -260,6 +260,22 @@ impl Store {
 
     /// What was used on each day from `since` on, as (day, answers, tokens),
     /// the latest day first.
+    /// The tokens each Provider read and wrote on `day`, by Provider name.
+    pub fn tokens_used_on(&self, day: &str) -> Result<Vec<(String, u64)>, StoreError> {
+        let mut totals: Vec<(String, u64)> = Vec::new();
+        for (on, _, usage) in self.usage_since(day)? {
+            if on != day {
+                continue;
+            }
+            let tokens = usage.input + usage.output;
+            match totals.iter_mut().find(|(by, _)| *by == usage.by) {
+                Some((_, total)) => *total += tokens,
+                None => totals.push((usage.by, tokens)),
+            }
+        }
+        Ok(totals)
+    }
+
     pub(crate) fn usage_since(&self, since: &str) -> Result<Vec<(String, u64, Usage)>, StoreError> {
         let database = self.database.lock().expect("the Store is not poisoned");
         let mut statement = database.prepare(

@@ -47,6 +47,22 @@ What lets your agent in is sealed with its other secrets and renewed by itself. 
 
 GitHub Copilot is **not available yet**. For Claude, Orbite takes an API key only: Anthropic does not let other programs offer its sign-in. If your Claude plan comes with API credit, a key created in Anthropic's console draws on it. A plan is only ever used through its provider's official sign-in for third-party programs, never through a path a provider forbids (see [ADR 0006](adr/0006-subscriptions-through-official-paths-only.md)).
 
+## Several providers, in order
+
+Your agent can think with several providers. The first one answers while it can; the next takes over when the one before is out of usage, over the limit you gave it, refuses its key or cannot be reached, and your agent tells you when someone else than the usual one answers. A typical line-up is a plan you already pay for first, then a second plan or an API key behind it.
+
+On the machine:
+
+- `orbite providers` shows them in order, with their limits.
+- `orbite providers add` sets one more up, last in line: its key or sign-in, its model, a tryout.
+- `orbite providers first NAME` puts one first.
+- `orbite providers limit NAME 200000` lets it use at most that many tokens a day, read and written together; `none` lifts the limit. A provider over its limit is not asked again until the next day.
+- `orbite providers remove NAME` removes one, with its key.
+
+In the conversation, `/providers` shows the same list with what each used today, and takes `first`, `limit` and `remove` the same way. Adding one is done on the machine, since it takes a key or a sign-in. Changes apply when Orbite starts again; as a service it restarts by itself when you change them from the conversation.
+
+A plan that says it is out of usage (a ChatGPT plan at its limit, for instance) is left alone for an hour before it is asked again. A failure of another kind, for two minutes.
+
 ## Choosing a model
 
 Models differ in what matters to an agent, and Orbite shows you before you rely on one. `orbite tryout MODEL` gives a model a few real, short tasks and reports what they showed:

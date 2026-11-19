@@ -19,6 +19,7 @@ mod moving;
 mod openai_compatible;
 mod png;
 mod provider;
+mod providers;
 mod routed;
 mod routines;
 mod secrets;
@@ -50,6 +51,7 @@ pub use openai_compatible::OpenAiCompatible;
 pub use provider::{
     ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request, Usage,
 };
+pub use providers::{change_providers, providers_shown};
 pub use routed::Routed;
 pub use secrets::{Secrets, SecretsError};
 pub use settings::{SETTINGS, Settings, TAKES_A_RESTART};

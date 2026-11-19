@@ -240,3 +240,116 @@ async fn an_owner_on_their_chatgpt_plan_sees_so_with_what_was_used_and_where_to_
     assert!(shown.contains("Using ChatGPT plan"), "{shown}");
     assert!(shown.contains("[Manage usage](https://chatgpt.com/settings/usage)"), "{shown}");
 }
+
+fn costing(tokens: u64) -> Usage {
+    Usage { by: String::new(), model: "m".into(), input: tokens, cached: 0, output: 0 }
+}
+
+#[tokio::test]
+async fn a_provider_that_used_up_its_daily_limit_hands_over_until_the_next_day() {
+    let first = ScriptedProvider::answering(["One.", "Two.", "Back."]);
+    first.costing(costing(600));
+    let second = ScriptedProvider::answering(["From the second."]);
+    let day = std::sync::Arc::new(std::sync::Mutex::new("2026-11-19".to_owned()));
+    let clock = day.clone();
+    let routed = Routed::through("first", first.clone())
+        .limited_to(1000)
+        .or("second", second)
+        .telling_the_day_with(move || clock.lock().unwrap().clone());
+
+    // Under the limit, then over it with the second answer.
+    assert_eq!(by(routed.reply(hi(false)).await.unwrap().usage), "first");
+    assert_eq!(by(routed.reply(hi(false)).await.unwrap().usage), "first");
+    let reply = routed.reply(hi(false)).await.unwrap();
+    assert_eq!(by(reply.usage), "second");
+    assert_eq!(first.times_asked(), 2, "a Provider over its limit is not asked");
+
+    *day.lock().unwrap() = "2026-11-20".into();
+    assert_eq!(routed.reply(hi(false)).await.unwrap().text, "Back.");
+}
+
+#[tokio::test]
+async fn what_was_used_before_starting_counts_towards_the_limit() {
+    let first = ScriptedProvider::answering(["From the first."]);
+    let second = ScriptedProvider::answering(["From the second."]);
+    let routed = Routed::through("first", first.clone())
+        .limited_to(1000)
+        .or("second", second)
+        .having_used("first", 1000);
+
+    assert_eq!(by(routed.reply(hi(false)).await.unwrap().usage), "second");
+    assert_eq!(first.times_asked(), 0);
+}
+
+#[tokio::test]
+async fn the_owner_is_told_when_every_provider_used_up_its_limit() {
+    let only = ScriptedProvider::answering(["Never said."]);
+    let routed = Routed::through("only", only.clone()).limited_to(10).having_used("only", 10);
+
+    let failed = routed.reply(hi(false)).await.unwrap_err();
+
+    let ProviderError::Busy { reason, .. } = failed else { panic!("{failed:?}") };
+    assert!(reason.contains("limit"), "{reason}");
+    assert_eq!(only.times_asked(), 0);
+}
+
+#[tokio::test]
+async fn a_provider_that_says_for_how_long_it_cannot_answer_is_left_alone_that_long() {
+    let plan = ScriptedProvider::default();
+    plan.then(Err(ProviderError::Busy {
+        reason: "plan out of usage".into(),
+        retry_after: Some(Duration::from_secs(3600)),
+    }));
+    let second = ScriptedProvider::answering(["One.", "Two."]);
+    // Other failures are forgiven at once here: only what the plan asked for holds.
+    let routed = Routed::through("plan", plan.clone())
+        .or("second", second)
+        .resting_failed_providers_for(Duration::ZERO);
+
+    assert_eq!(routed.reply(hi(false)).await.unwrap().text, "One.");
+    assert_eq!(routed.reply(hi(false)).await.unwrap().text, "Two.");
+
+    assert_eq!(plan.times_asked(), 1, "it is not asked again within the hour");
+}
+
+#[tokio::test]
+async fn the_owner_sees_and_changes_their_providers_from_the_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let config = serde_json::json!({
+        "language": "en",
+        "provider": { "name": "chatgpt", "model": "gpt-of-the-plan", "daily_tokens": 5000 },
+        "fallbacks": [{ "name": "groq", "model": "m-1" }],
+    });
+    std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
+    let provider = ScriptedProvider::default();
+    provider.costing(Usage {
+        by: "chatgpt".into(),
+        model: "gpt-of-the-plan".into(),
+        input: 1200,
+        cached: 0,
+        output: 34,
+    });
+    provider.then(Ok("One.".into()));
+    let asked = provider.clone();
+    let (mut channel, mut owner) = memory_channel();
+    let folder = home.path().to_owned();
+    tokio::spawn(async move {
+        Agent::new(provider, Store::in_memory()).configured_in(folder).converse(&mut channel).await
+    });
+    owner.says("1");
+    owner.hears().await;
+
+    owner.says("/providers");
+    let shown = owner.hears().await;
+    assert!(shown.contains("1. chatgpt · gpt-of-the-plan"), "{shown}");
+    assert!(shown.contains("at most 5,000 tokens a day (1,234 used today)"), "{shown}");
+    assert!(shown.contains("2. groq · m-1: no limit"), "{shown}");
+
+    owner.says("/providers first groq");
+    let shown = owner.hears().await;
+    assert!(shown.contains("groq is now asked first"), "{shown}");
+    assert!(shown.contains("1. groq") && shown.contains("next start"), "{shown}");
+    let all = orbite::Config::load(home.path()).unwrap().providers();
+    assert_eq!(all[0].name, "groq");
+    assert_eq!(asked.times_asked(), 1, "/providers is not sent to the model");
+}

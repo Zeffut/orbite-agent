@@ -16,7 +16,7 @@ Usage: orbite <command>
 Commands:
   run    hold the Conversation in Telegram (add --terminal to open it here as well)
   chat   hold the Conversation in this terminal
-  providers  list the Providers known by name
+  providers  list the Providers set up, in order; add one, or change them (add, first NAME, remove NAME, limit NAME TOKENS)
   version    say which version this is
   setup      set Orbite up, or one part again (language, provider, telegram, name)
   computer   check that the agent's own computer works on this machine (computer check)
@@ -75,16 +75,7 @@ async fn main() -> ExitCode {
         Some("restore") => moving(false),
         Some("uninstall") => uninstall(),
         Some("setup") => setup().await,
-        Some("providers") => {
-            for provider in known_providers() {
-                println!("{:<11} {}", provider.name, provider.label);
-            }
-            println!(
-                "{:<11} any server speaking OpenAI's protocol (set ORBITE_BASE_URL)",
-                "custom"
-            );
-            Ok(())
-        }
+        Some("providers") => providers().await,
         _ => Err(USAGE.into()),
     };
     match outcome {
@@ -194,15 +185,34 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
     let model = setting("ORBITE_MODEL")
         .or(chosen.as_ref().map(|chosen| chosen.model.clone()))
         .ok_or("No model is chosen yet. Run `orbite setup`.")?;
+    // Each Provider has its key: its own, or the one of the first set up.
+    let key_of = |choice: Option<&orbite::ProviderChoice>| -> Result<Option<String>, Failure> {
+        let named = choice.and_then(|choice| choice.key.as_deref()).unwrap_or(PROVIDER_KEY);
+        Ok(secrets.get(named)?)
+    };
     let key = match setting("ORBITE_API_KEY") {
         Some(key) => Some(key),
-        None => secrets.get(PROVIDER_KEY)?,
+        None => key_of(chosen.as_ref())?,
     };
-    let address = setting("ORBITE_BASE_URL").or(chosen.and_then(|chosen| chosen.address));
+    let address =
+        setting("ORBITE_BASE_URL").or(chosen.as_ref().and_then(|chosen| chosen.address.clone()));
     let mut provider = Routed::through(
         &name,
         connect_in(&home, &name, key.as_deref(), &model, address.as_deref())?,
     );
+    if let Some(limit) = chosen.as_ref().and_then(|chosen| chosen.daily_tokens) {
+        provider = provider.limited_to(limit);
+    }
+    // Those that take over, in the order their Owner put them.
+    for other in &config.fallbacks {
+        let key = key_of(Some(other))?;
+        let connected =
+            connect_in(&home, &other.name, key.as_deref(), &other.model, other.address.as_deref())?;
+        provider = provider.or(&other.name, connected);
+        if let Some(limit) = other.daily_tokens {
+            provider = provider.limited_to(limit);
+        }
+    }
     // Another Provider to fall back on when the usual one cannot answer.
     if let Some(other) = setting("ORBITE_FALLBACK_PROVIDER") {
         let fallback = connect_in(
@@ -234,6 +244,11 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .map_err(|error| format!("Could not create {}: {error}", home.display()))?;
     let store = Store::open(home.join("orbite.db"))
         .map_err(|error| format!("Could not open the Agent's data: {error}"))?;
+    // What was used earlier today counts towards each Provider's limit.
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    for (by, tokens) in store.tokens_used_on(&today).unwrap_or_default() {
+        provider = provider.having_used(&by, tokens);
+    }
 
     let wake_ups: u32 = match setting("ORBITE_WAKE_UP_MINUTES") {
         Some(minutes) => minutes.parse().map_err(|_| "ORBITE_WAKE_UP_MINUTES must be a number.")?,
@@ -261,6 +276,39 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .speaking(Language::of(config.language.as_deref()))
         .keeping_context_under(context)
         .waking_up_every_minutes(wake_ups))
+}
+
+/// Adds a Provider to those set up, or changes their order, limits and number.
+async fn providers() -> Result<(), Failure> {
+    let asked: Vec<String> = env::args().skip(2).collect();
+    let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
+    if asked.is_empty() {
+        let home = home()?;
+        let language = Language::of(Config::load(&home)?.language.as_deref());
+        println!("{}\n", orbite::providers_shown(&home, language, &[]));
+        println!(
+            "Change them: orbite providers add | first NAME | remove NAME | limit NAME TOKENS\n\nKnown by name:"
+        );
+        for provider in known_providers() {
+            println!("{:<11} {}", provider.name, provider.label);
+        }
+        println!("{:<11} any server speaking OpenAI's protocol", "custom");
+        return Ok(());
+    }
+    if asked == ["add"] {
+        let typed = std::io::BufReader::new(std::io::stdin());
+        let mut setup = Setup::in_home(home()?, typed, std::io::stdout());
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            setup = setup.reading_secrets_with(|question| rpassword::prompt_password(question));
+        }
+        setup.run(Some(SetupStep::AnotherProvider)).await?;
+    } else {
+        println!("{}", orbite::change_providers(&home()?, &asked)?);
+    }
+    println!(
+        "It applies at the next start of Orbite (as a service: sudo systemctl restart orbite)."
+    );
+    Ok(())
 }
 
 /// Goes through setup in this terminal: all of what is missing, or one part again.

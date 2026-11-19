@@ -13,26 +13,53 @@ pub struct Routed<P> {
     light: Option<Named<P>>,
     /// How long a Provider that failed is left alone before it is tried again.
     rest: Duration,
+    /// Says which day it is, for what is limited by the day.
+    today: Box<dyn Fn() -> String + Send + Sync>,
 }
 
 struct Named<P> {
     name: String,
     provider: P,
-    /// When it last failed, if it has not answered since.
-    failed_at: Mutex<Option<Instant>>,
+    /// Until when it is left alone, having failed and not answered since.
+    resting_until: Mutex<Option<Instant>>,
+    /// The tokens its Owner lets it use in a day, when they set a limit.
+    limit: Option<u64>,
+    /// The day last counted, and the tokens used on it.
+    used: Mutex<(String, u64)>,
 }
 
 impl<P> Named<P> {
     fn new(name: &str, provider: P) -> Self {
-        Self { name: name.to_owned(), provider, failed_at: Mutex::new(None) }
+        Self {
+            name: name.to_owned(),
+            provider,
+            resting_until: Mutex::new(None),
+            limit: None,
+            used: Mutex::new((String::new(), 0)),
+        }
     }
 
-    fn is_resting(&self, rest: Duration) -> bool {
-        self.failed_at.lock().expect("not poisoned").is_some_and(|at| at.elapsed() < rest)
+    fn is_resting(&self) -> bool {
+        self.resting_until.lock().expect("not poisoned").is_some_and(|until| until > Instant::now())
     }
 
-    fn note(&self, failed: bool) {
-        *self.failed_at.lock().expect("not poisoned") = failed.then(Instant::now);
+    /// Notes an answer, or a failure after which it rests for `rest`.
+    fn note(&self, rest: Option<Duration>) {
+        *self.resting_until.lock().expect("not poisoned") = rest.map(|rest| Instant::now() + rest);
+    }
+
+    /// True once it used, on `day`, all its Owner lets it use in a day.
+    fn is_spent(&self, day: &str) -> bool {
+        let used = self.used.lock().expect("not poisoned");
+        self.limit.is_some_and(|limit| used.0 == day && used.1 >= limit)
+    }
+
+    fn count(&self, day: &str, tokens: u64) {
+        let mut used = self.used.lock().expect("not poisoned");
+        if used.0 != day {
+            *used = (day.to_owned(), 0);
+        }
+        used.1 += tokens;
     }
 }
 
@@ -43,7 +70,36 @@ impl<P: Provider> Routed<P> {
             usual: vec![Named::new(name, provider)],
             light: None,
             rest: Duration::from_secs(120),
+            today: Box::new(|| chrono::Local::now().format("%Y-%m-%d").to_string()),
         }
+    }
+
+    /// Lets the Provider added last use this many tokens a day, read and
+    /// written together, and no more: the next one takes over from there.
+    pub fn limited_to(mut self, tokens_a_day: u64) -> Self {
+        if let Some(last) = self.usual.last_mut() {
+            last.limit = Some(tokens_a_day);
+        }
+        self
+    }
+
+    /// Counts what the Provider called `name` already used today, before
+    /// this program started.
+    pub fn having_used(self, name: &str, tokens: u64) -> Self {
+        let day = (self.today)();
+        if let Some(named) = self.usual.iter().find(|named| named.name == name) {
+            named.count(&day, tokens);
+        }
+        self
+    }
+
+    /// Asks `today` which day it is rather than the machine's clock.
+    pub fn telling_the_day_with(
+        mut self,
+        today: impl Fn() -> String + Send + Sync + 'static,
+    ) -> Self {
+        self.today = Box::new(today);
+        self
     }
 
     /// Adds a Provider to fall back on when those before it cannot answer.
@@ -72,18 +128,31 @@ impl<P: Provider> Provider for Routed<P> {
 
     async fn reply(&self, request: Request<'_>) -> Result<Reply, ProviderError> {
         let light = self.light.as_ref().filter(|_| request.light);
-        let candidates: Vec<&Named<P>> = light.into_iter().chain(&self.usual).collect();
+        let day = (self.today)();
+        // One that used up what its Owner allows for the day is not asked.
+        let candidates: Vec<&Named<P>> = light
+            .into_iter()
+            .chain(self.usual.iter().filter(|candidate| !candidate.is_spent(&day)))
+            .collect();
+        if candidates.is_empty() && !self.usual.is_empty() {
+            return Err(ProviderError::Busy {
+                reason: "every AI provider used up the limit set for it today (see /providers)"
+                    .into(),
+                retry_after: Some(Duration::from_secs(3600)),
+            });
+        }
         // Those that failed lately come last rather than not at all: when
         // everything else fails too, they are worth another try.
         let (rested, resting): (Vec<_>, Vec<_>) =
-            candidates.into_iter().partition(|candidate| !candidate.is_resting(self.rest));
+            candidates.into_iter().partition(|candidate| !candidate.is_resting());
         let mut first_failure = None;
         for candidate in rested.into_iter().chain(resting) {
             match candidate.provider.reply(request).await {
                 Ok(mut reply) => {
-                    candidate.note(false);
+                    candidate.note(None);
                     // Whoever answered is known by the name given here.
                     let usage = reply.usage.take().unwrap_or_default();
+                    candidate.count(&day, usage.input + usage.output);
                     reply.usage = Some(Usage { by: candidate.name.clone(), ..usage });
                     return Ok(reply);
                 }
@@ -93,7 +162,13 @@ impl<P: Provider> Provider for Routed<P> {
                     | ProviderError::Busy { .. }
                     | ProviderError::Rejected(_)),
                 ) => {
-                    candidate.note(true);
+                    // One that says for how long it cannot answer, such as a
+                    // plan out of usage, is left alone that long.
+                    let asked = match &failure {
+                        ProviderError::Busy { retry_after, .. } => retry_after.unwrap_or_default(),
+                        _ => Duration::ZERO,
+                    };
+                    candidate.note(Some(self.rest.max(asked)));
                     first_failure.get_or_insert(failure);
                 }
                 // The request itself is the trouble: it would be anywhere.

@@ -96,6 +96,7 @@ async fn once_set_up_the_command_needs_no_setting_from_the_environment() {
             name: "custom".into(),
             model: "some-model".into(),
             address: Some(server.uri()),
+            ..Default::default()
         }),
         agent_name: Some("Nova".into()),
         ..orbite::Config::default()
@@ -139,4 +140,128 @@ fn an_owner_turns_automatic_updates_off_and_on_again() {
     let on = orbite(home.path(), &["update", "on"], "");
     assert!(on.status.success(), "{}", shown(&on));
     assert_ne!(orbite::Config::load(home.path()).unwrap().automatic_updates, Some(false));
+}
+
+/// An installation thinking with three Providers, in this order.
+fn with_three_providers(home: &Path) {
+    let provider = |name: &str| serde_json::json!({ "name": name, "model": format!("{name}-model"), "key": format!("ORBITE_KEY_{}", name.to_uppercase()) });
+    let config = serde_json::json!({
+        "language": "en",
+        "provider": provider("chatgpt"),
+        "fallbacks": [provider("groq"), provider("ollama")],
+    });
+    std::fs::write(home.join("config.json"), config.to_string()).unwrap();
+}
+
+fn provider_names(home: &Path) -> Vec<String> {
+    let all = orbite::Config::load(home).unwrap().providers();
+    all.into_iter().map(|provider| provider.name).collect()
+}
+
+#[test]
+fn the_owner_sees_their_providers_in_order_and_changes_which_comes_first() {
+    let home = tempfile::tempdir().unwrap();
+    with_three_providers(home.path());
+
+    let listed = shown(&orbite(home.path(), &["providers"], ""));
+    let at = |name: &str| listed.find(name).unwrap_or_else(|| panic!("{name} in:\n{listed}"));
+    assert!(at("1. chatgpt") < at("2. groq") && at("2. groq") < at("3. ollama"), "{listed}");
+
+    let moved = orbite(home.path(), &["providers", "first", "groq"], "");
+    assert!(moved.status.success(), "{}", shown(&moved));
+    assert!(shown(&moved).contains("next start"), "{}", shown(&moved));
+    assert_eq!(provider_names(home.path()), ["groq", "chatgpt", "ollama"]);
+}
+
+#[test]
+fn a_provider_is_given_a_daily_limit_and_freed_of_it() {
+    let home = tempfile::tempdir().unwrap();
+    with_three_providers(home.path());
+
+    let limited = orbite(home.path(), &["providers", "limit", "chatgpt", "200,000"], "");
+    assert!(shown(&limited).contains("200,000 tokens a day"), "{}", shown(&limited));
+    let all = orbite::Config::load(home.path()).unwrap().providers();
+    assert_eq!(all[0].daily_tokens, Some(200_000));
+    assert!(
+        shown(&orbite(home.path(), &["providers"], "")).contains("at most 200,000 tokens a day")
+    );
+
+    orbite(home.path(), &["providers", "limit", "chatgpt", "none"], "");
+    assert_eq!(orbite::Config::load(home.path()).unwrap().providers()[0].daily_tokens, None);
+
+    let wrong = orbite(home.path(), &["providers", "limit", "chatgpt", "a lot"], "");
+    assert!(!wrong.status.success() && shown(&wrong).contains("number of tokens"));
+}
+
+#[test]
+fn a_provider_is_removed_with_its_key_but_never_the_last_one() {
+    let home = tempfile::tempdir().unwrap();
+    with_three_providers(home.path());
+    let secrets = orbite::Secrets::kept_in(home.path());
+    secrets.set("ORBITE_KEY_GROQ", &format!("key-{}", "of-groq")).unwrap();
+
+    let removed = orbite(home.path(), &["providers", "remove", "groq"], "");
+    assert!(removed.status.success(), "{}", shown(&removed));
+    assert_eq!(provider_names(home.path()), ["chatgpt", "ollama"]);
+    assert_eq!(secrets.get("ORBITE_KEY_GROQ").unwrap(), None);
+
+    let unknown = orbite(home.path(), &["providers", "remove", "groq"], "");
+    assert!(!unknown.status.success());
+    assert!(shown(&unknown).contains("chatgpt, ollama"), "{}", shown(&unknown));
+
+    orbite(home.path(), &["providers", "remove", "ollama"], "");
+    let last = orbite(home.path(), &["providers", "remove", "chatgpt"], "");
+    assert!(!last.status.success() && shown(&last).contains("only provider"), "{}", shown(&last));
+    assert_eq!(provider_names(home.path()), ["chatgpt"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_next_provider_set_up_answers_with_its_own_key_when_the_first_is_out_of_usage() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let (first_key, second_key) =
+        (format!("key-{}", "of-the-first"), format!("key-{}", "of-the-second"));
+    let spent = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(serde_json::json!({
+            "error": { "message": "You are out of usage." }
+        })))
+        .mount(&spent)
+        .await;
+    let ready = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(header("authorization", format!("Bearer {second_key}").as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{ "message": { "role": "assistant", "content": "Hello from the second." } }]
+        })))
+        .mount(&ready)
+        .await;
+    let home = tempfile::tempdir().unwrap();
+    let choice = |name: &str, address: String, key: &str| orbite::ProviderChoice {
+        name: name.into(),
+        model: "some-model".into(),
+        address: Some(address),
+        key: Some(key.into()),
+        ..Default::default()
+    };
+    orbite::Config {
+        provider: Some(choice("groq", spent.uri(), "ORBITE_KEY_GROQ")),
+        fallbacks: vec![choice("custom", ready.uri(), "ORBITE_KEY_CUSTOM")],
+        ..orbite::Config::default()
+    }
+    .save(home.path())
+    .unwrap();
+    let secrets = orbite::Secrets::kept_in(home.path());
+    secrets.set("ORBITE_KEY_GROQ", &first_key).unwrap();
+    secrets.set("ORBITE_KEY_CUSTOM", &second_key).unwrap();
+
+    let folder = home.path().to_owned();
+    let chatted =
+        tokio::task::spawn_blocking(move || orbite(&folder, &["chat"], "Hi\n")).await.unwrap();
+
+    let shown = shown(&chatted);
+    assert!(shown.contains("Hello from the second."), "{shown}");
+    // The Owner is told who answers when it is not the usual one.
+    assert!(shown.contains("custom"), "{shown}");
 }

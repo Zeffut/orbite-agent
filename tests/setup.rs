@@ -562,3 +562,33 @@ async fn an_owner_with_a_chatgpt_plan_signs_in_by_a_link_instead_of_giving_a_key
     assert!(secrets.get(orbite::PROVIDER_KEY).unwrap().is_none());
     assert!(sent_to_owner(&telegram).await.last().unwrap().contains("Nova"));
 }
+
+#[tokio::test]
+async fn another_provider_is_added_after_those_set_up_each_with_a_key_of_its_own() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
+    set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+
+    // Groq, its key, the first model offered.
+    let typed = format!("groq\n{}\n1\n", api_key());
+    let shown =
+        set_up(home.path(), &typed, &provider, &telegram, Some(Step::AnotherProvider)).await;
+
+    let all = Config::load(home.path()).unwrap().providers();
+    let names: Vec<&str> = all.iter().map(|provider| provider.name.as_str()).collect();
+    assert_eq!(names, ["custom", "groq"], "{shown}");
+    assert_eq!(all[1].model, "model-large");
+    let secrets = Secrets::kept_in(home.path());
+    for provider in &all {
+        let key = provider.key.as_deref().expect("each has a key of its own");
+        assert_eq!(secrets.get(key).unwrap(), Some(api_key()), "{key}");
+    }
+    assert_ne!(all[0].key, all[1].key);
+    assert!(shown.contains("place 2"), "{shown}");
+    assert!(!shown.contains("lighter model"), "only the first is asked about one:\n{shown}");
+
+    // Set up again, it takes the place it had rather than a second one.
+    set_up(home.path(), &typed, &provider, &telegram, Some(Step::AnotherProvider)).await;
+    assert_eq!(Config::load(home.path()).unwrap().providers().len(), 2);
+}

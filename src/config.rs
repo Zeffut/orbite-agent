@@ -17,6 +17,10 @@ pub struct Config {
     /// The Provider that normally answers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<ProviderChoice>,
+    /// The Providers that take over, in order, when the one before cannot
+    /// answer or used up its limit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallbacks: Vec<ProviderChoice>,
     /// A lighter model of the same Provider, for summaries and Wake-ups.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub light_model: Option<String>,
@@ -36,7 +40,7 @@ pub struct Config {
 }
 
 /// A Provider and the model to use with it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ProviderChoice {
     /// Its name in the catalogue, or `custom`.
     pub name: String,
@@ -44,6 +48,13 @@ pub struct ProviderChoice {
     /// Its address, when it is not the catalogue's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<String>,
+    /// The name of the secret holding its key, when it has one of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// The tokens it may use in a day, read and written together, when its
+    /// Owner set a limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_tokens: Option<u64>,
 }
 
 impl Config {
