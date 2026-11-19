@@ -966,3 +966,47 @@ async fn choices_are_buttons_one_per_line_and_tapping_one_is_writing_its_command
             && body["callback_query_id"] == "tap-101")
     );
 }
+
+#[tokio::test]
+async fn a_voice_message_is_saved_and_handed_over_like_a_file() {
+    let inbox = tempfile::tempdir().unwrap();
+    let voice = json!({
+        "update_id": 100,
+        "message": {
+            "message_id": 100,
+            "from": { "id": OWNER, "is_bot": false, "first_name": "Owner" },
+            "chat": { "id": OWNER, "type": "private" },
+            "voice": { "file_id": "voice-1", "file_unique_id": "v1", "duration": 4, "mime_type": "audio/ogg", "file_size": 9 },
+        }
+    });
+    let server = telegram_with_file(vec![voice], b"OggS-opus").await;
+    let mut channel = telegram(&server).saving_files_in(inbox.path());
+
+    let said = received(&mut channel).await;
+
+    let saved = inbox.path().join("voice-100.ogg");
+    assert_eq!(std::fs::read(&saved).unwrap(), b"OggS-opus");
+    assert_eq!(said, orbite::attached(&saved));
+}
+
+#[tokio::test]
+async fn a_recording_sent_as_audio_keeps_its_name() {
+    let inbox = tempfile::tempdir().unwrap();
+    let audio = json!({
+        "update_id": 100,
+        "message": {
+            "message_id": 100,
+            "from": { "id": OWNER, "is_bot": false, "first_name": "Owner" },
+            "chat": { "id": OWNER, "type": "private" },
+            "audio": { "file_id": "audio-1", "file_unique_id": "a1", "duration": 60, "file_name": "meeting.mp3", "file_size": 3 },
+            "caption": "What was decided?",
+        }
+    });
+    let server = telegram_with_file(vec![audio], b"mp3").await;
+    let mut channel = telegram(&server).saving_files_in(inbox.path());
+
+    let said = received(&mut channel).await;
+
+    let saved = inbox.path().join("meeting.mp3");
+    assert_eq!(said, format!("What was decided?\n{}", orbite::attached(&saved)));
+}

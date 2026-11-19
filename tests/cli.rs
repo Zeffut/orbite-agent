@@ -268,3 +268,56 @@ async fn the_next_provider_set_up_answers_with_its_own_key_when_the_first_is_out
     // The Owner is told who answers when it is not the usual one.
     assert!(shown.contains("custom"), "{shown}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_the_owner_says_aloud_is_written_down_by_their_provider_that_offers_it() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let key = format!("key-{}", "of-the-one-that-listens");
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/audio/transcriptions"))
+        .and(header("authorization", format!("Bearer {key}").as_str()))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({ "text": "Buy bread on the way home." })),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{ "message": { "role": "assistant", "content": "Noted: bread." } }]
+        })))
+        .mount(&server)
+        .await;
+    let home = tempfile::tempdir().unwrap();
+    orbite::Config {
+        provider: Some(orbite::ProviderChoice {
+            name: "groq".into(),
+            model: "some-model".into(),
+            address: Some(server.uri()),
+            ..Default::default()
+        }),
+        ..orbite::Config::default()
+    }
+    .save(home.path())
+    .unwrap();
+    orbite::Secrets::kept_in(home.path()).set("ORBITE_PROVIDER_KEY", &key).unwrap();
+    let voice = home.path().join("voice-1.ogg");
+    std::fs::write(&voice, b"OggS").unwrap();
+
+    let folder = home.path().to_owned();
+    let said = format!("{}\n", orbite::attached(&voice));
+    let chatted =
+        tokio::task::spawn_blocking(move || orbite(&folder, &["chat"], &said)).await.unwrap();
+
+    assert!(shown(&chatted).contains("Noted: bread."), "{}", shown(&chatted));
+    let asked = server.received_requests().await.unwrap();
+    let listened = asked.iter().find(|request| request.url.path() == "/audio/transcriptions");
+    let listened =
+        String::from_utf8_lossy(&listened.expect("nothing was written down").body).into_owned();
+    assert!(listened.contains("whisper-large-v3-turbo"), "{listened}");
+    let thought = asked.iter().find(|request| request.url.path() == "/chat/completions").unwrap();
+    assert!(String::from_utf8_lossy(&thought.body).contains("Buy bread on the way home."));
+}

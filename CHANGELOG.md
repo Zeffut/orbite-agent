@@ -2,6 +2,10 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## Unreleased
+
+- **Voice messages.** What you say aloud in Telegram is written down by the first of your providers that offers it for an API key (OpenAI, Groq) and answered as what you said. Without one, the agent says it cannot hear the message and what would let it.
+
 ## 0.3.5
 
 Released on 2026-11-19.

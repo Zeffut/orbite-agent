@@ -15,6 +15,10 @@ You talk to your agent in Telegram, in one continuous conversation. There is not
 - **Keep a task list**, and whatever [extensions](extensions.md) add.
 - **Receive and send files.** Send it a document or a photo; ask it to send you a file it made.
 
+## Speaking instead of writing
+
+Send your agent a voice message in Telegram and it answers what you said, when one of its providers writes speech down for an API key: OpenAI and Groq do. Nothing to set up: the first of your providers that offers it is used. A ChatGPT plan and Anthropic do not offer it; with only those, your agent tells you it cannot hear the message, and adding Groq or OpenAI behind them (`sudo orbite providers add`) is enough. The recording goes to that provider to be written down, as your words go to the one that answers.
+
 ## Approvals: you stay in charge
 
 Before an action that changes something, your agent asks. In Telegram the request shows exactly what would be done, with buttons: **Allow**, **Always** (allow this kind of thing once and for all) and **Deny**. Writing a message instead of tapping cancels the request and is heard as your answer.

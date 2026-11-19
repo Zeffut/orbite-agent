@@ -166,6 +166,8 @@ pub struct Agent<P> {
     /// The installation's folder, where the settings not kept with the
     /// Conversation are.
     home: Option<PathBuf>,
+    /// Writes down what the Owner says aloud, when a Provider offers that.
+    transcriber: Option<crate::Transcriber>,
     /// A sign-in to a ChatGPT plan begun in the Conversation, until the
     /// address it ends on is sent back.
     chatgpt_sign_in: Option<(crate::ChatGpt, crate::chatgpt::Begun)>,
@@ -219,6 +221,7 @@ impl<P: Provider + 'static> Agent<P> {
             notices: None,
             home: None,
             chatgpt_sign_in: None,
+            transcriber: None,
             restarted: false,
             model_at_fault: 0,
             owed: false,
@@ -355,6 +358,12 @@ impl<P: Provider + 'static> Agent<P> {
     /// The name the Owner gave their Agent.
     pub fn called(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Has what the Owner says aloud written down by this Provider.
+    pub fn transcribing_with(mut self, transcriber: crate::Transcriber) -> Self {
+        self.transcriber = Some(transcriber);
         self
     }
 
@@ -682,6 +691,7 @@ impl<P: Provider + 'static> Agent<P> {
             if !self.release_held(channel).await {
                 return;
             }
+            let text = self.heard(text).await;
             if let Err(error) = self.store.append(&Message::from_owner(text)) {
                 if channel.send(&explain_storage(&error)).await.is_err() {
                     return;
@@ -1992,6 +2002,40 @@ impl<P: Provider + 'static> Agent<P> {
                 .into();
         }
         text
+    }
+
+    /// `text` with each recording that came with it written down in its
+    /// place, or with why it could not be: a model cannot hear a file.
+    async fn heard(&self, text: String) -> String {
+        let recordings: Vec<PathBuf> = crate::attachments::attachments(&text)
+            .filter(|file| crate::transcriber::sound_type(file).is_some())
+            .collect();
+        if recordings.is_empty() {
+            return text;
+        }
+        let mut heard = text;
+        for recording in recordings {
+            let line = crate::attached(&recording);
+            let instead = match &self.transcriber {
+                Some(transcriber) => match transcriber.written(&recording).await {
+                    Ok(said) => format!(
+                        "[A voice message from your Owner, written down for you; a word may have \
+                         been misheard]\n{said}"
+                    ),
+                    Err(why) => format!(
+                        "[Your Owner sent a voice message that could not be written down: {why}. \
+                         Tell them so and ask them to write it or say it again.]"
+                    ),
+                },
+                None => "[Your Owner sent a voice message, which you cannot hear: none of your \
+                         Providers writes speech down. Tell them so, and that adding one that \
+                         does (OpenAI or Groq, with an API key) would let you: orbite providers \
+                         add, on the machine.]"
+                    .to_owned(),
+            };
+            heard = heard.replace(&line, &instead);
+        }
+        heard
     }
 
     /// The models of the ChatGPT plan, when that is what the Agent thinks

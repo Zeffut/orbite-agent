@@ -264,6 +264,21 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         None => 60_000,
     };
     let mut agent = Agent::new(provider, store);
+    // What the Owner says aloud is written down by the first of their
+    // Providers that offers it and has a key.
+    for listening in config.providers() {
+        let Some(model) = orbite::transcription_model(&listening.name) else { continue };
+        let Some(key) = key_of(Some(&listening))? else { continue };
+        let root = listening.address.clone().or_else(|| {
+            let known = known_providers().iter().find(|known| known.name == listening.name)?;
+            Some(known.api_root.to_owned())
+        });
+        if let Some(root) = root {
+            let model = setting("ORBITE_TRANSCRIPTION_MODEL").unwrap_or_else(|| model.to_owned());
+            agent = agent.transcribing_with(orbite::Transcriber::new(root, key, model));
+            break;
+        }
+    }
     // The Agent has a Computer where the machine has what one is made of.
     if orbite::Computer::can_start() {
         agent = agent.using_a_computer_in(home.join("computer"));

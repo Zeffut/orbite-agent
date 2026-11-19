@@ -32,6 +32,7 @@ mod store;
 mod subagents;
 mod telegram;
 mod terminal;
+mod transcriber;
 mod tryout;
 mod updater;
 mod web;
@@ -40,7 +41,9 @@ pub use agent::Agent;
 pub use anthropic::Anthropic;
 pub use attachments::attached;
 pub use both::Both;
-pub use catalogue::{Connected, KnownProvider, Speaks, connect, connect_in, known_providers};
+pub use catalogue::{
+    Connected, KnownProvider, Speaks, connect, connect_in, known_providers, transcription_model,
+};
 pub use channel::{Answer, Approval, Channel};
 pub use chatgpt::ChatGpt;
 pub use computer::{Computer, Screen};
@@ -60,5 +63,6 @@ pub use steps::Step;
 pub use store::{Entry, Store, StoreError};
 pub use telegram::Telegram;
 pub use terminal::Terminal;
+pub use transcriber::Transcriber;
 pub use tryout::{Tools, Verdict, keep_rating, rating, try_out};
 pub use updater::{RELEASE_KEY, Service, Systemd, UpdateError, Updater};

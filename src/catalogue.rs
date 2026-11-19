@@ -66,6 +66,16 @@ const KNOWN: &[KnownProvider] = &[
     local("lmstudio", "LM Studio (on this machine)", "http://localhost:1234/v1"),
 ];
 
+/// The model with which the Provider called `name` writes speech down,
+/// when it offers that to whoever has an API Key.
+pub fn transcription_model(name: &str) -> Option<&'static str> {
+    match name {
+        "openai" => Some("gpt-transcribe"),
+        "groq" => Some("whisper-large-v3-turbo"),
+        _ => None,
+    }
+}
+
 /// Every Provider known by name, the most used first.
 pub fn known_providers() -> &'static [KnownProvider] {
     KNOWN
