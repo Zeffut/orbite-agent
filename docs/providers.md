@@ -31,7 +31,7 @@ Anthropic is spoken to in its own protocol; every other provider through the Ope
 
 ## With a subscription
 
-Using a flat-rate plan (ChatGPT, GitHub Copilot, Claude) instead of an API key is **not available yet**. When it is, it will go only through each provider's official sign-in for third-party programs, never through a path a provider forbids (see [ADR 0006](adr/0006-subscriptions-through-official-paths-only.md)), and each one will have its page here stating that path and its risk.
+Using a flat-rate plan (ChatGPT, GitHub Copilot) instead of an API key is **not available yet**. For Claude, Orbite takes an API key only: Anthropic does not let other programs offer its sign-in. If your Claude plan comes with API credit, a key created in Anthropic's console draws on it. When it is, it will go only through each provider's official sign-in for third-party programs, never through a path a provider forbids (see [ADR 0006](adr/0006-subscriptions-through-official-paths-only.md)), and each one will have its page here stating that path and its risk.
 
 ## Choosing a model
 
