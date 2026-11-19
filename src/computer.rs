@@ -581,7 +581,7 @@ fn stop_what_was_left(profile: &Path) -> io::Result<()> {
     }
     let _ = std::fs::remove_file(&noted);
     let mine = profile.display().to_string();
-    let mut stopped = false;
+    let mut stopped: Vec<i32> = Vec::new();
     for line in lines.lines() {
         if let Some(key) = line.strip_prefix("key ") {
             // Only what Orbite itself names that way is removed.
@@ -599,12 +599,28 @@ fn stop_what_was_left(profile: &Path) -> io::Result<()> {
         if command.starts_with("Xvfb -displayfd") || command.contains(&mine) {
             // SAFETY: a signal sent to a program an earlier Orbite started.
             unsafe { libc::kill(pid, libc::SIGTERM) };
-            stopped = true;
+            stopped.push(pid);
         }
     }
-    if stopped {
-        // Time for the browser to let go of its profile.
-        std::thread::sleep(Duration::from_secs(2));
+    // The browser has to have let go of its profile before another takes
+    // it: waited for, then made to.
+    let gone = |pid: &i32| {
+        std::fs::read(format!("/proc/{pid}/cmdline")).map_or(true, |command| command.is_empty())
+    };
+    let until = Instant::now() + Duration::from_secs(8);
+    while !stopped.iter().all(gone) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for pid in stopped.iter().filter(|pid| !gone(pid)) {
+        // SAFETY: as above.
+        unsafe { libc::kill(*pid, libc::SIGKILL) };
+    }
+    if !stopped.is_empty() {
+        std::thread::sleep(Duration::from_millis(300));
+        // What a browser stopped that way leaves to say its profile is taken.
+        for lock in ["lock", ".parentlock", "SingletonLock", "SingletonCookie", "SingletonSocket"] {
+            let _ = std::fs::remove_file(profile.join(lock));
+        }
     }
     Ok(())
 }
