@@ -1283,10 +1283,11 @@ impl<P: Provider + 'static> Agent<P> {
                         }
                         Some(reason) => format!("🔴 ({})", clip(reason, 120)),
                     };
-                    listed.push_str(&format!(
-                        "\n{state} **{}**: {}",
-                        extension.name, extension.description
-                    ));
+                    let description = match (self.language, &extension.description_fr) {
+                        (Language::French, Some(french)) => french,
+                        _ => &extension.description,
+                    };
+                    listed.push_str(&format!("\n{state} **{}**: {description}", extension.name));
                 }
                 listed.push_str(&say(
                     "\n\n/extensions off NAME, /extensions on NAME, /extensions remove NAME",

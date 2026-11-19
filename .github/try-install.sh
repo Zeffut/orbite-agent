@@ -18,9 +18,12 @@ id orbite >/dev/null
 [ "$(stat -c '%U %a' /var/lib/orbite)" = "orbite 700" ]
 [ "$(systemctl is-enabled orbite)" = "enabled" ]
 
-# Enough of a setup for the service to stay up: a bot it will never reach.
+# Enough of a setup for the service to stay up: a model it will never reach,
+# and a stand-in for Telegram that never has anything to pass on.
+python3 "$RELEASE/fake-telegram.py" 28932 &
+TELEGRAM=$!
 as_orbite() { runuser -u orbite -- env ORBITE_HOME=/var/lib/orbite "$@"; }
-printf '%s' '{"provider":{"name":"custom","model":"none","address":"http://127.0.0.1:9"},"telegram_owner":1}' |
+printf '%s' '{"provider":{"name":"custom","model":"none","address":"http://127.0.0.1:9"},"telegram_owner":1,"telegram_address":"http://127.0.0.1:28932"}' |
     as_orbite tee /var/lib/orbite/config.json >/dev/null
 printf '%s\n' "1234567890:ForTheInstallTestOnlyNotARealToken" |
     as_orbite /usr/local/bin/orbite secret set ORBITE_TELEGRAM_TOKEN >/dev/null
@@ -68,7 +71,7 @@ update_from next | grep -q "Updated to 99.0.0"
 [ -f /usr/local/bin/orbite.previous ]
 # The Agent, which is not root, can take what was left for the Owner.
 [ "$(stat -c '%U' /var/lib/orbite/notices)" = "orbite" ]
-kill "$SERVER"
+kill "$SERVER" "$TELEGRAM"
 
 # What was tampered with is refused.
 echo tampered >> "$RELEASE/orbite-x86_64-linux"

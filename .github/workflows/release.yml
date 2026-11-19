@@ -60,7 +60,7 @@ jobs:
           openssl genpkey -algorithm ed25519 -out ../try.key
           openssl pkey -in ../try.key -pubout -out try.pub
           openssl pkeyutl -sign -inkey ../try.key -rawin -in SHA256SUMS -out SHA256SUMS.sig
-          cp ../install.sh ../.github/try-install.sh .
+          cp ../install.sh ../.github/try-install.sh ../.github/fake-telegram.py .
           # Two later releases to update to: one that works, one that does not start.
           release() {
             (cd "$1" && echo "$2" > VERSION && sha256sum orbite-x86_64-linux VERSION > SHA256SUMS &&
@@ -75,7 +75,7 @@ jobs:
       - name: Install and try the service (Debian, a machine of its own)
         if: matrix.system == 'debian'
         run: |
-          printf 'FROM debian:stable\nRUN apt-get update -qq && apt-get install -y -qq systemd systemd-sysv procps python3-minimal >/dev/null\nCMD ["/sbin/init"]\n' > Dockerfile.debian
+          printf 'FROM debian:stable\nRUN apt-get update -qq && apt-get install -y -qq systemd systemd-sysv procps python3 >/dev/null\nCMD ["/sbin/init"]\n' > Dockerfile.debian
           docker build -q -t fresh-debian -f Dockerfile.debian .
           docker run -d --name fresh --privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw fresh-debian
           sleep 5

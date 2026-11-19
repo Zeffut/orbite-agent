@@ -114,6 +114,11 @@ impl Provider for OpenAiCompatible {
             let reason = format!("HTTP {}: {}", status.as_u16(), error_message(&body));
             return Err(ProviderError::Busy { reason, retry_after });
         }
+        // The model wrote an Action request that does not parse: it was not
+        // asked anything wrong, and asking again usually gets a sound one.
+        if status.as_u16() == 400 && body.contains("\"tool_use_failed\"") {
+            return Err(ProviderError::Busy { reason: error_message(&body), retry_after: None });
+        }
         if !status.is_success() {
             return Err(ProviderError::Failed(format!(
                 "HTTP {}: {}",

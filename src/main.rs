@@ -89,15 +89,17 @@ async fn run() -> Result<(), Failure> {
     };
     let mut agent = agent()?;
     let language = Language::of(Config::load(&home)?.language.as_deref());
-    let telegram = Telegram::new(token, owner)
+    let mut telegram = Telegram::new(token, owner)
         .saving_files_in(home.join("workspace/inbox"))
         .speaking(language);
+    if let Some(address) = Config::load(&home)?.telegram_address {
+        telegram = telegram.at(address);
+    }
     if env::args().any(|argument| argument == "--terminal") {
         // The same Conversation, open in this terminal as well.
         let terminal = Terminal::new(BufReader::new(stdin()), stdout());
         agent.converse(&mut Both::new(telegram, terminal)).await;
     } else {
-        let mut telegram = telegram;
         agent.converse(&mut telegram).await;
     }
     Ok(())

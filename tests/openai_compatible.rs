@@ -361,3 +361,22 @@ async fn reports_what_the_answer_cost_when_the_provider_says() {
         }
     );
 }
+
+#[tokio::test]
+async fn an_action_the_model_wrote_wrong_is_worth_asking_again() {
+    // What Groq answers when the model's own Action request does not parse.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({ "error": {
+            "message": "Failed to parse tool call arguments as JSON",
+            "type": "invalid_request_error",
+            "code": "tool_use_failed",
+        } })))
+        .mount(&server)
+        .await;
+    let provider = OpenAiCompatible::new(server.uri(), "sk-test", "some-model");
+
+    let reply = provider.reply(hi()).await;
+
+    assert!(matches!(reply, Err(ProviderError::Busy { retry_after: None, .. })), "{reply:?}");
+}

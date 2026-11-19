@@ -23,6 +23,10 @@ pub struct Config {
     /// The Telegram account the Agent obeys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram_owner: Option<i64>,
+    /// Where Telegram's bot API is reached, when it is not Telegram's own
+    /// servers (a bot API server the Owner runs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_address: Option<String>,
     /// False when the Owner does not want Orbite to update itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automatic_updates: Option<bool>,

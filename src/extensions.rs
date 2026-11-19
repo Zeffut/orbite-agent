@@ -66,6 +66,8 @@ const http = (() => {
 struct Manifest {
     #[serde(default)]
     description: String,
+    /// The same in French, for an Official Extension.
+    description_fr: Option<String>,
     /// The hosts the Extension may reach, by name.
     #[serde(default)]
     hosts: Vec<String>,
@@ -75,6 +77,7 @@ struct Manifest {
 pub(crate) struct Extension {
     pub(crate) name: String,
     pub(crate) description: String,
+    pub(crate) description_fr: Option<String>,
     hosts: Vec<String>,
     script: String,
     /// True for an Extension shipped with Orbite.
@@ -136,6 +139,7 @@ impl Extensions {
                 Extension {
                     name: (*name).to_owned(),
                     description: manifest.description,
+                    description_fr: manifest.description_fr,
                     hosts: manifest.hosts,
                     script: (*script).to_owned(),
                     official: true,
@@ -158,6 +162,7 @@ impl Extensions {
             let manifest: Manifest = serde_json::from_str(&manifest).unwrap_or_default();
             all.push(Extension {
                 description: manifest.description,
+                description_fr: manifest.description_fr,
                 hosts: manifest.hosts,
                 script: fs::read_to_string(folder.join("main.js")).unwrap_or_default(),
                 official: false,

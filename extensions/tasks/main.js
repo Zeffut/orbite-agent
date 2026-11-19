@@ -6,7 +6,7 @@ function describe() {
     {
       name: "add",
       description: "Adds a task to your Owner's task list. Use it when they ask to be reminded of something to do with no precise moment; for a precise moment, schedule a reminder instead.",
-      parameters: { title: "What is to be done", "due?": "The day it is due, as YYYY-MM-DD, when one was given" },
+      parameters: { title: "What is to be done", "due?": "The day it is due, as YYYY-MM-DD. Leave it out unless your Owner named a day" },
     },
     {
       name: "list",
