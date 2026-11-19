@@ -238,7 +238,7 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
         };
         let reply = match patiently(provider, request, host.busy_wait).await {
             Ok(reply) => reply,
-            Err(error) => return format!("failed: {}", explain(&error)),
+            Err(error) => return format!("failed: {}", explain(&error, crate::Language::English)),
         };
         conversation.push(Message::Agent {
             text: reply.text.clone(),
@@ -277,6 +277,8 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
     };
     match patiently(provider, request, host.busy_wait).await {
         Ok(reply) => format!("ran out of steps. Its report so far:\n{}", reply.text),
-        Err(error) => format!("ran out of steps, then failed: {}", explain(&error)),
+        Err(error) => {
+            format!("ran out of steps, then failed: {}", explain(&error, crate::Language::English))
+        }
     }
 }

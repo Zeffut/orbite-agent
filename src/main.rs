@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use orbite::{
-    Agent, Both, Config, Connected, PROVIDER_KEY, Routed, Secrets, Setup, SetupStep, Store,
-    TELEGRAM_TOKEN, Telegram, Terminal, connect, known_providers,
+    Agent, Both, Config, Connected, Language, PROVIDER_KEY, Routed, Secrets, Setup, SetupStep,
+    Store, TELEGRAM_TOKEN, Telegram, Terminal, connect, known_providers,
 };
 use tokio::io::{BufReader, stdin, stdout};
 
@@ -80,7 +80,10 @@ async fn run() -> Result<(), Failure> {
             .ok_or("No Telegram account is linked yet. Run `orbite setup`.")?,
     };
     let mut agent = agent()?;
-    let telegram = Telegram::new(token, owner).saving_files_in(home.join("workspace/inbox"));
+    let language = Language::of(Config::load(&home)?.language.as_deref());
+    let telegram = Telegram::new(token, owner)
+        .saving_files_in(home.join("workspace/inbox"))
+        .speaking(language);
     if env::args().any(|argument| argument == "--terminal") {
         // The same Conversation, open in this terminal as well.
         let terminal = Terminal::new(BufReader::new(stdin()), stdout());
@@ -162,6 +165,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .learning_in(home.join("skills"))
         .keeping_secrets_in(&home)
         .called(config.agent_name.clone().unwrap_or_else(|| "Orbite".into()))
+        .speaking(Language::of(config.language.as_deref()))
         .keeping_context_under(context)
         .waking_up_every_minutes(wake_ups))
 }

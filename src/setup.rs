@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::{
-    Config, KnownProvider, Message, Provider, ProviderChoice, ProviderError, Request, Secrets,
-    Speaks, connect, known_providers,
+    Config, KnownProvider, Language, Message, Provider, ProviderChoice, ProviderError, Request,
+    Secrets, Speaks, connect, known_providers,
 };
 
 /// Under these names the installation's own keys are sealed. The Agent
@@ -45,24 +45,6 @@ impl std::error::Error for SetupError {}
 
 fn stopped(error: impl fmt::Display) -> SetupError {
     SetupError(error.to_string())
-}
-
-/// The language setup, and then Orbite, speaks.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Language {
-    English,
-    French,
-}
-
-impl Language {
-    fn of(code: Option<&str>) -> Self {
-        if code == Some("fr") { Self::French } else { Self::English }
-    }
-
-    /// `english` or `french`, whichever is spoken.
-    fn say<'a>(self, english: &'a str, french: &'a str) -> &'a str {
-        if self == Self::French { french } else { english }
-    }
 }
 
 /// Reads an answer without showing it as it is typed.
@@ -272,7 +254,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                 Err(error) => self.say(&format!(
                     "{} {}",
                     language.say("That did not work:", "Cela n'a pas fonctionné :"),
-                    crate::agent::explain(&error)
+                    crate::agent::explain(&error, language)
                 ))?,
             }
         };

@@ -9,6 +9,7 @@ mod both;
 mod catalogue;
 mod channel;
 mod config;
+mod language;
 mod memory;
 mod openai_compatible;
 mod provider;
@@ -32,6 +33,7 @@ pub use both::Both;
 pub use catalogue::{Connected, KnownProvider, Speaks, connect, known_providers};
 pub use channel::{Answer, Approval, Channel};
 pub use config::{Config, ProviderChoice};
+pub use language::Language;
 pub use openai_compatible::OpenAiCompatible;
 pub use provider::{
     ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request, Usage,

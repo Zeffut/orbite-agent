@@ -11,6 +11,7 @@ use serde_json::json;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
+use crate::Language;
 use crate::memory::Memory;
 use crate::secrets::Secrets;
 use crate::skills::{Skill, Skills};
@@ -51,6 +52,8 @@ pub(crate) struct Host {
     pub(crate) busy_wait: Duration,
     /// The secrets the Agent can use, when it has any.
     pub(crate) secrets: Option<Secrets>,
+    /// The language Approvals are worded in.
+    pub(crate) language: Language,
 }
 
 #[derive(Deserialize)]
@@ -249,10 +252,14 @@ impl Host {
                 }
                 let mut detail = command;
                 if reveals {
-                    detail.push_str("\n\nThis may show a secret to the AI provider.");
+                    detail.push_str("\n\n");
+                    detail.push_str(self.language.say(
+                        "This may show a secret to the AI provider.",
+                        "Cela peut montrer un secret au fournisseur d'IA.",
+                    ));
                 }
                 Review::Ask(Approval {
-                    summary: "Run a command".into(),
+                    summary: self.language.say("Run a command", "Lancer une commande").into(),
                     critical: reveals || is_critical(&detail),
                     detail,
                     // Orbite has no way to undo what a command did.
@@ -265,16 +272,26 @@ impl Host {
                     return Review::Free;
                 }
                 Review::Ask(Approval {
-                    summary: "Read a file".into(),
+                    summary: self.language.say("Read a file", "Lire un fichier").into(),
                     critical: true,
-                    detail: format!("{path}\n\nThis may show a secret to the AI provider."),
+                    detail: format!(
+                        "{path}\n\n{}",
+                        self.language.say(
+                            "This may show a secret to the AI provider.",
+                            "Cela peut montrer un secret au fournisseur d'IA."
+                        )
+                    ),
                     irreversible: true,
                     ..Approval::default()
                 })
             }
             Action::WriteFile(WriteFile { path, content }) => {
                 let replaces = self.locate(&path).exists();
-                let summary = if replaces { "Replace a file" } else { "Create a file" };
+                let summary = if replaces {
+                    self.language.say("Replace a file", "Remplacer un fichier")
+                } else {
+                    self.language.say("Create a file", "Créer un fichier")
+                };
                 Review::Ask(Approval {
                     summary: summary.into(),
                     contained: self.contains(&path),
@@ -289,10 +306,20 @@ impl Host {
                 Err(problem) => Review::Refuse(problem),
                 Ok(url) if !crate::web::is_local(&url) => Review::Free,
                 Ok(_) => Review::Ask(Approval {
-                    summary: "Read an address on your own network".into(),
+                    summary: self
+                        .language
+                        .say(
+                            "Read an address on your own network",
+                            "Lire une adresse de votre réseau",
+                        )
+                        .into(),
                     detail: format!(
-                        "{}\n\nWhat it returns will be shown to the AI provider.",
-                        page.url
+                        "{}\n\n{}",
+                        page.url,
+                        self.language.say(
+                            "What it returns will be shown to the AI provider.",
+                            "Ce qu'elle renvoie sera montré au fournisseur d'IA."
+                        )
                     ),
                     irreversible: false,
                     ..Approval::default()
@@ -305,7 +332,11 @@ impl Host {
                     return Review::Refuse(format!("Could not save the skill: {error}."));
                 }
                 let replaces = skills.has(&skill.name);
-                let summary = if replaces { "Replace a skill" } else { "Save a skill" };
+                let summary = if replaces {
+                    self.language.say("Replace a skill", "Remplacer une compétence")
+                } else {
+                    self.language.say("Save a skill", "Enregistrer une compétence")
+                };
                 Review::Ask(Approval {
                     contained: true,
                     summary: summary.into(),
@@ -323,7 +354,7 @@ impl Host {
                 Err(problem) => Review::Refuse(problem),
                 Ok(found) => Review::Ask(Approval {
                     contained: true,
-                    summary: "Remove a skill".into(),
+                    summary: self.language.say("Remove a skill", "Supprimer une compétence").into(),
                     detail: format!("{}\n\n{}", found.name, found.description),
                     irreversible: true,
                     ..Approval::default()
@@ -334,12 +365,14 @@ impl Host {
             Action::EditFile(edit) => match self.edited(&edit) {
                 Err(problem) => Review::Refuse(problem),
                 Ok(_) => Review::Ask(Approval {
-                    summary: "Edit a file".into(),
+                    summary: self.language.say("Edit a file", "Modifier un fichier").into(),
                     contained: self.contains(&edit.path),
                     detail: format!(
-                        "{}\n\nReplace:\n{}\n\nWith:\n{}",
+                        "{}\n\n{}\n{}\n\n{}\n{}",
                         edit.path,
+                        self.language.say("Replace:", "Remplacer :"),
                         preview(&edit.old),
+                        self.language.say("With:", "Par :"),
                         preview(&edit.new)
                     ),
                     // The replaced passage stays in the Conversation.

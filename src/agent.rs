@@ -6,6 +6,7 @@ use std::time::Duration;
 use chrono::{DateTime, FixedOffset, Local, NaiveTime};
 use tokio::sync::mpsc;
 
+use crate::Language;
 use crate::actions::{Host, Review};
 use crate::attachments::{attachments, is_showable_image};
 use crate::memory::Memory;
@@ -170,6 +171,8 @@ pub struct Agent<P> {
     answered_by: Option<String>,
     /// What the Owner called their Agent.
     name: Option<String>,
+    /// The language of what Orbite says itself.
+    language: Language,
 }
 
 impl<P: Provider + 'static> Agent<P> {
@@ -182,6 +185,7 @@ impl<P: Provider + 'static> Agent<P> {
             web: Web::new(),
             busy_wait: Duration::from_secs(1),
             secrets: None,
+            language: Language::English,
         };
         let (subagents, reports) = Subagents::new();
         Self {
@@ -199,6 +203,7 @@ impl<P: Provider + 'static> Agent<P> {
             sees_images: true,
             answered_by: None,
             name: None,
+            language: Language::English,
         }
     }
 
@@ -264,6 +269,13 @@ impl<P: Provider + 'static> Agent<P> {
     /// The address of the search engine's results page.
     pub fn searching_at(mut self, address: impl Into<String>) -> Self {
         self.host_mut().web.search_at = address.into();
+        self
+    }
+
+    /// The language of what Orbite says and shows itself.
+    pub fn speaking(mut self, language: Language) -> Self {
+        self.language = language;
+        self.host_mut().language = language;
         self
     }
 
@@ -333,14 +345,23 @@ impl<P: Provider + 'static> Agent<P> {
             if let Some(choice) = text.trim().strip_prefix("/secrets") {
                 let said = match choice.trim() {
                     "on" => self.store.set_setting("secrets_in_conversation", Some("on")).map(|()| {
-                        "Secrets in the conversation are on: what you paste here is shown to my AI \
-                         provider and stays in this conversation. /secrets off to go back."
+                        self.language.say(
+                            "Secrets in the conversation are on: what you paste here is shown to my \
+                             AI provider and stays in this conversation. /secrets off to go back.",
+                            "Les secrets dans la discussion sont autorisés : ce que vous collez ici \
+                             est montré à mon fournisseur d'IA et reste dans cette discussion. \
+                             /secrets off pour revenir en arrière.",
+                        )
                     }),
                     "off" => self.store.set_setting("secrets_in_conversation", None).map(|()| {
-                        "Secrets in the conversation are off: enter them on the machine with \
-                         `orbite secret set NAME`."
+                        self.language.say(
+                            "Secrets in the conversation are off: enter them on the machine with \
+                             `orbite secret set NAME`.",
+                            "Les secrets dans la discussion sont refusés : saisissez-les sur la \
+                             machine avec `orbite secret set NOM`.",
+                        )
                     }),
-                    _ => Ok("Say /secrets on or /secrets off."),
+                    _ => Ok(self.language.say("Say /secrets on or /secrets off.", "Écrivez /secrets on ou /secrets off.")),
                 };
                 let said = said.map(str::to_owned).unwrap_or_else(|error| explain_storage(&error));
                 if channel.send(&said).await.is_err() {
@@ -361,7 +382,13 @@ impl<P: Provider + 'static> Agent<P> {
             }
             if text.trim() == "/reset" {
                 let said = match self.store.reset() {
-                    Ok(()) => "Started afresh. What I remember about you is unchanged.".to_owned(),
+                    Ok(()) => self
+                        .language
+                        .say(
+                            "Started afresh. What I remember about you is unchanged.",
+                            "Nouveau départ. Ce que je retiens de vous est inchangé.",
+                        )
+                        .to_owned(),
                     Err(error) => explain_storage(&error),
                 };
                 if channel.send(&said).await.is_err() {
@@ -566,7 +593,7 @@ impl<P: Provider + 'static> Agent<P> {
                     if matches!(conversation.last(), Some(Message::Owner(_))) {
                         self.store.forget_latest()?;
                     }
-                    return Ok(channel.send(&explain(&error)).await.is_ok());
+                    return Ok(channel.send(&explain(&error, self.language)).await.is_ok());
                 }
             };
             self.store.append(&Message::Agent {
@@ -599,7 +626,7 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
                 if action.name == "search_conversation" {
-                    channel.doing(&Step::of(action)).await;
+                    channel.doing(&Step::of(action, self.language)).await;
                     self.store.append(&outcome(self.search(action)))?;
                     continue;
                 }
@@ -618,7 +645,7 @@ impl<P: Provider + 'static> Agent<P> {
                     _ => None,
                 };
                 if let Some(text) = own {
-                    channel.doing(&Step::of(action)).await;
+                    channel.doing(&Step::of(action, self.language)).await;
                     self.store.append(&outcome(text))?;
                     continue;
                 }
@@ -670,7 +697,7 @@ impl<P: Provider + 'static> Agent<P> {
                     },
                 };
                 if allowed.is_ok() {
-                    channel.doing(&Step::of(action)).await;
+                    channel.doing(&Step::of(action, self.language)).await;
                 }
                 let text = match allowed {
                     Err(why_not) => why_not,
@@ -978,12 +1005,15 @@ impl<P: Provider + 'static> Agent<P> {
         if said.iter().any(|word| word.trim() == "/reset") {
             self.store.reset()?;
             return Ok(channel
-                .send("Started afresh. What I remember about you is unchanged.")
+                .send(self.language.say(
+                    "Started afresh. What I remember about you is unchanged.",
+                    "Nouveau départ. Ce que je retiens de vous est inchangé.",
+                ))
                 .await
                 .is_ok());
         }
         self.store.append(&Message::from_agent("Stopped."))?;
-        Ok(channel.send("Stopped.").await.is_ok())
+        Ok(channel.send(self.language.say("Stopped.", "Arrêté.")).await.is_ok())
     }
 }
 
@@ -1259,10 +1289,17 @@ impl<P: Provider + 'static> Agent<P> {
             return None;
         }
         channel.erase_last_received().await;
-        let said = "That looks like a secret (a key, a token or a password). I did not keep it or show \
-                    it to my AI provider, and removed it from here where I could. Enter it on the \
-                    machine instead, with `orbite secret set NAME`: I can then use it by its name \
-                    without ever seeing it. To give secrets here anyway, say /secrets on.";
+        let said = self.language.say(
+            "That looks like a secret (a key, a token or a password). I did not keep it or show it \
+             to my AI provider, and removed it from here where I could. Enter it on the machine \
+             instead, with `orbite secret set NAME`: I can then use it by its name without ever \
+             seeing it. To give secrets here anyway, say /secrets on.",
+            "Cela ressemble à un secret (une clé, un jeton ou un mot de passe). Je ne l'ai ni gardé ni \
+             montré à mon fournisseur d'IA, et je l'ai retiré d'ici quand c'était possible. \
+             Saisissez-le plutôt sur la machine, avec `orbite secret set NOM` : je pourrai l'utiliser \
+             par son nom sans jamais le voir. Pour donner des secrets ici malgré tout, écrivez \
+             /secrets on.",
+        );
         Some(channel.send(said).await.is_ok())
     }
 
@@ -1277,7 +1314,15 @@ impl<P: Provider + 'static> Agent<P> {
             // The first answer since Orbite started: only worth a word when
             // it does not come from the usual Provider.
             None if by == usual => return true,
+            _ if by == usual && self.language == Language::French => {
+                format!("Mon fournisseur d'IA habituel ({usual}) est de retour.")
+            }
             _ if by == usual => format!("My usual AI provider ({usual}) is back."),
+            _ if self.language == Language::French => {
+                format!(
+                    "Mon fournisseur d'IA habituel ({usual}) ne répond pas : {by} prend le relais."
+                )
+            }
             _ => format!("My usual AI provider ({usual}) is not answering: {by} answers for now."),
         };
         channel.send(&said).await.is_ok()
@@ -1288,14 +1333,25 @@ impl<P: Provider + 'static> Agent<P> {
         let today = (self.clock)().date_naive();
         let since = today - chrono::Days::new(6);
         let Ok(used) = self.store.usage_since(&since.format("%Y-%m-%d").to_string()) else {
-            return "I could not read what was used.".into();
+            return self
+                .language
+                .say("I could not read what was used.", "Je n'ai pas pu lire ce qui a été utilisé.")
+                .into();
         };
         if used.is_empty() {
-            return "Nothing was used in the last seven days.".into();
+            return self
+                .language
+                .say(
+                    "Nothing was used in the last seven days.",
+                    "Rien n'a été utilisé ces sept derniers jours.",
+                )
+                .into();
         }
         let today = today.format("%Y-%m-%d").to_string();
         let mut shown = String::new();
-        for (title, days) in [("Today", vec![today.as_str()]), ("Last seven days", Vec::new())] {
+        let today_title = self.language.say("Today", "Aujourd'hui");
+        let week_title = self.language.say("Last seven days", "Sept derniers jours");
+        for (title, days) in [(today_title, vec![today.as_str()]), (week_title, Vec::new())] {
             let mut totals: Vec<(String, String, u64, Usage)> = Vec::new();
             for (day, answers, usage) in &used {
                 if !days.is_empty() && !days.contains(&day.as_str()) {
@@ -1325,10 +1381,14 @@ impl<P: Provider + 'static> Agent<P> {
             shown.push_str(&format!("**{title}**\n"));
             for (by, model, answers, total) in totals {
                 shown.push_str(&format!(
-                    "- {by} · {model}: {answers} answers, {} tokens read ({} from cache), {} written\n",
+                    "- {by} · {model}: {answers} {}, {} {} ({} {}), {} {}\n",
+                    self.language.say("answers", "réponses"),
                     grouped(total.input),
+                    self.language.say("tokens read", "jetons lus"),
                     grouped(total.cached),
-                    grouped(total.output)
+                    self.language.say("from cache", "depuis le cache"),
+                    grouped(total.output),
+                    self.language.say("written", "écrits")
                 ));
             }
             shown.push('\n');
@@ -1355,7 +1415,7 @@ impl<P: Provider + 'static> Agent<P> {
         // pass through the Channel's servers: they decide.
         if crate::actions::looks_secret(path) {
             let approval = Approval {
-                summary: "Send a file".into(),
+                summary: self.language.say("Send a file", "Envoyer un fichier").into(),
                 detail: format!(
                     "{path}\n\nThis may be a secret, and it would pass through the Channel's servers."
                 ),
@@ -1368,7 +1428,7 @@ impl<P: Provider + 'static> Agent<P> {
                 Err(_) => return None,
             }
         }
-        channel.doing(&Step::of(request)).await;
+        channel.doing(&Step::of(request, self.language)).await;
         Some(match channel.send_file(&file, caption).await {
             Ok(()) => format!("Sent {path} to your Owner."),
             Err(error) => format!("Could not send {path}: {error}."),
@@ -1472,7 +1532,13 @@ impl<P: Provider + 'static> Agent<P> {
                     // Nobody but the Owner may loosen the Agent: whatever
                     // the model was told, this is always asked.
                     Some(level) => Review::Ask(Approval {
-                        summary: "Loosen the Agent's permissions".into(),
+                        summary: self
+                            .language
+                            .say(
+                                "Loosen the Agent's permissions",
+                                "Élargir les permissions de l'agent",
+                            )
+                            .into(),
                         detail: format!(
                             "From {} to {}.\n\n{}",
                             self.level().name(),
@@ -1496,8 +1562,12 @@ impl<P: Provider + 'static> Agent<P> {
                         .routines()
                         .is_ok_and(|all| all.iter().any(|other| other.name == routine.name));
                     Review::Ask(Approval {
-                        summary: if replaces { "Replace a routine" } else { "Schedule a routine" }
-                            .into(),
+                        summary: if replaces {
+                            self.language.say("Replace a routine", "Remplacer une routine")
+                        } else {
+                            self.language.say("Schedule a routine", "Planifier une routine")
+                        }
+                        .into(),
                         detail: format!(
                             "{}\n\n{}\n\nSchedule: {cron} ({})\nNext run: {}",
                             routine.name,
@@ -1518,7 +1588,7 @@ impl<P: Provider + 'static> Agent<P> {
             "remove_routine" => match self.routine_named(request) {
                 Err(problem) => Review::Refuse(problem),
                 Ok(routine) => Review::Ask(Approval {
-                    summary: "Remove a routine".into(),
+                    summary: self.language.say("Remove a routine", "Supprimer une routine").into(),
                     detail: format!("{}\n\n{}", routine.name, routine.instruction),
                     irreversible: true,
                     ..Approval::default()
@@ -1796,11 +1866,22 @@ fn explain_storage(error: &StoreError) -> String {
 }
 
 /// A Provider failure, in words for the Owner.
-pub(crate) fn explain(error: &ProviderError) -> String {
+pub(crate) fn explain(error: &ProviderError, language: Language) -> String {
+    let french = language == Language::French;
     match error {
+        ProviderError::Rejected(reason) if french => {
+            format!(
+                "Mon fournisseur d'IA a refusé mon accès ({reason}). Vérifiez la clé d'API, puis réessayez."
+            )
+        }
         ProviderError::Rejected(reason) => {
             format!(
                 "My AI provider refused my access ({reason}). Check the API key, then try again."
+            )
+        }
+        ProviderError::Unreachable(reason) if french => {
+            format!(
+                "Je n'ai pas pu joindre mon fournisseur d'IA ({reason}). Réessayez dans un instant."
             )
         }
         ProviderError::Unreachable(reason) => {
@@ -1809,12 +1890,25 @@ pub(crate) fn explain(error: &ProviderError) -> String {
         ProviderError::Busy { reason, .. } => {
             // Providers explain rate limits at length; the start says it all.
             let reason = clip(reason, 160);
-            format!("My AI provider is too busy to answer ({reason}). Try again later.")
+            if french {
+                format!(
+                    "Mon fournisseur d'IA est trop occupé pour répondre ({reason}). Réessayez plus tard."
+                )
+            } else {
+                format!("My AI provider is too busy to answer ({reason}). Try again later.")
+            }
         }
-        ProviderError::Declined(reason) => {
+        ProviderError::Declined(reason) if french => format!(
+            "Le modèle d'IA sur lequel je tourne a refusé cette demande ({reason}). Vous pouvez la \
+             formuler autrement, ou me faire tourner sur un autre modèle."
+        ),
+        ProviderError::Declined(reason) => format!(
+            "The AI model I run on declined this request ({reason}). You can put it another way, \
+             or have me run on another model."
+        ),
+        ProviderError::Failed(reason) if french => {
             format!(
-                "The AI model I run on declined this request ({reason}). You can put it another \
-                 way, or have me run on another model."
+                "Mon fournisseur d'IA n'a pas réussi à répondre ({reason}). Réessayez dans un instant."
             )
         }
         ProviderError::Failed(reason) => {

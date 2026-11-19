@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::{Answer, Approval, Channel, Step, attached};
+use crate::{Answer, Approval, Channel, Language, Step, attached};
 
 /// How long Telegram may hold a request open waiting for a message.
 const LONG_POLL: Duration = Duration::from_secs(50);
@@ -55,6 +55,8 @@ struct Bot {
     retry_after: Duration,
     /// Where the files the Owner sends are saved, when there is somewhere to.
     inbox: Option<PathBuf>,
+    /// The language of what the bot shows itself.
+    language: Language,
 }
 
 /// Something the Owner sent to the bot.
@@ -82,6 +84,7 @@ impl Telegram {
                 owner,
                 retry_after: Duration::from_secs(3),
                 inbox: None,
+                language: Language::English,
             }),
             listening: None,
             waiting: VecDeque::new(),
@@ -95,6 +98,12 @@ impl Telegram {
     /// Talks to a Bot API server other than Telegram's own.
     pub fn at(mut self, api_root: impl Into<String>) -> Self {
         self.bot_mut().api_root = api_root.into().trim_end_matches('/').to_owned();
+        self
+    }
+
+    /// The language of the bot's own words: buttons, decisions, its menu.
+    pub fn speaking(mut self, language: Language) -> Self {
+        self.bot_mut().language = language;
         self
     }
 
@@ -133,10 +142,12 @@ impl Telegram {
     async fn close_approval(&mut self, answer: &Answer, how: &str) {
         let Some((message, text)) = self.open_approval.take() else { return };
         let decision = match answer {
-            Answer::Allowed => "✅ Allowed",
-            Answer::AlwaysAllowed => "✅ Always allowed",
-            Answer::Denied => "❌ Denied",
-            Answer::Wrote(_) => "✍️ Not answered",
+            Answer::Allowed => self.bot.language.say("✅ Allowed", "✅ Autorisé"),
+            Answer::AlwaysAllowed => {
+                self.bot.language.say("✅ Always allowed", "✅ Toujours autorisé")
+            }
+            Answer::Denied => self.bot.language.say("❌ Denied", "❌ Refusé"),
+            Answer::Wrote(_) => self.bot.language.say("✍️ Not answered", "✍️ Sans réponse"),
         };
         let body = json!({
             "chat_id": self.bot.owner,
@@ -285,8 +296,11 @@ impl Bot {
 async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
     // What the Owner can always type, offered in Telegram's own menu.
     let menu = json!({ "commands": [
-        { "command": "stop", "description": "Stop what the agent is doing" },
-        { "command": "reset", "description": "Start the conversation afresh (memory is kept)" },
+        { "command": "stop", "description": bot.language.say("Stop what the agent is doing", "Arrêter ce que fait l'agent") },
+        { "command": "reset", "description": bot.language.say(
+            "Start the conversation afresh (memory is kept)",
+            "Repartir de zéro dans la discussion (la mémoire est gardée)",
+        ) },
     ] });
     let _ = bot.call::<Value>("setMyCommands", menu).await;
     // Identifier of the next update to ask Telegram for.
@@ -342,7 +356,11 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
                 let words = message.text.or(message.caption).unwrap_or_default();
                 match file {
                     None if words.is_empty() => {
-                        let _ = bot.say("I can only read text and files for now.").await;
+                        let cannot = bot.language.say(
+                            "I can only read text and files for now.",
+                            "Je ne sais lire que du texte et des fichiers pour l'instant.",
+                        );
+                        let _ = bot.say(cannot).await;
                         continue;
                     }
                     None => Sent::Text(words, message.message_id),
@@ -399,7 +417,11 @@ impl Channel for Telegram {
     async fn echo(&mut self, text: &str) {
         let body = json!({
             "chat_id": self.bot.owner,
-            "text": format!("🗣 <i>You, elsewhere:</i>\n{}", formatting::escape(text)),
+            "text": format!(
+                "🗣 <i>{}</i>\n{}",
+                self.bot.language.say("You, elsewhere:", "Vous, ailleurs :"),
+                formatting::escape(text)
+            ),
             "parse_mode": "HTML",
             "disable_notification": true,
         });
@@ -407,7 +429,8 @@ impl Channel for Telegram {
     }
 
     async fn settle(&mut self, _approval: &Approval, answer: &Answer) {
-        self.close_approval(answer, " (elsewhere)").await;
+        let elsewhere = self.bot.language.say(" (elsewhere)", " (ailleurs)");
+        self.close_approval(answer, elsewhere).await;
     }
 
     async fn erase_last_received(&mut self) {
@@ -466,13 +489,22 @@ impl Channel for Telegram {
             ));
         }
         if approval.irreversible {
-            text.push_str("\n\n⚠️ This cannot be undone.");
+            text.push_str("\n\n⚠️ ");
+            text.push_str(
+                self.bot.language.say("This cannot be undone.", "Cela ne peut pas être annulé."),
+            );
         }
-        let mut buttons = vec![json!({ "text": "✅ Allow", "callback_data": "allow" })];
+        let language = self.bot.language;
+        let say = |english: &'static str, french: &'static str| language.say(english, french);
+        let mut buttons = vec![
+            json!({ "text": format!("✅ {}", say("Allow", "Autoriser")), "callback_data": "allow" }),
+        ];
         if !approval.critical {
-            buttons.push(json!({ "text": "🔁 Always", "callback_data": "always" }));
+            buttons.push(json!({ "text": format!("🔁 {}", say("Always", "Toujours")), "callback_data": "always" }));
         }
-        buttons.push(json!({ "text": "❌ Deny", "callback_data": "deny" }));
+        buttons.push(
+            json!({ "text": format!("❌ {}", say("Deny", "Refuser")), "callback_data": "deny" }),
+        );
         let asked: Message = self
             .bot
             .call(
