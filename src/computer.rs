@@ -220,8 +220,16 @@ impl Computer {
             return Err(io::Error::other("no browser Orbite knows is installed"));
         };
         std::fs::create_dir_all(&profile)?;
+        // An Orbite that was killed leaves its screen and browser running:
+        // the browser would take every address asked of this one, and show
+        // it on a screen nobody looks at.
+        stop_what_was_left(profile.as_ref());
+        let screen = Screen::start(width, height)?;
+        if let Some(serving) = &screen.serving {
+            note_running(profile.as_ref(), serving.id());
+        }
         Ok(Self {
-            screen: Screen::start(width, height)?,
+            screen,
             profile: profile.as_ref().to_owned(),
             browser: ((*command).to_owned(), *chrome),
             running: None,
@@ -287,6 +295,9 @@ impl Computer {
         }
         // Asked of a browser already running, the address opens in it.
         let started = starting.arg(address).spawn()?;
+        if !running {
+            note_running(&self.profile, started.id());
+        }
         if running {
             // That second program hands the address over and ends.
             std::thread::spawn(move || {
@@ -324,6 +335,7 @@ impl Computer {
 impl Drop for Computer {
     fn drop(&mut self) {
         self.close_browser();
+        let _ = std::fs::remove_file(running_file(&self.profile));
     }
 }
 
@@ -410,5 +422,44 @@ impl Desk {
             let _ = std::fs::remove_file(pictures.join(format!("screen-{old}.png")));
         }
         Ok(file)
+    }
+}
+
+/// Where the programs a Computer started are noted, beside its profile.
+fn running_file(profile: &Path) -> PathBuf {
+    profile.with_extension("running")
+}
+
+/// Notes that the program `pid` runs for the Computer of `profile`.
+fn note_running(profile: &Path, pid: u32) {
+    use std::io::Write;
+    if let Ok(mut noted) =
+        std::fs::OpenOptions::new().create(true).append(true).open(running_file(profile))
+    {
+        let _ = writeln!(noted, "{pid}");
+    }
+}
+
+/// Stops the screen and browser an earlier Computer of `profile` left
+/// running. A number noted then may be another program's by now: only a
+/// screen server, or a program started on this very profile, is stopped.
+fn stop_what_was_left(profile: &Path) {
+    let noted = running_file(profile);
+    let Ok(pids) = std::fs::read_to_string(&noted) else { return };
+    let _ = std::fs::remove_file(&noted);
+    let mine = profile.display().to_string();
+    let mut stopped = false;
+    for pid in pids.lines().filter_map(|line| line.trim().parse::<i32>().ok()) {
+        let Ok(command) = std::fs::read(format!("/proc/{pid}/cmdline")) else { continue };
+        let command = String::from_utf8_lossy(&command).replace('\0', " ");
+        if command.starts_with("Xvfb -displayfd") || command.contains(&mine) {
+            // SAFETY: a signal sent to a program an earlier Orbite started.
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+            stopped = true;
+        }
+    }
+    if stopped {
+        // Time for the browser to let go of its profile.
+        std::thread::sleep(Duration::from_secs(2));
     }
 }

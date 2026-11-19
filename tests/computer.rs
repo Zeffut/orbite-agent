@@ -208,6 +208,40 @@ mod browser {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_computer_left_running_by_an_orbite_that_was_killed_does_not_keep_the_next_one_blind()
+    {
+        let site = MockServer::start().await;
+        Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(PAGE, "text/html"))
+            .mount(&site)
+            .await;
+        let address = format!("http://127.0.0.1:{}/", site.address().port());
+        let home = tempfile::tempdir().unwrap();
+        let profile = home.path().join("profile");
+
+        let Some(mut first) = started(&profile) else { return };
+        first.open(&address).unwrap();
+        assert!(becomes(&first, (255, 0, 0)), "the page did not show");
+        let left_behind = first.screen().display().to_owned();
+        // Orbite is killed: nothing of it gets to tidy up.
+        std::mem::forget(first);
+
+        let Some(mut second) = started(&profile) else { return };
+        second.open(&address).unwrap();
+
+        assert!(
+            becomes(&second, (255, 0, 0)),
+            "the address went to the browser left behind, on a screen nobody looks at"
+        );
+        // What was left behind is gone.
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(
+            orbite::Screen::at(left_behind).picture().is_err(),
+            "the old screen is still served"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_page_is_opened_typed_in_and_remembered_by_the_browser() {
         let site = MockServer::start().await;
         Mock::given(wiremock::matchers::method("GET"))
