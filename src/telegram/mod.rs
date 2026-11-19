@@ -36,6 +36,8 @@ pub struct Telegram {
     /// What the Owner sent, once the listening task has started.
     listening: Option<(mpsc::UnboundedReceiver<Sent>, JoinHandle<()>)>,
     waiting: VecDeque<String>,
+    /// What Telegram could not take when it was sent, oldest first.
+    undelivered: VecDeque<String>,
     /// Taps on Approval buttons not yet matched to an Approval.
     taps: VecDeque<Tap>,
     /// The message showing the steps of the work under way, and those steps.
@@ -88,6 +90,7 @@ impl Telegram {
             }),
             listening: None,
             waiting: VecDeque::new(),
+            undelivered: VecDeque::new(),
             taps: VecDeque::new(),
             progress: None,
             open_approval: None,
@@ -311,6 +314,8 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
     let _ = bot.call::<Value>("setMyCommands", menu).await;
     // Identifier of the next update to ask Telegram for.
     let mut next_update = 0;
+    // How many times in a row Telegram could not be asked.
+    let mut failures: u32 = 0;
     loop {
         let body = json!({
             "offset": next_update,
@@ -319,11 +324,26 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
         });
         let updates: Vec<Update> = match bot.call("getUpdates", body).await {
             Ok(updates) => updates,
-            Err(_) => {
-                tokio::time::sleep(bot.retry_after).await;
+            Err(error) => {
+                // Said once in the journal, then asked less and less often:
+                // a token Telegram refuses does not start working by itself.
+                if failures == 0 {
+                    eprintln!(
+                        "Telegram cannot be listened to ({error}). If it refuses the bot's token, \
+                         enter a working one with `orbite setup telegram`. Trying again, less and \
+                         less often."
+                    );
+                }
+                let wait = bot.retry_after * 2u32.pow(failures.min(MOST_DOUBLINGS));
+                failures += 1;
+                tokio::time::sleep(wait).await;
                 continue;
             }
         };
+        if failures > 0 {
+            eprintln!("Telegram is listened to again.");
+            failures = 0;
+        }
         for update in updates {
             next_update = update.update_id + 1;
             let sent = if let Some(tapped) = update.callback_query {
@@ -412,7 +432,23 @@ impl Channel for Telegram {
 
     async fn send(&mut self, text: &str) -> io::Result<()> {
         self.clear_progress().await;
-        self.bot.say(text).await
+        // Telegram failing is not the Conversation ending: what it could not
+        // take is kept, and goes out before whatever is sent next.
+        self.undelivered.push_back(text.to_owned());
+        while let Some(oldest) = self.undelivered.front() {
+            if let Err(error) = self.bot.say(oldest).await {
+                eprintln!(
+                    "Telegram did not take a message ({error}): it is kept for the next try."
+                );
+                break;
+            }
+            self.undelivered.pop_front();
+        }
+        // No more is kept than an Owner would want to find on coming back.
+        while self.undelivered.len() > UNDELIVERED_KEPT {
+            self.undelivered.pop_front();
+        }
+        Ok(())
     }
 
     async fn send_file(&mut self, file: &Path, caption: &str) -> io::Result<()> {
@@ -567,6 +603,13 @@ impl Channel for Telegram {
         let _ = self.bot.call::<Value>("sendChatAction", body).await;
     }
 }
+
+/// How many messages Telegram could not take are kept for a later try.
+const UNDELIVERED_KEPT: usize = 20;
+
+/// How many times the wait between two failed tries doubles: with the
+/// usual three seconds, up to a little over three minutes.
+const MOST_DOUBLINGS: u32 = 6;
 
 #[derive(Deserialize)]
 struct Reply<T> {

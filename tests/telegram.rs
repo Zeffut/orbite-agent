@@ -834,3 +834,52 @@ async fn what_the_owner_last_wrote_can_be_removed_from_the_chat() {
         calls.iter().find(|(called, _)| called == "deleteMessage").expect("nothing was removed");
     assert_eq!(erased, &json!({ "chat_id": OWNER, "message_id": 101 }));
 }
+
+#[tokio::test]
+async fn a_bot_telegram_refuses_is_asked_about_less_and_less_often() {
+    let server = MockServer::start().await;
+    Mock::given(path("/botTOKEN/getUpdates"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(
+            json!({ "ok": false, "error_code": 401, "description": "Unauthorized" }),
+        ))
+        .mount(&server)
+        .await;
+    let mut telegram = telegram(&server);
+
+    let waited = tokio::time::timeout(Duration::from_millis(500), telegram.receive()).await;
+
+    assert!(waited.is_err(), "the Channel closed instead of waiting for a working token");
+    let requests = server.received_requests().await.unwrap();
+    let asked =
+        requests.iter().filter(|request| request.url.path().ends_with("/getUpdates")).count();
+    assert!((2..=8).contains(&asked), "Telegram was asked {asked} times in half a second");
+}
+
+#[tokio::test]
+async fn an_answer_telegram_could_not_take_is_kept_and_delivered_with_the_next() {
+    let server = MockServer::start().await;
+    // Telegram fails while the first answer is sent (formatted, then plain).
+    Mock::given(path("/botTOKEN/sendMessage"))
+        .respond_with(ResponseTemplate::new(502))
+        .up_to_n_times(2)
+        .mount(&server)
+        .await;
+    Mock::given(path("/botTOKEN/sendMessage"))
+        .respond_with(ok(json!({ "message_id": 7 })))
+        .mount(&server)
+        .await;
+    let mut telegram = telegram(&server);
+
+    let first = telegram.send("The first answer.").await;
+    assert!(first.is_ok(), "one failed delivery closed the Channel: {first:?}");
+    telegram.send("The second answer.").await.unwrap();
+
+    let delivered: Vec<String> = calls(&server)
+        .await
+        .into_iter()
+        .filter(|(method, _)| method == "sendMessage")
+        .skip(2)
+        .map(|(_, body)| body["text"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(delivered, ["The first answer.", "The second answer."]);
+}
