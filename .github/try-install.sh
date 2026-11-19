@@ -3,6 +3,8 @@
 # and checks what an Owner counts on: the service runs, comes back after a
 # crash, starts with the machine, and installing again changes nothing else.
 set -eu
+# When something below fails, what the service was doing is shown.
+trap 'code=$?; [ $code -eq 0 ] || { systemctl status orbite --no-pager -l || true; journalctl -u orbite -n 30 --no-pager || true; }; exit $code' EXIT
 RELEASE="$1"
 export ORBITE_RELEASE_URL="file://$RELEASE"
 ORBITE_SIGNING_KEY="$(cat "$RELEASE/try.pub")"

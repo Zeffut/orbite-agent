@@ -268,6 +268,9 @@ pub struct Systemd;
 
 impl Service for Systemd {
     fn restart(&self) -> std::io::Result<()> {
+        // A program that kept failing may have used up the starts systemd
+        // allows in a row: the count begins again with this one.
+        let _ = std::process::Command::new("systemctl").args(["reset-failed", "orbite"]).status();
         let done = std::process::Command::new("systemctl").args(["restart", "orbite"]).status()?;
         if done.success() {
             Ok(())
