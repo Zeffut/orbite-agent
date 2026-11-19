@@ -2198,14 +2198,15 @@ fn folded(actions: Vec<ActionSpec>) -> Vec<ActionSpec> {
             if action.name == "computer_open" {
                 offered.push(ActionSpec {
                     name: "computer".into(),
-                    description: "Uses your own Computer: a real screen, 1280 by 800, with a browser, that \
-                        you see through pictures and act on with mouse and keyboard, for sites that need \
-                        signing in or a person's gestures. `do` is open (an address; your Owner is asked \
-                        first), look, click (at x, y of the last picture), type (a text where the cursor \
-                        is; {{NAME}} types a secret you never see, once your Owner agrees), key (such as \
-                        Return, Tab, ctrl+l) or scroll (notches, positive for down). Each answers with a \
-                        picture of the screen. Before anything that pays, sends or deletes, and when a \
-                        site asks for a code or a person, ask your Owner."
+                    description: "Your own Computer, with a web browser: use it whenever you are asked to \
+                        go to a site, click, type, search on a site or sign in. It is a real screen, 1280 \
+                        by 800, that you see through pictures and act on with mouse and keyboard. `do` is \
+                        open (an address; your Owner is asked first), look, click (at x, y of the last \
+                        picture), type (a text where the cursor is; {{NAME}} types a secret you never \
+                        see, once your Owner agrees), key (such as Return, Tab, ctrl+l) or scroll \
+                        (notches, positive for down). Each answers with a picture of the screen. Before \
+                        anything that pays, sends or deletes, and when a site asks for a code or a \
+                        person, ask your Owner."
                         .into(),
                     input: serde_json::json!({
                         "type": "object",
