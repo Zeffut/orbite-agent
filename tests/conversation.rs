@@ -156,3 +156,34 @@ async fn the_agent_knows_the_name_its_owner_gave_it() {
         asked.last_instructions()
     );
 }
+
+#[tokio::test]
+async fn a_model_that_keeps_failing_or_declining_is_named_as_the_cause_with_what_to_do() {
+    let provider = ScriptedProvider::default();
+    provider
+        .then(Err(ProviderError::Declined("I can't help with that.".into())))
+        .then(Err(ProviderError::Failed("the answer was not understood".into())))
+        .then(Err(ProviderError::Declined("I can't help with that.".into())))
+        .then(Ok("Done.".into()))
+        .then(Err(ProviderError::Declined("I can't help with that.".into())));
+    let (mut channel, mut owner) = support::memory_channel();
+    let model = provider.clone();
+    tokio::spawn(async move { Agent::new(model, Store::in_memory()).converse(&mut channel).await });
+
+    owner.says("Do it.");
+    assert!(
+        !owner.hears().await.contains("/settings model"),
+        "blamed on the model at the first failure"
+    );
+    owner.says("Do it.");
+    owner.hears().await;
+    owner.says("Do it.");
+    let third = owner.hears().await;
+    assert!(third.contains("/settings model") && third.contains("orbite tryout"), "{third}");
+
+    // An answer in between, and the count starts again.
+    owner.says("Do it.");
+    assert_eq!(owner.hears().await, "Done.");
+    owner.says("Do it.");
+    assert!(!owner.hears().await.contains("/settings model"));
+}

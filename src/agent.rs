@@ -169,6 +169,8 @@ pub struct Agent<P> {
     /// True when ending the Conversation gets Orbite started again, as a
     /// service does.
     restarted: bool,
+    /// How many turns in a row the model itself failed or declined.
+    model_at_fault: u8,
     /// True when a notice was added that the Agent has yet to respond to.
     owed: bool,
     /// How often the Agent wakes up when its Owner has set no pace, in
@@ -213,6 +215,7 @@ impl<P: Provider + 'static> Agent<P> {
             notices: None,
             home: None,
             restarted: false,
+            model_at_fault: 0,
             owed: false,
             wake_up_pace: 0,
             last_active: 0,
@@ -686,6 +689,7 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
                 Attended::Done(Ok(reply)) => {
+                    self.model_at_fault = 0;
                     if let Some(usage) = &reply.usage {
                         self.store
                             .record_usage(&(self.clock)().format("%Y-%m-%d").to_string(), usage)?;
@@ -706,7 +710,24 @@ impl<P: Provider + 'static> Agent<P> {
                     if matches!(conversation.last(), Some(Message::Owner(_))) {
                         self.store.forget_latest()?;
                     }
-                    return Ok(channel.send(&explain(&error, self.language)).await.is_ok());
+                    let mut said = explain(&error, self.language);
+                    // What the model itself did, not its Provider being
+                    // away: when it keeps happening, the model is the cause.
+                    if matches!(error, ProviderError::Declined(_) | ProviderError::Failed(_)) {
+                        self.model_at_fault += 1;
+                        if self.model_at_fault >= TURNS_BEFORE_BLAMING_THE_MODEL {
+                            said.push_str("\n\n");
+                            said.push_str(self.language.say(
+                                "This is several times in a row: the model itself seems to be the cause. You \
+                                 can choose another with /settings model, and see what to expect of one \
+                                 with `orbite tryout NAME` on the machine.",
+                                "Cela fait plusieurs fois de suite : le modèle lui-même semble en être la cause. \
+                                 Vous pouvez en choisir un autre avec /settings model, et voir à quoi vous \
+                                 attendre avec `orbite tryout NOM` sur la machine.",
+                            ));
+                        }
+                    }
+                    return Ok(channel.send(&said).await.is_ok());
                 }
             };
             self.store.append(&Message::Agent {
@@ -2196,6 +2217,10 @@ async fn showing_work<T>(channel: &mut impl Channel, work: impl Future<Output = 
 fn explain_storage(error: &StoreError) -> String {
     format!("I couldn't use my own storage ({error}).")
 }
+
+/// How many turns in a row a model fails or declines before the Owner is
+/// told that the model seems to be the cause.
+const TURNS_BEFORE_BLAMING_THE_MODEL: u8 = 3;
 
 /// A Provider failure, in words for the Owner.
 pub(crate) fn explain(error: &ProviderError, language: Language) -> String {
