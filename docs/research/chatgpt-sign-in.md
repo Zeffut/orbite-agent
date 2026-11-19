@@ -177,3 +177,10 @@ Not stated: SSH port-forwarding of the loopback port, or the user pasting the re
 - [QS]: "**For open-source developers:** Let users run AI workloads in your tools with their ChatGPT plan, without requiring them to provide an API key. The open-source sign-in flow registers your client and issues OAuth credentials for eligible Responses API requests, without a client secret or partner API key."
 - Users: "Eligible ChatGPT Plus and Pro users" [QS].
 - Not stated: any definition of "open-source", "locally hosted" or "open-source partners" (licence, repository, review); the phrase "personal projects" does not appear; no terms of use, agreement or acceptance step is linked from these pages; no application/approval step for the `dynamic_agent_client` flow. [PL] calls the feature a preview ("Preview limitations").
+
+## 9. Seen for real (2026-11-19, one Plus-or-Pro account)
+
+- The pasted-address sign-in is accepted: authorize, callback with the issued `client_id`, code exchange, `GET /v1/models` (ten models, `visibility: "list"`), `POST /v1/responses` with one tool namespace, images as `input_image`, history replayed without item ids.
+- **No prompt caching was observed.** Two requests a few seconds apart sharing a 4,000-token beginning reported `cache_write_tokens: 0` and `cached_tokens: 0`, on `gpt-6-luna` and `gpt-6.1-sol`, whether the instructions went in `instructions` or in a first `developer` message (the lever OpenAI's caching guide names). `prompt_cache_options` is refused: HTTP 400, "prompt_cache_options is not supported on this model". The Sign in with ChatGPT pages say nothing about caching, so this may be how the preview behaves; every turn then counts its whole context against the plan.
+- The `usage` object also carries an `attribution` map per item, which Orbite does not read.
+- Not exercised for real: renewal after an hour, a plan at its limit, a sign-in that ended, revocation.
