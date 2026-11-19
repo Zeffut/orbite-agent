@@ -601,7 +601,8 @@ impl Desk {
 
     /// A picture of the screen once it has stopped changing for `calm`
     /// looks in a row, half a second apart, or after `patience` at most,
-    /// kept as a file. A blinking cursor is not a change. With `before`, a
+    /// kept as a file. A blinking cursor is not a change, and a screen all
+    /// black is not a settled one. With `before`, a
     /// screen still as it was then is not taken for a settled one: what
     /// was asked for has not shown yet.
     pub(crate) async fn picture(
@@ -622,7 +623,9 @@ impl Desk {
             let now = self.with(|computer| computer.screen().points())?;
             let moved = differing(&now.2, &seen.2);
             let unchanged_since_before = before.is_some_and(|before| !differing(&now.2, before));
-            still = if moved || unchanged_since_before { 0 } else { still + 1 };
+            // All black is a browser between two paintings, not a page.
+            let blank = now.2.iter().all(|light| *light == 0);
+            still = if moved || unchanged_since_before || blank { 0 } else { still + 1 };
             seen = now;
         }
         // Whole for the Owner, and smaller for the model: a picture costs a
