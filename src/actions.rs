@@ -729,6 +729,22 @@ impl Host {
             Action::Computer(_) => Review::Free,
             // Memory is the Agent's own, and its Owner can read and undo all of it.
             Action::Remember(_) | Action::Forget(_) => Review::Free,
+            // Asked before the file is looked at: whether a passage is there
+            // already tells what a file holds.
+            Action::EditFile(edit) if looks_secret(&edit.path) => Review::Ask(Approval {
+                summary: self.language.say("Edit a file", "Modifier un fichier").into(),
+                critical: true,
+                detail: format!(
+                    "{}\n\n{}",
+                    edit.path,
+                    self.language.say(
+                        "This may show a secret to the AI provider.",
+                        "Cela peut montrer un secret au fournisseur d'IA."
+                    )
+                ),
+                irreversible: true,
+                ..Approval::default()
+            }),
             Action::EditFile(edit) => match self.edited(&edit) {
                 Err(problem) => Review::Refuse(problem),
                 Ok(_) => Review::Ask(Approval {

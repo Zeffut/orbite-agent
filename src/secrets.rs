@@ -188,7 +188,11 @@ fn write_privately(path: &Path, content: &[u8]) -> Result<(), SecretsError> {
     if let Some(folder) = path.parent() {
         fs::create_dir_all(folder).map_err(|error| failed("could not create the folder", error))?;
     }
-    let being_written = path.with_extension("writing");
+    // A name of its own for each file: the key and what it seals are
+    // written apart.
+    let mut being_written = path.as_os_str().to_owned();
+    being_written.push(".writing");
+    let being_written = std::path::PathBuf::from(being_written);
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]

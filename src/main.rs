@@ -145,15 +145,19 @@ async fn chat() -> Result<(), Failure> {
 /// as its service does or as Ctrl-C does in a terminal.
 async fn until_asked_to_stop(conversing: impl std::future::Future<Output = ()>) {
     use tokio::signal::unix::{SignalKind, signal};
-    let (Ok(mut stop), Ok(mut interrupt)) =
-        (signal(SignalKind::terminate()), signal(SignalKind::interrupt()))
-    else {
+    let (Ok(mut stop), Ok(mut interrupt), Ok(mut hung_up)) = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::interrupt()),
+        signal(SignalKind::hangup()),
+    ) else {
         return conversing.await;
     };
     tokio::select! {
         () = conversing => {}
         _ = stop.recv() => {}
         _ = interrupt.recv() => {}
+        // The terminal it ran in was closed.
+        _ = hung_up.recv() => {}
     }
 }
 
@@ -369,6 +373,10 @@ fn uninstall() -> Result<(), Failure> {
     };
     systemctl(&["disable", "--now", "orbite"]);
     systemctl(&["disable", "--now", "orbite-update.timer"]);
+    // The data first: were it to fail, the program is still there to try again.
+    if !keep && data.exists() {
+        fs::remove_dir_all(&data)?;
+    }
     for file in [
         "/etc/systemd/system/orbite.service",
         "/etc/systemd/system/orbite-update.service",
@@ -391,9 +399,6 @@ fn uninstall() -> Result<(), Failure> {
         // The account goes, the data stays for whoever reads it next.
         let _ = std::process::Command::new("userdel").arg("orbite").status();
         return Ok(());
-    }
-    if data.exists() {
-        fs::remove_dir_all(&data)?;
     }
     let _ = std::process::Command::new("userdel").arg("orbite").status();
     println!("Orbite is removed, with the Agent's data.");

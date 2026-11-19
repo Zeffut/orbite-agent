@@ -386,3 +386,27 @@ async fn an_agent_that_never_stops_acting_is_stopped() {
     assert!(owner.hears().await.contains("stopped"), "the Owner is told");
     assert!(provider.times_asked() < 200);
 }
+
+#[tokio::test]
+async fn editing_what_looks_like_a_secret_is_asked_before_the_file_is_looked_at() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::create_dir_all(workspace.path().join(".ssh")).unwrap();
+    fs::write(workspace.path().join(".ssh/id_rsa"), "PRIVATE-KEY-MATERIAL").unwrap();
+    let provider = ScriptedProvider::default();
+    // A passage that is not there: saying so would tell what the file holds.
+    provider
+        .then_acts([("edit_file", json!({ "path": ".ssh/id_rsa", "old": "GUESS", "new": "x" }))])
+        .then(Ok("Left alone.".into()));
+    let mut owner = agent_in(workspace.path(), &provider);
+
+    owner.says("Edit my key.");
+    let asked = owner.is_asked().await;
+    assert!(asked.critical, "{asked:?}");
+    owner.denies();
+    owner.hears().await;
+
+    assert_eq!(
+        fs::read_to_string(workspace.path().join(".ssh/id_rsa")).unwrap(),
+        "PRIVATE-KEY-MATERIAL"
+    );
+}

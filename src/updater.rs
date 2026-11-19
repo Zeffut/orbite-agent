@@ -129,6 +129,17 @@ impl Updater {
         let program = self.download(&file).await?;
         check(&sums, &file, &program)?;
 
+        // One update at a time: the daily one and one asked by hand would
+        // write the same files.
+        let lock = fs::File::create(sibling(&self.program, "updating"))
+            .map_err(|error| failed("could not prepare the update", error))?;
+        {
+            use std::os::fd::AsRawFd;
+            // SAFETY: a lock on a file this function just opened, let go when it is closed.
+            if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                return Ok("Another update is under way.".into());
+            }
+        }
         // The new program takes the place of the old in one move, and the
         // old one is kept beside it.
         let was_running = service.is_running();

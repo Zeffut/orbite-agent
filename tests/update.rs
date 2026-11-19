@@ -306,3 +306,20 @@ async fn settings_that_are_not_a_plain_file_do_not_hold_the_update_up() {
     assert!(updated.expect("the update hung on the settings").is_ok());
     assert_eq!(machine.program(), "the new program");
 }
+
+#[tokio::test]
+async fn two_updates_at_once_do_not_get_in_each_others_way() {
+    use std::os::fd::AsRawFd;
+    let machine = Machine::running("the old program");
+    let release = Release::new("0.2.0", "the new program").published().await;
+    // Another update holds the program: as the daily one does while one is asked by hand.
+    let held = fs::File::create(machine.folder.path().join("orbite.updating")).unwrap();
+    // SAFETY: a lock taken on a file this test just made.
+    assert_eq!(unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }, 0);
+
+    let said = machine.update_from(&release, "0.1.0").await.unwrap();
+
+    assert!(said.contains("under way"), "{said}");
+    assert_eq!(machine.program(), "the old program");
+    assert_eq!(machine.restarts(), 0);
+}
