@@ -131,6 +131,12 @@ async fn commands_that_could_change_something_are_never_taken_for_inspection() {
         "cat ~/.s?h/id_e*",
         "cat [n]otes.txt ../secrets.sealed",
         "grep -z TOKEN /proc/self/environ",
+        // Quotes hide nothing from the program itself.
+        "find . '-delete'",
+        "find . -name '*.txt' -delete",
+        "'rm' notes.txt",
+        "cat 'notes.txt",
+        "find . -name \"$(rm notes.txt)\"",
     ] {
         let workspace = tempfile::tempdir().unwrap();
         fs::write(workspace.path().join("notes.txt"), "keep me").unwrap();
@@ -421,4 +427,25 @@ async fn editing_what_looks_like_a_secret_is_asked_before_the_file_is_looked_at(
         fs::read_to_string(workspace.path().join(".ssh/id_rsa")).unwrap(),
         "PRIVATE-KEY-MATERIAL"
     );
+}
+
+#[tokio::test]
+async fn a_pattern_given_in_quotes_to_a_program_that_looks_is_still_only_looking() {
+    for (command, expected) in [
+        ("find . -name '*.txt'", "./notes.txt"),
+        ("grep -c 'ke[e]p' notes.txt", "1"),
+        ("ls | grep '^n.*t$'", "notes.txt"),
+    ] {
+        let workspace = tempfile::tempdir().unwrap();
+        fs::write(workspace.path().join("notes.txt"), "keep me").unwrap();
+        let provider = ScriptedProvider::default();
+        provider.then_acts([("run_command", json!({ "command": command }))]).then(Ok("Ok.".into()));
+        let mut owner = agent_in(workspace.path(), &provider);
+
+        owner.says("Go.");
+        assert_eq!(owner.hears().await, "Ok.", "{command:?} asked");
+
+        assert!(owner.was_asked_nothing(), "{command:?} asked");
+        assert!(outcome(&provider).contains(expected), "{command:?}: {}", outcome(&provider));
+    }
 }

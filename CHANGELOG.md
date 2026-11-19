@@ -2,8 +2,11 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## Unreleased
+## 0.3.8
 
+Released on 2026-11-19.
+
+- A pattern given in single quotes to a program that only looks (`find . -name '*.txt'`, `grep 'a.*b' file`) no longer asks for an approval: the shell works nothing out of what is between such quotes. Seen in a real try, where a sub-agent, which has nobody to ask, was refused a plain search. Quotes still hide nothing: `find . '-delete'` asks.
 - `/settings` shows what writes voice messages down and switches between a provider, nothing, and a local way already set up on the machine.
 
 ## 0.3.7

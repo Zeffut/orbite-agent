@@ -1187,16 +1187,44 @@ fn only_looks(command: &str) -> bool {
         "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint", "-fprint0", "-fprintf",
         "-s", "--set",
     ];
+    // What is written between single quotes reaches the program as it is,
+    // the shell working nothing out of it: a pattern for find or grep. It is
+    // set aside for the shell's part, and kept for the program's.
+    let mut outside = String::new();
+    let mut unquoted = String::new();
+    let mut quoted = false;
+    for letter in command.chars() {
+        if letter == '\'' {
+            quoted = !quoted;
+            // Something stands there, whatever it is.
+            if quoted {
+                outside.push('_');
+            }
+            continue;
+        }
+        if !quoted {
+            outside.push(letter);
+        }
+        // A space inside quotes does not end the word the program is given.
+        unquoted.push(if quoted && letter.is_whitespace() { '_' } else { letter });
+    }
+    if quoted {
+        return false;
+    }
     // Nothing the shell would work out by itself after this look: what a
     // pattern or ~ ends up naming cannot be known here.
-    if command.contains(|c| ";&><$`(){}\\\n\r!*?[]~".contains(c)) {
+    if outside.contains(|c| ";&><$`(){}\\\n\r!*?[]~\"".contains(c)) {
         return false;
     }
     // Where the secrets given to a command can be read back from.
     if command.contains("/proc/") {
         return false;
     }
-    command.split('|').all(|stage| {
+    // A | between quotes is not a pipe: such a command is not taken apart here.
+    if outside.matches('|').count() != unquoted.matches('|').count() {
+        return false;
+    }
+    unquoted.split('|').all(|stage| {
         let mut words = stage.split_whitespace();
         let Some(program) = words.next() else {
             return false;
