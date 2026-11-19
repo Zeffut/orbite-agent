@@ -147,7 +147,7 @@ impl Machine {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "x").unwrap();
         }
-        for command in ["systemctl", "userdel"] {
+        for command in ["systemctl", "userdel", "chown"] {
             let script = format!(
                 "#!/bin/sh\necho \"{command} $*\" >> '{}'\n",
                 machine.root.path().join("calls.log").display()
@@ -221,6 +221,12 @@ fn the_data_is_kept_when_asked_and_the_owner_is_told_where() {
     assert!(removed.status.success(), "{}", shown(&removed));
     assert!(!machine.has("usr/local/bin/orbite") && machine.has("var/lib/orbite/memory/owner.md"));
     assert!(shown(&removed).contains("var/lib/orbite"), "{}", shown(&removed));
+    // What is kept is given to root before the account goes: left to the
+    // account's number, it would be read by whoever is given that number next.
+    let calls = machine.calls();
+    let given = calls.find("chown -R root:root").unwrap_or_else(|| panic!("{calls}"));
+    assert!(calls[given..].lines().next().unwrap().ends_with("var/lib/orbite"), "{calls}");
+    assert!(given < calls.find("userdel orbite").unwrap(), "{calls}");
 }
 
 #[test]

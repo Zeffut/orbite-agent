@@ -145,13 +145,25 @@ impl Updater {
         let was_running = service.is_running();
         let arriving = sibling(&self.program, "new");
         let previous = sibling(&self.program, "previous");
-        fs::write(&arriving, &program)
+        // Written through to the disk before it takes the old one's place:
+        // a machine that loses power just after must not find half a program.
+        fs::File::create(&arriving)
+            .and_then(|mut file| {
+                use std::io::Write;
+                file.write_all(&program)?;
+                file.sync_all()
+            })
             .map_err(|error| failed("could not write the new program", error))?;
         make_runnable(&arriving)?;
         fs::copy(&self.program, &previous)
             .map_err(|error| failed("could not keep the previous program", error))?;
         fs::rename(&arriving, &self.program)
             .map_err(|error| failed("could not install the new program", error))?;
+        if let Some(folder) = self.program.parent()
+            && let Ok(folder) = fs::File::open(folder)
+        {
+            let _ = folder.sync_all();
+        }
 
         // An Orbite that was not running (not set up yet) is not started,
         // and nothing can be judged from it staying stopped.

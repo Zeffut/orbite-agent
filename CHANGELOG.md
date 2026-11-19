@@ -6,6 +6,7 @@ What changed in each version of Orbite, for the people who run it.
 
 Released on 2026-11-19.
 
+- `uninstall --keep-data` gives the kept data to root, so that no later account reads it, and installing again gives it back to the agent. An update is written through to the disk before it takes the old program's place.
 - The agent's browser is no longer handed what Orbite itself was started with (its `ORBITE_*` settings, where a key may be) nor the address of a desktop session's bus.
 - The agent's screen no longer starts over each time nothing is connected to it: a browser that was starting then could be cut off, a click or a picture lost.
 - Two runs of one extension at once no longer lose what the other kept: a run waits for the one before.

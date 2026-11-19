@@ -448,7 +448,10 @@ fn uninstall() -> Result<(), Failure> {
     systemctl(&["daemon-reload"]);
     if keep {
         println!("Orbite is removed. The Agent's data is kept in {}.", data.display());
-        // The account goes, the data stays for whoever reads it next.
+        // The account goes and the data stays, given to root first: left to
+        // the account's number, a later account given that number would
+        // read the Agent's secrets.
+        let _ = std::process::Command::new("chown").args(["-R", "root:root"]).arg(&data).status();
         let _ = std::process::Command::new("userdel").arg("orbite").status();
         return Ok(());
     }

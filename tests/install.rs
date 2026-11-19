@@ -414,3 +414,19 @@ fn a_key_that_is_not_mozillas_is_not_trusted_for_the_browser() {
     assert!(!machine.path("etc/apt/keyrings/packages.mozilla.org.asc").exists());
     assert!(!machine.calls().contains("firefox"), "{}", machine.calls());
 }
+
+#[test]
+fn data_kept_from_an_earlier_installation_is_given_back_to_the_agents_account() {
+    let machine = Machine::debian();
+    machine.write("var/lib/orbite/memory/owner.md", "kept");
+
+    assert!(machine.install().status.success());
+
+    let calls = machine.calls();
+    assert!(
+        calls
+            .lines()
+            .any(|call| call.starts_with("chown -R orbite: ") && call.ends_with("var/lib/orbite")),
+        "{calls}"
+    );
+}

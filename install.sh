@@ -103,7 +103,9 @@ if ! id orbite >/dev/null 2>&1; then
     useradd --system --home-dir "$HOME_DIR" --shell /usr/sbin/nologin orbite
 fi
 mkdir -p "$ROOT$HOME_DIR"
-chown orbite: "$ROOT$HOME_DIR"
+# With all that is in it: data kept from an earlier installation was given
+# to root when that one was removed.
+chown -R orbite: "$ROOT$HOME_DIR"
 chmod 700 "$ROOT$HOME_DIR"
 
 mkdir -p "$ROOT$(dirname "$PROGRAM")"
