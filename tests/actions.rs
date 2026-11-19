@@ -194,7 +194,9 @@ async fn a_command_that_floods_output_does_not_flood_the_model() {
     provider
         .then_acts([("run_command", json!({ "command": "yes flood" }))])
         .then(Ok("Noisy.".into()));
-    let mut owner = agent_in(workspace.path(), &provider);
+    // The command never ends by itself: it is stopped soon.
+    let mut owner =
+        agent_stopping_commands_after(Duration::from_millis(400), workspace.path(), &provider);
 
     owner.says("Run it.");
     owner.is_asked().await;
