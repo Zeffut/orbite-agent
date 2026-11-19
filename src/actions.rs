@@ -506,7 +506,8 @@ impl Host {
         };
         match action {
             Action::RunCommand(RunCommand { command }) => {
-                let reveals = looks_secret(&command);
+                // As the shell will read it: quotes inside a name hide nothing.
+                let reveals = looks_secret(&command) || looks_secret(&command.replace(['\'', '"'], ""));
                 if only_looks(&command) && !reveals {
                     return Review::Free;
                 }
@@ -1193,6 +1194,11 @@ fn only_looks(command: &str) -> bool {
     // What is written between single quotes reaches the program as it is,
     // the shell working nothing out of it: a pattern for find or grep. It is
     // set aside for the shell's part, and kept for the program's.
+    // One line only: a second one is a second command, whatever is read
+    // as quoted here. The shell and this reading must not differ.
+    if command.contains(['\n', '\r']) {
+        return false;
+    }
     let mut outside = String::new();
     let mut unquoted = String::new();
     let mut quoted = false;
@@ -1216,11 +1222,13 @@ fn only_looks(command: &str) -> bool {
     }
     // Nothing the shell would work out by itself after this look: what a
     // pattern or ~ ends up naming cannot be known here.
-    if outside.contains(|c| ";&><$`(){}\\\n\r!*?[]~\"".contains(c)) {
+    if outside.contains(|c| "#;&><$`(){}\\\n\r!*?[]~\"".contains(c)) {
         return false;
     }
-    // Where the secrets given to a command can be read back from.
-    if command.contains("/proc/") {
+    // Where the secrets given to a command can be read back from, however
+    // the name is written.
+    let plain = command.replace('\'', "");
+    if ["/proc", "/dev/fd", "/dev/std"].iter().any(|place| plain.contains(place)) {
         return false;
     }
     // A | between quotes is not a pipe: such a command is not taken apart here.
@@ -1232,9 +1240,26 @@ fn only_looks(command: &str) -> bool {
         let Some(program) = words.next() else {
             return false;
         };
+        let options: Vec<&str> = words.collect();
+        // One-letter options written together, such as -us.
+        let together = |letter: char| {
+            options.iter().any(|word| {
+                word.starts_with('-') && !word.starts_with("--") && word.contains(letter)
+            })
+        };
+        let harmless = match program {
+            "hostname" => options.is_empty(),
+            // Sets the clock: -s, --set and whatever shortens or joins them.
+            "date" => !together('s') && !options.iter().any(|word| word.starts_with("--s")),
+            // Writes a compiled list of kinds beside the one it is given.
+            "file" => !together('C') && !options.iter().any(|word| word.starts_with("--c")),
+            // With e among its plain letters, shows what each program was started with.
+            "ps" => !options.iter().any(|word| !word.starts_with('-') && word.contains('e')),
+            _ => true,
+        };
         LOOKING.contains(&program)
-            && words.all(|word| !CHANGING.contains(&word))
-            && (program != "hostname" || stage.split_whitespace().count() == 1)
+            && options.iter().all(|word| !CHANGING.contains(word))
+            && harmless
     })
 }
 

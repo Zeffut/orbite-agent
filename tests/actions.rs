@@ -137,6 +137,22 @@ async fn commands_that_could_change_something_are_never_taken_for_inspection() {
         "'rm' notes.txt",
         "cat 'notes.txt",
         "find . -name \"$(rm notes.txt)\"",
+        // A comment sign keeps the shell from opening the quote this reads:
+        // the second line would run as a command of its own.
+        "ls #'\nrm notes.txt #'",
+        "true #'\nrm notes.txt; ls #'",
+        "ls 'a\nb'",
+        "echo kept # rm notes.txt",
+        // Looking programs that can change something all the same.
+        "date -s2020-01-01",
+        "date --set=2020-01-01",
+        "date -us 2020-01-01",
+        "file -C -m notes.txt",
+        // Where the keys a program was started with can be read back.
+        "cat /pr'oc'/self/environ",
+        "cat /dev/fd/../environ",
+        "ps ewwx",
+        "ps aux e",
     ] {
         let workspace = tempfile::tempdir().unwrap();
         fs::write(workspace.path().join("notes.txt"), "keep me").unwrap();
@@ -158,6 +174,9 @@ async fn reading_what_looks_like_a_secret_waits_for_an_approval() {
     let workspace = tempfile::tempdir().unwrap();
     for (action, input) in [
         ("run_command", json!({ "command": "cat ~/.ssh/id_ed25519" })),
+        // Quotes in the middle of a name hide it from nobody but a careless reader.
+        ("run_command", json!({ "command": "cat /home/u/.s'sh'/id_e'd'25519" })),
+        ("run_command", json!({ "command": "cat /home/u/.s\"sh\"/config" })),
         ("read_file", json!({ "path": "/home/someone/.config/app/secrets.env" })),
     ] {
         let provider = ScriptedProvider::default();

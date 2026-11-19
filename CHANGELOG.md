@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.3.12
+
+Released on 2026-11-19. **Security: update from 0.3.8 to 0.3.11.**
+
+- **A command written on two lines could run without being asked about.** The change of 0.3.8, which lets a quoted pattern through for programs that only look, read a comment sign followed by a quote differently from the shell: a second line then ran as a command of its own, unasked. Found by an independent read, about two hours after 0.3.8. A command is now read on one line only, and never with a comment sign.
+- Also closed: quotes in the middle of a name hiding a secret's path or `/proc` from the check; `/dev/fd` as another way to a program's environment; `ps` showing what programs were started with; `date` setting the clock and `file` writing, through options written together or shortened.
+
 ## 0.3.11
 
 Released on 2026-11-19.
