@@ -2,6 +2,10 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## Unreleased
+
+- On a ChatGPT plan, `/settings model` offers the models of your plan as buttons.
+
 ## 0.3.1
 
 Released on 2026-11-19.

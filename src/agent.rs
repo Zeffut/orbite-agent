@@ -457,7 +457,13 @@ impl<P: Provider + 'static> Agent<P> {
                 None => {}
             }
             if let Some(asked) = text.trim().strip_prefix("/settings") {
-                let (mut said, choices) = self.settings(asked);
+                let (mut said, mut choices) = self.settings(asked);
+                // A plan signed in to says which models it offers.
+                if asked.trim() == "model" {
+                    let offered = self.models_of_the_plan().await;
+                    let at = choices.len().saturating_sub(1);
+                    choices.splice(at..at, offered);
+                }
                 // A setting read at start was changed.
                 let changed = asked.split_whitespace().next().unwrap_or_default();
                 let restart = said.starts_with('✅') && crate::TAKES_A_RESTART.contains(&changed);
@@ -1953,6 +1959,30 @@ impl<P: Provider + 'static> Agent<P> {
             ));
         }
         shown.trim_end().to_owned()
+    }
+
+    /// The models of the ChatGPT plan, when that is what the Agent thinks
+    /// with first: each as a choice of the model setting, the one in force marked.
+    async fn models_of_the_plan(&self) -> Vec<(String, String)> {
+        let Some(home) = &self.home else { return Vec::new() };
+        let chosen = crate::Config::load(home).ok().and_then(|config| config.provider);
+        let Some(chosen) = chosen.filter(|chosen| chosen.name == "chatgpt") else {
+            return Vec::new();
+        };
+        let chatgpt = crate::ChatGpt::kept_in(home, &chosen.model);
+        let chatgpt = match &chosen.address {
+            Some(address) => chatgpt.at(address),
+            None => chatgpt,
+        };
+        let offered = chatgpt.models().await;
+        offered
+            .into_iter()
+            .take(12)
+            .map(|(slug, shown)| {
+                let mark = if slug == chosen.model { "● " } else { "" };
+                (format!("{mark}{shown}"), format!("/settings model {slug}"))
+            })
+            .collect()
     }
 
     /// Begins signing in to the ChatGPT plan set up in `home`; the link to follow.

@@ -623,3 +623,41 @@ async fn removing_the_plan_from_the_providers_signs_out_at_openai_too() {
     assert!(!chatgpt.is_signed_in());
     assert_eq!(Secrets::kept_in(home.path()).get("ORBITE_CHATGPT").unwrap(), None);
 }
+
+#[tokio::test]
+async fn the_models_of_the_plan_are_offered_where_the_owner_changes_the_model() {
+    use support::{ScriptedProvider, memory_channel};
+    let server = MockServer::start().await;
+    let (home, _chatgpt) = signed_in(&server, 3600).await;
+    let config = json!({
+        "language": "en",
+        "provider": { "name": "chatgpt", "model": "gpt-small", "address": server.uri() },
+    });
+    std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "models": [
+            { "slug": "gpt-large", "display_name": "GPT Large", "visibility": "list" },
+            { "slug": "gpt-small", "display_name": "GPT Small", "visibility": "list" },
+        ] })))
+        .mount(&server)
+        .await;
+    let (mut channel, mut owner) = memory_channel();
+    let folder = home.path().to_owned();
+    tokio::spawn(async move {
+        orbite::Agent::new(ScriptedProvider::default(), orbite::Store::in_memory())
+            .configured_in(folder)
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("/settings model");
+    let offered = owner.hears().await;
+
+    assert!(
+        offered.contains("GPT Large") && offered.contains("/settings model gpt-large"),
+        "{offered}"
+    );
+    // The one in force is marked, as for every other setting.
+    assert!(offered.contains("● GPT Small"), "{offered}");
+}
