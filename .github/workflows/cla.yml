@@ -1,0 +1,37 @@
+name: Contributor agreement
+
+# Holds a pull request until everyone whose commits are in it has agreed to
+# CLA.md, by posting one sentence as a comment. See .github/cla/cla.js.
+
+on:
+  # Runs with this repository's own code, never the pull request's: nothing
+  # of the pull request is checked out or run.
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  # One at a time: two agreements at once would each write the same file.
+  group: contributor-agreement
+  cancel-in-progress: false
+
+jobs:
+  agreement:
+    if: github.event_name == 'pull_request_target' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: .github/cla
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const cla = require('./.github/cla/cla.js');
+            await cla.run({ github, context, core });

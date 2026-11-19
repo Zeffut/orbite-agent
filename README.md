@@ -37,6 +37,10 @@ Still to come before 1.0:
 - Running on a subscription you already pay for, through each provider's official path only: a ChatGPT plan works (tried with one account so far); others only where their provider supports it natively.
 - Gmail and Google Calendar.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Outside contributions are taken under a short [contributor agreement](CLA.md), agreed to once on your first pull request.
+
 ## Developing
 
 ```bash

@@ -73,3 +73,11 @@ jobs:
         env:
           ORBITE_TESTS_WITH_WHISPER: /usr/share/sounds/freedesktop/stereo/audio-channel-side-left.oga:left
 
+  # The check that holds a pull request until its authors have agreed to
+  # the Contributor Agreement.
+  contributor-agreement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --test .github/cla/
+
