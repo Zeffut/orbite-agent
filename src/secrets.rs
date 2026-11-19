@@ -77,7 +77,16 @@ impl Secrets {
             fs::create_dir_all(folder)
                 .map_err(|error| failed("could not create the folder", error))?;
         }
-        let lock = fs::File::create(self.sealed.with_extension("lock"))
+        // Empty, and this account's only, like all that is beside the secrets.
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let lock = options
+            .open(self.sealed.with_extension("lock"))
             .map_err(|error| failed("could not write", error))?;
         // SAFETY: a lock on a file opened just above, let go when it is closed.
         if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
