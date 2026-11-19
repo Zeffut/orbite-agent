@@ -341,3 +341,66 @@ async fn what_a_sign_in_obtained_is_renewed_when_it_runs_out() {
         "the renewed access was not kept"
     );
 }
+
+#[tokio::test]
+async fn a_server_that_takes_no_newcomer_is_signed_in_to_with_a_client_the_owner_brings() {
+    let server = MockServer::start().await;
+    let here = server.uri();
+    let secret = ["client", "secret", "for", "the", "test"].join("-");
+    Mock::given(path("/mcp")).respond_with(ResponseTemplate::new(401)).mount(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-protected-resource/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            json!({ "resource": format!("{here}/mcp"), "authorization_servers": [here] }),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": here, "authorization_endpoint": format!("{here}/authorize"), "token_endpoint": format!("{here}/token"),
+            "code_challenge_methods_supported": ["S256"],
+        })))
+        .mount(&server)
+        .await;
+    // The code is exchanged only by the client the Owner registered, with its secret.
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(body_string_contains("client_id=the-owners-own-client"))
+        .and(body_string_contains(format!("client_secret={secret}").as_str()))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                json!({ "access_token": "access-for-the-test", "expires_in": 3600 }),
+            ),
+        )
+        .mount(&server)
+        .await;
+    let home = tempfile::tempdir().unwrap();
+    Secrets::kept_in(home.path()).set("FAR_CLIENT_SECRET", &secret).unwrap();
+    std::fs::write(
+        home.path().join("mcp.json"),
+        json!({ "mcpServers": { "far": {
+            "url": format!("{here}/mcp"),
+            "client": { "id": "the-owners-own-client", "secret": "${FAR_CLIENT_SECRET}" },
+        } } })
+        .to_string(),
+    )
+    .unwrap();
+    let mut owner = agent_in(home.path(), &ScriptedProvider::default());
+
+    owner.says("/mcp connect far");
+    let said = owner.hears().await;
+    let link = carried(&said);
+    assert_eq!(link["client_id"], "the-owners-own-client");
+    assert!(!said.contains(&secret), "the client's secret was shown");
+
+    owner.says(&format!("{}?code=the-code&state={}", link["redirect_uri"], link["state"]));
+    owner.hears().await;
+
+    // Signed in: the access is kept (the server offering nothing here is another matter).
+    let kept = Secrets::kept_in(home.path())
+        .get("ORBITE_MCP_FAR")
+        .unwrap()
+        .expect("the sign-in was not finished");
+    assert!(kept.contains("access-for-the-test") && !kept.contains(&secret));
+}

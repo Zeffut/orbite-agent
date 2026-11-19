@@ -53,6 +53,16 @@ struct Described {
     url: Option<String>,
     #[serde(default)]
     headers: BTreeMap<String, String>,
+    /// A client the Owner registered with the service themselves, for one
+    /// that takes no program it does not already know.
+    client: Option<OwnClient>,
+}
+
+#[derive(Deserialize, Clone)]
+struct OwnClient {
+    id: String,
+    /// Usually ${NAME}: a secret, never written here.
+    secret: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -326,6 +336,13 @@ impl Mcp {
         format!("ORBITE_MCP_{}", plain(server).to_uppercase())
     }
 
+    /// The secret of the client the Owner brought for `server`, when it has one.
+    fn client_secret(&self, server: &str) -> Option<String> {
+        let own =
+            self.servers.iter().find(|known| known.name == server)?.described.client.as_ref()?;
+        own.secret.as_ref().map(|secret| self.filled(secret)).filter(|secret| !secret.is_empty())
+    }
+
     fn signed_in(&self, server: &str) -> Option<SignedIn> {
         serde_json::from_str(&self.secrets.get(&Self::kept_as(server)).ok()??).ok()
     }
@@ -338,12 +355,16 @@ impl Mcp {
         if until > now() + 60 {
             return;
         }
-        let form = [
+        let secret = self.client_secret(&server.name);
+        let mut form = vec![
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh.as_str()),
             ("client_id", signed.client.as_str()),
             ("resource", signed.resource.as_str()),
         ];
+        if let Some(secret) = &secret {
+            form.push(("client_secret", secret.as_str()));
+        }
         let Ok(answer) = self
             .http
             .post(&signed.exchange)
@@ -456,33 +477,12 @@ impl Mcp {
         if !proven {
             return Err("its sign-in does not protect what Orbite would be handed: not used".into());
         }
-        // Orbite introduces itself, where newcomers are taken.
-        let Some(registry) = how["registration_endpoint"].as_str() else {
-            return Err("its sign-in takes no program it does not already know. If it offers a key or a client of \
-                        your own, put the key in its headers in mcp.json instead"
-                .into());
+        // With the client the Owner brought; else Orbite introduces itself,
+        // where newcomers are taken.
+        let client = match &server.described.client {
+            Some(own) => self.filled(&own.id),
+            None => self.introduced_at(how["registration_endpoint"].as_str()).await?,
         };
-        let myself = json!({
-            "client_name": "Orbite",
-            "redirect_uris": [SIGN_IN_ENDS_AT],
-            "grant_types": ["authorization_code", "refresh_token"],
-            "response_types": ["code"],
-            "token_endpoint_auth_method": "none",
-            "application_type": "native",
-        });
-        let known = self
-            .http
-            .post(registry)
-            .json(&myself)
-            .timeout(Duration::from_secs(20))
-            .send()
-            .await
-            .map_err(wrong)?;
-        let known = known.json::<Value>().await.map_err(wrong)?;
-        let client = known["client_id"]
-            .as_str()
-            .ok_or("its sign-in did not take Orbite as a newcomer")?
-            .to_owned();
 
         let (verifier, state) = (unguessable()?, unguessable()?);
         let challenge = {
@@ -522,6 +522,41 @@ impl Mcp {
         Ok(link.to_string())
     }
 
+    /// Introduces Orbite to a sign-in that takes newcomers at `registry`:
+    /// the name it is given there.
+    async fn introduced_at(&self, registry: Option<&str>) -> Result<String, String> {
+        let Some(registry) = registry else {
+            return Err("its sign-in takes no program it does not already know. If it offers a key or a client of \
+                        your own, put the key in its headers in mcp.json instead"
+                .into());
+        };
+        let myself = json!({
+            "client_name": "Orbite",
+            "redirect_uris": [SIGN_IN_ENDS_AT],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+            "application_type": "native",
+        });
+        let known = self
+            .http
+            .post(registry)
+            .json(&myself)
+            .timeout(Duration::from_secs(20))
+            .send()
+            .await
+            .map_err(|error| format!("it could not be reached: {}", error.without_url()))?;
+        let known = known
+            .json::<Value>()
+            .await
+            .map_err(|error| format!("it could not be reached: {}", error.without_url()))?;
+        let client = known["client_id"]
+            .as_str()
+            .ok_or("its sign-in did not take Orbite as a newcomer")?
+            .to_owned();
+        Ok(client)
+    }
+
     /// True when `text` is the address a sign-in under way ended on.
     pub(crate) fn is_signing_in(&self, text: &str) -> bool {
         text.trim().starts_with(SIGN_IN_ENDS_AT) && self.signing_in.lock().unwrap().is_some()
@@ -550,7 +585,8 @@ impl Mcp {
                 given.get("error_description").or(given.get("error")).cloned().unwrap_or_default();
             return Err(format!("the sign-in was not granted ({refused}): {again}"));
         };
-        let form = [
+        let secret = self.client_secret(&begun.server);
+        let mut form = vec![
             ("grant_type", "authorization_code"),
             ("code", code.as_str()),
             ("redirect_uri", SIGN_IN_ENDS_AT),
@@ -558,6 +594,9 @@ impl Mcp {
             ("code_verifier", begun.verifier.as_str()),
             ("resource", begun.resource.as_str()),
         ];
+        if let Some(secret) = &secret {
+            form.push(("client_secret", secret.as_str()));
+        }
         let answer = self
             .http
             .post(&begun.exchange)
