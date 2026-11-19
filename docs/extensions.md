@@ -19,11 +19,11 @@ An extension runs in a sandbox of its own, started afresh for every action. It h
 - **a store of its own**, to keep data between actions;
 - **the hosts it was granted**, by name, and nothing beyond them. A redirection to another host is refused.
 
-It is stopped after 20 seconds or 32 MB.
+It is stopped after 20 seconds or 32 MB. What it keeps is limited too: 1 MB under one key, 10 MB in all; and it is given at most the first 200,000 characters of a service's answer.
 
 ## Writing one
 
-An extension is a folder in `/var/lib/orbite/extensions/`, named in lowercase words joined by dashes, with two files.
+An extension is a folder in `/var/lib/orbite/extensions/`, named in lowercase words joined by dashes (plain letters and digits only), with two files. Writing there with the agent's ordinary file actions is asked about at every permission level: the agent is meant to go through `create_extension`, which shows you the whole of it.
 
 `extension.json`:
 
@@ -66,7 +66,7 @@ function run(action, input) {
 - **`describe()`** returns the actions the extension adds. Each has a `name` (lowercase letters, digits and `_`), a `description` written for the model (what it does and when to use it), and `parameters`: each parameter's name mapped to its description, or to a whole JSON Schema when it is not a text. A name ending in `?` may be left out. An action that changes something outside the extension's own store should say `asks: true`: your agent then asks you before each use. `critical: true` asks at every permission level.
 - **`run(action, input)`** carries out the action called `action` and returns its result, a text or an object. It may be `async`. Throwing an `Error` tells the model what went wrong, and the extension stays on.
 
-The agent sees each action as `extension_action`, with dashes in the extension's name turned to `_`: here, `currency_converter_convert` for a folder called `currency-converter`.
+The agent sees each action as `extension_action`, with dashes in the extension's name turned to `_`: here, `currency_converter_convert` for a folder called `currency-converter`. That whole name is at most 64 characters, and two extensions cannot add an action of the same name.
 
 ### What Orbite lends
 
@@ -88,7 +88,7 @@ An extension never holds a secret. It writes its name between double braces, in 
 http.get("https://api.example.com/v1/me", { headers: { Authorization: "Bearer {{EXAMPLE_KEY}}" } });
 ```
 
-The secret must be listed in `extension.json` under `secrets`, and entered on the machine with `orbite secret set EXAMPLE_KEY`. If the service sends the secret back, the extension gets its name in its place.
+The secret must be listed in `extension.json` under `secrets`, and entered on the machine with `orbite secret set EXAMPLE_KEY`. If the service sends the secret back, or an error would quote it, the extension gets its name in its place. Orbite's own keys (those named `ORBITE_…`) are never lent.
 
 ## Official Extensions
 

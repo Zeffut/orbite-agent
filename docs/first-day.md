@@ -27,7 +27,9 @@ How much it does without asking is the **permission level**:
 | balanced | also changes inside the agent's own folders |
 | free | everything, except critical actions |
 
-**Critical actions**, such as anything that could show a secret to the AI provider, are asked about at every level and cannot be allowed once and for all.
+**Critical actions** are asked about at every level and cannot be allowed once and for all: anything that could show a secret to the AI provider, creating an extension, and writing straight into Orbite's own files (its extensions, `mcp.json`, its settings, its secrets).
+
+A command runs without asking only when it plainly does nothing but look: `ls`, `cat notes.txt`, `grep`. One the shell would complete by itself (`cat *.txt`, anything with `~`) is asked about, because what it ends up reading cannot be known beforehand.
 
 ## The agent's computer
 
@@ -91,7 +93,7 @@ Tools from MCP servers become actions of your agent. List the servers in `/var/l
 } }
 ```
 
-`${NAME}` stands for a secret entered as above, so no key is written in that file. A tool that declares it only reads runs freely; any other asks you first. `/mcp` shows each server's state. Servers that need you to sign in through a web page are not supported yet.
+`${NAME}` stands for a secret entered as above, so no key is written in that file. A tool that declares it only reads runs freely; any other asks you first. Add only servers you trust: a server is taken at its word on which of its tools only read. `/mcp` shows each server's state. Servers that need you to sign in through a web page are not supported yet.
 
 ## When something goes wrong
 
