@@ -250,6 +250,30 @@ mod browser {
         assert!(still.is_empty(), "left running: {still:?}");
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn letters_with_accents_and_other_alphabets_are_typed_as_they_are() {
+        // A page that turns green once exactly this was typed in its field.
+        let wanted = "Pélican à Zürich, naïve façade, 東京";
+        let page = PAGE.replace(
+            "event.target.value === \"hello\"",
+            &format!("event.target.value === \"{wanted}\""),
+        );
+        let site = MockServer::start().await;
+        Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(page, "text/html; charset=utf-8"))
+            .mount(&site)
+            .await;
+        let home = tempfile::tempdir().unwrap();
+        let Some(mut computer) = started(&home.path().join("profile")) else { return };
+        computer.open(&format!("http://127.0.0.1:{}/", site.address().port())).unwrap();
+        assert!(becomes(&computer, (255, 0, 0)), "the page did not show");
+
+        computer.screen().click(190, 60 + computer.page_top()).unwrap();
+        computer.screen().type_text(wanted).unwrap();
+
+        assert!(becomes(&computer, (0, 128, 0)), "what was typed is not what was meant");
+    }
+
     #[test]
     fn a_computer_in_use_by_another_orbite_is_left_alone() {
         let home = tempfile::tempdir().unwrap();

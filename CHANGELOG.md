@@ -2,9 +2,9 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## Not released yet
+## 0.2.0
 
-Everything below is on `main` and tried on fresh machines by the release workflow, but no version carries it yet. Installations of 0.1.0 do not update by themselves: they will once the installer of the next version has been run on them.
+Released on 2026-11-19. Installations of 0.1.0 do not update by themselves: run the installer again on them once, and they keep themselves up to date from then on.
 
 ### New
 
@@ -23,6 +23,7 @@ Everything below is on `main` and tried on fresh machines by the release workflo
 - Commands run with `sudo` act on the installed Orbite, as the Agent's own account.
 - A message Telegram could not take is kept and sent with the next one, instead of ending the Conversation.
 - Pictures are sent as pictures in Telegram.
+- Letters with accents are typed as they are on the Computer, also when Orbite runs as a service.
 - What is declared to the model on every turn is about a fifth lighter.
 - When the model itself keeps failing or declining, the Agent says so and how to change it.
 - A Provider's answer that its model wrote a broken Action is asked for again instead of reported as a failure.
@@ -40,11 +41,11 @@ Two independent reads of the code found defects that are fixed here; none was in
 
 What is still open from those reads is listed in the issue tracker.
 
-### To know before releasing
+### To know
 
-- The installer now adds Mozilla's package repository to the machine, for Firefox.
-- Releases must carry a `VERSION` file for updates to work; the release workflow writes it and refuses a tag that does not match the program's own version.
-- The Computer was tried for real with a model for reading a page; a task with clicks and typing done by a real model has not been shown yet.
+- The installer adds Mozilla's package repository to the machine, for Firefox, unless `ORBITE_WITHOUT_COMPUTER=1` is given.
+- The Computer was tried for real with Claude Haiku: a search on a site, with clicks and typing, read back from the screen.
+- How much the Agent does without asking on its Computer follows the permission level: at `free` it goes to any site without asking.
 
 ## 0.1.0
 

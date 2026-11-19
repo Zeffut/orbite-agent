@@ -186,7 +186,14 @@ impl Screen {
     /// Has the mouse and keyboard do something on this screen.
     fn act(&self, gesture: &[&str]) -> io::Result<()> {
         let mut acting = Command::new("xdotool");
-        acting.args(gesture).env("DISPLAY", &self.display).env_remove("XAUTHORITY");
+        // With no language set, as under a service, the keyboard program
+        // reads a text one byte at a time and drops every letter with an
+        // accent: it is told the text is UTF-8.
+        acting
+            .args(gesture)
+            .env("DISPLAY", &self.display)
+            .env_remove("XAUTHORITY")
+            .env("LC_ALL", "C.UTF-8");
         if let Some(key) = self.key_file() {
             acting.env("XAUTHORITY", key);
         }
@@ -330,6 +337,12 @@ impl Computer {
             .env_remove("XAUTHORITY")
             .envs(self.screen.key_file().map(|key| ("XAUTHORITY", key)))
             .env("MOZ_ENABLE_WAYLAND", "0")
+            .env(
+                "LC_ALL",
+                std::env::var("LC_ALL")
+                    .or_else(|_| std::env::var("LANG"))
+                    .unwrap_or_else(|_| "C.UTF-8".into()),
+            )
             // Whatever the browser keeps outside its profile stays with it,
             // in the Agent's folder, whoever asked for it to be started.
             .env("HOME", self.profile.parent().unwrap_or(&self.profile))
