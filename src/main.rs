@@ -16,6 +16,7 @@ Usage: orbite <command>
 Commands:
   run    hold the Conversation in Telegram (add --terminal to open it here as well)
   chat   hold the Conversation in this terminal
+  transcription  how voice messages are written down: a provider, whisper.cpp on this machine, a local server, a command of yours, or off
   providers  list the Providers set up, in order; add one, or change them (add, first NAME, remove NAME, limit NAME TOKENS)
   version    say which version this is
   setup      set Orbite up, or one part again (language, provider, telegram, name)
@@ -76,6 +77,16 @@ async fn main() -> ExitCode {
         Some("uninstall") => uninstall(),
         Some("setup") => setup().await,
         Some("providers") => providers().await,
+        Some("transcription") => {
+            let asked: Vec<String> = env::args().skip(2).collect();
+            let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
+            match home() {
+                Ok(home) => orbite::transcription(&home, &asked, &mut std::io::stdout())
+                    .await
+                    .map_err(Failure::from),
+                Err(failure) => Err(failure),
+            }
+        }
         _ => Err(USAGE.into()),
     };
     match outcome {
@@ -266,7 +277,14 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
     let mut agent = Agent::new(provider, store);
     // What the Owner says aloud is written down by the first of their
     // Providers that offers it and has a key.
-    for listening in config.providers() {
+    // Unless the Owner chose otherwise: the machine itself, or nothing.
+    let own_way = config.transcription.clone().filter(|chosen| chosen.engine != "provider");
+    if let Some(chosen) = &own_way
+        && let Some(transcriber) = orbite::chosen_transcriber(&home, chosen)?
+    {
+        agent = agent.transcribing_with(transcriber);
+    }
+    for listening in config.providers().into_iter().filter(|_| own_way.is_none()) {
         let Some(model) = orbite::transcription_model(&listening.name) else { continue };
         // The first one's key may have been given in the environment.
         let is_first = chosen.as_ref().is_some_and(|first| first.name == listening.name);

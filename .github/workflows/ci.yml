@@ -53,3 +53,23 @@ jobs:
           name: firefox-pictures
           path: ${{ runner.temp }}/pictures
           if-no-files-found: ignore
+
+  # Speech written down on the machine itself, with the real whisper.cpp of
+  # Ubuntu's own packages and its smallest published model.
+  transcription-with-whisper-cpp:
+    runs-on: ubuntu-latest
+    container: ubuntu:26.04
+    steps:
+      - run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            whisper.cpp ffmpeg sound-theme-freedesktop curl ca-certificates build-essential git
+          whisper-cli --help 2>&1 | head -3 || true
+      - uses: actions/checkout@v4
+      - run: curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+      - run: |
+          . "$HOME/.cargo/env"
+          cargo test --locked --test transcription the_real_whisper_cpp -- --nocapture
+        env:
+          ORBITE_TESTS_WITH_WHISPER: /usr/share/sounds/freedesktop/stereo/audio-channel-side-left.oga:left
+

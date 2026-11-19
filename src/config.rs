@@ -34,9 +34,35 @@ pub struct Config {
     /// False when the Owner does not want Orbite to update itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub automatic_updates: Option<bool>,
+    /// How speech is written down, when the Owner chose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcription: Option<Transcription>,
     /// What the Owner called their Agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+}
+
+/// What writes down what the Owner says aloud.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Transcription {
+    /// `provider` (the first Provider that offers it), `whisper.cpp`,
+    /// `server`, `command` or `off`.
+    pub engine: String,
+    /// The model: a name for whisper.cpp or a server, or a file of the Owner's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Where a local server is reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+    /// The Owner's own command, `{file}` standing for the recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// The language spoken, when it is not left to be found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    /// whisper.cpp's program, when it is not `whisper-cli` on the PATH.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<String>,
 }
 
 /// A Provider and the model to use with it.

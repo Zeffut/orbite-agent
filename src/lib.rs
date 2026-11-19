@@ -12,6 +12,7 @@ mod chatgpt;
 mod computer;
 mod config;
 mod extensions;
+mod hearing;
 mod language;
 mod mcp;
 mod memory;
@@ -47,7 +48,8 @@ pub use catalogue::{
 pub use channel::{Answer, Approval, Channel};
 pub use chatgpt::ChatGpt;
 pub use computer::{Computer, Screen};
-pub use config::{Config, ProviderChoice};
+pub use config::{Config, ProviderChoice, Transcription};
+pub use hearing::{Advice, MODELS, Machine, Model, chosen as chosen_transcriber, transcription};
 pub use language::Language;
 pub use moving::{export, restore};
 pub use openai_compatible::OpenAiCompatible;

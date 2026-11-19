@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.3.7
+
+Released on 2026-11-19.
+
+- **Voice messages written down on your own machine.** `orbite transcription` chooses what writes speech down: a provider (as before), whisper.cpp on the machine, a local server speaking OpenAI's protocol (speaches, which runs faster-whisper, is one), any command of yours, or nothing. For whisper.cpp it downloads the model its project publishes and checks it, and tells you before you choose when a model is too small to listen well, takes more of the machine's memory than is wise, will not fit at all, or is slower than speech on this machine, which it measures.
+
 ## 0.3.6
 
 Released on 2026-11-19.

@@ -17,7 +17,23 @@ You talk to your agent in Telegram, in one continuous conversation. There is not
 
 ## Speaking instead of writing
 
-Send your agent a voice message in Telegram and it answers what you said, when one of its providers writes speech down for an API key: OpenAI and Groq do. Nothing to set up: the first of your providers that offers it is used. A ChatGPT plan and Anthropic do not offer it; with only those, your agent tells you it cannot hear the message, and adding Groq or OpenAI behind them (`sudo orbite providers add`) is enough. The recording goes to that provider to be written down, as your words go to the one that answers.
+Send your agent a voice message in Telegram and it answers what you said. Something has to write your words down first, and you choose what, on the machine, with `sudo orbite transcription`:
+
+| Choice | What writes speech down | What it takes |
+|---|---|---|
+| `provider` (the default) | the first of your providers that offers it for an API key: OpenAI and Groq do | nothing to set up; the recording goes to that provider |
+| `whisper.cpp NAME` | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) on your own machine: nothing leaves it | `whisper-cli` and `ffmpeg` on the machine (Ubuntu 26.04: `sudo apt install whisper.cpp ffmpeg`; elsewhere, built from its source), and a model, which Orbite downloads and checks |
+| `server ADDRESS MODEL` | a server of yours that speaks OpenAI's transcription protocol, such as [speaches](https://github.com/speaches-ai/speaches), which runs faster-whisper | that server, running |
+| `command 'PROGRAM ... {file}'` | any program: it is given the recording and prints what was said | whatever you like: sherpa-onnx, Vosk, a script of yours |
+| `off` | nothing: your agent tells you it cannot hear the message | |
+
+`sudo orbite transcription` alone shows the current choice, what this machine has (memory, processor cores) and every model of whisper.cpp with what to expect of it here:
+
+- **too small to listen well**: `tiny` and `base` are quick and make many mistakes, more so outside English; `small` is the smallest that listens well;
+- **too heavy for the machine**: a model that takes more than half of the machine's memory is flagged, since the agent's browser needs room too, and one that does not fit at all is refused unless you add `--anyway`;
+- **too slow**: few cores under a large model are flagged, and when you choose a model Orbite times it on ten seconds of sound and tells you if your machine listens slower than people speak.
+
+`sudo orbite transcription language fr` names the language rather than leaving it to be found, which helps short messages. A ChatGPT plan and Anthropic do not write speech down: with only those, choose a local way, or add Groq or OpenAI behind them (`sudo orbite providers add`).
 
 ## Approvals: you stay in charge
 

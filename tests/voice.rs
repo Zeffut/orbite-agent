@@ -118,3 +118,152 @@ async fn a_recording_that_could_not_be_written_down_is_said_so_and_not_guessed()
     let sent = listening.received_requests().await.unwrap();
     assert!(String::from_utf8_lossy(&sent[0].body).contains("filename=\"voice-100.ogg\""));
 }
+
+// --- Written down on the machine itself ---
+
+/// A program standing in for one of the machine: it notes how it was
+/// called in `calls.log` beside it, then does `body`.
+#[cfg(unix)]
+fn stand_in(folder: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let file = folder.join(name);
+    let log = folder.join("calls.log");
+    let script = format!("#!/bin/sh\necho \"{name} $*\" >> '{}'\n{body}\n", log.display());
+    std::fs::write(&file, script).unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).unwrap();
+    file
+}
+
+async fn said_to_an_agent_listening_with(transcriber: Transcriber, said: &str) -> String {
+    let provider = ScriptedProvider::answering(["Heard."]);
+    let asked = provider.clone();
+    let (mut channel, mut owner) = memory_channel();
+    tokio::spawn(async move {
+        Agent::new(provider, Store::in_memory())
+            .transcribing_with(transcriber)
+            .converse(&mut channel)
+            .await
+    });
+    owner.says(said);
+    assert_eq!(owner.hears().await, "Heard.");
+    what_the_model_read(&asked)
+}
+
+#[tokio::test]
+async fn whisper_cpp_on_the_machine_writes_a_voice_message_down() {
+    let folder = tempfile::tempdir().unwrap();
+    let voice = folder.path().join("voice-100.ogg");
+    std::fs::write(&voice, b"OggS").unwrap();
+    let model = folder.path().join("ggml-small.bin");
+    std::fs::write(&model, b"a model").unwrap();
+    // It only reads plain recordings: the message is turned into one first.
+    let ffmpeg = stand_in(folder.path(), "ffmpeg", "for last; do :; done; echo wav > \"$last\"");
+    let whisper = stand_in(folder.path(), "whisper-cli", "echo ' Pense à acheter du pain.'");
+    let transcriber =
+        Transcriber::whisper_cpp(&whisper, &model).converting_with(&ffmpeg).in_language("fr");
+
+    let read = said_to_an_agent_listening_with(transcriber, &orbite::attached(&voice)).await;
+
+    assert!(read.contains("Pense à acheter du pain."), "{read}");
+    let calls = std::fs::read_to_string(folder.path().join("calls.log")).unwrap();
+    let mut calls = calls.lines();
+    let converted = calls.next().unwrap();
+    assert!(converted.starts_with("ffmpeg ") && converted.contains("voice-100.ogg"), "{converted}");
+    assert!(converted.contains("-ar 16000") && converted.contains("-ac 1"), "{converted}");
+    let heard = calls.next().unwrap();
+    assert!(heard.contains(&format!("-m {}", model.display())), "{heard}");
+    assert!(heard.contains("-l fr") && heard.contains(".wav"), "{heard}");
+    // Nothing of the conversion is left behind.
+    let left: Vec<_> = std::fs::read_dir(folder.path())
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".wav"))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[tokio::test]
+async fn whisper_cpp_finds_the_language_itself_unless_told() {
+    let folder = tempfile::tempdir().unwrap();
+    let voice = folder.path().join("note.wav");
+    std::fs::write(&voice, b"RIFF").unwrap();
+    let model = folder.path().join("ggml-small.bin");
+    std::fs::write(&model, b"a model").unwrap();
+    let whisper = stand_in(folder.path(), "whisper-cli", "echo 'Hello there.'");
+
+    let read = said_to_an_agent_listening_with(
+        Transcriber::whisper_cpp(&whisper, &model),
+        &orbite::attached(&voice),
+    )
+    .await;
+
+    assert!(read.contains("Hello there."), "{read}");
+    let calls = std::fs::read_to_string(folder.path().join("calls.log")).unwrap();
+    // A plain recording is given as it is, with nothing to convert it.
+    assert!(calls.contains("-l auto") && calls.contains("note.wav"), "{calls}");
+}
+
+#[tokio::test]
+async fn a_local_engine_that_fails_says_why_and_what_is_missing() {
+    let folder = tempfile::tempdir().unwrap();
+    let voice = folder.path().join("voice-100.ogg");
+    std::fs::write(&voice, b"OggS").unwrap();
+    let model = folder.path().join("ggml-small.bin");
+    std::fs::write(&model, b"a model").unwrap();
+    let whisper =
+        stand_in(folder.path(), "whisper-cli", "echo 'error: failed to read audio' >&2; exit 1");
+
+    // No converter on this machine: the message is given as it is, and refused.
+    let read = said_to_an_agent_listening_with(
+        Transcriber::whisper_cpp(&whisper, &model),
+        &orbite::attached(&voice),
+    )
+    .await;
+
+    assert!(read.contains("could not be written down"), "{read}");
+    assert!(read.contains("failed to read audio"), "{read}");
+    assert!(read.contains("ffmpeg"), "what is missing is said: {read}");
+
+    let missing = Transcriber::whisper_cpp(folder.path().join("not-there"), &model);
+    let read = said_to_an_agent_listening_with(missing, &orbite::attached(&voice)).await;
+    assert!(read.contains("could not be written down") && read.contains("not-there"), "{read}");
+}
+
+#[tokio::test]
+async fn any_program_of_the_owners_choice_can_write_speech_down() {
+    let folder = tempfile::tempdir().unwrap();
+    // A name with a space and a quote: it reaches the program whole.
+    let voice = folder.path().join("it's a memo.mp3");
+    std::fs::write(&voice, b"mp3").unwrap();
+    let program = stand_in(folder.path(), "my-engine", "echo \"heard $2\"");
+    let transcriber =
+        Transcriber::command(format!("{} --input {{file}} --quiet", program.display()));
+
+    let read = said_to_an_agent_listening_with(transcriber, &orbite::attached(&voice)).await;
+
+    assert!(read.contains(&format!("heard {}", voice.display())), "{read}");
+}
+
+#[tokio::test]
+async fn a_local_server_speaking_openais_protocol_needs_no_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/audio/transcriptions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "text": "From the server." })),
+        )
+        .mount(&server)
+        .await;
+    let folder = tempfile::tempdir().unwrap();
+    let voice = folder.path().join("voice-100.ogg");
+    std::fs::write(&voice, b"OggS").unwrap();
+    let transcriber =
+        Transcriber::local_server(format!("{}/v1", server.uri()), "Systran/faster-whisper-small");
+
+    let read = said_to_an_agent_listening_with(transcriber, &orbite::attached(&voice)).await;
+
+    assert!(read.contains("From the server."), "{read}");
+    let sent = server.received_requests().await.unwrap();
+    assert!(sent[0].headers.get("authorization").is_none(), "a key was sent to a local server");
+    assert!(String::from_utf8_lossy(&sent[0].body).contains("Systran/faster-whisper-small"));
+}
