@@ -457,7 +457,10 @@ impl Host {
             Ok(done) => done,
             Err(error) => return format!("That could not be done on the Computer: {error}."),
         };
-        match desk.picture(patience).await {
+        // A browser that is starting shows nothing for a moment, then its
+        // page: after opening, the screen has to stay still for longer.
+        let calm = if done.starts_with("Opened") { 5 } else { 2 };
+        match desk.picture(patience, calm).await {
             Ok(picture) => format!("{done}\n{}", crate::attached(&picture)),
             Err(error) => format!("{done} The screen could not be pictured: {error}."),
         }

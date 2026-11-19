@@ -352,19 +352,18 @@ impl Desk {
         }
     }
 
-    /// A picture of the screen once it has stopped changing, or after
-    /// `patience` at most, kept as a file.
-    pub(crate) async fn picture(&self, patience: Duration) -> io::Result<PathBuf> {
+    /// A picture of the screen once it has stopped changing for `calm`
+    /// looks in a row, half a second apart, or after `patience` at most,
+    /// kept as a file.
+    pub(crate) async fn picture(&self, patience: Duration, calm: u32) -> io::Result<PathBuf> {
         let until = Instant::now() + patience;
         let mut seen = self.with(|computer| computer.screen().picture())?;
-        loop {
+        let mut still = 0;
+        while still < calm && Instant::now() < until {
             tokio::time::sleep(Duration::from_millis(500)).await;
             let now = self.with(|computer| computer.screen().picture())?;
-            let still = now == seen;
+            still = if now == seen { still + 1 } else { 0 };
             seen = now;
-            if still || Instant::now() >= until {
-                break;
-            }
         }
         let number = self.taken.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let pictures = self.folder.join("pictures");
