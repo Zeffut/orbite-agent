@@ -42,8 +42,16 @@ pub(crate) fn sound_type(file: &Path) -> Option<&'static str> {
         "m4a" => Some("audio/mp4"),
         "wav" => Some("audio/wav"),
         "flac" => Some("audio/flac"),
+        // What is said in a video is written down the same way.
+        "mp4" | "mov" => Some("video/mp4"),
+        "webm" => Some("video/webm"),
         _ => None,
     }
+}
+
+/// True when `file` is a video rather than a recording of sound alone.
+pub(crate) fn is_video(file: &Path) -> bool {
+    sound_type(file).is_some_and(|kind| kind.starts_with("video/"))
 }
 
 /// `text` as one word of a shell command, whatever it holds.

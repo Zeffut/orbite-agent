@@ -404,8 +404,10 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
                 // which the Agent has written down when it can.
                 let file = file.or_else(|| {
                     let spoken = message.voice.map(|voice| (voice, "voice", "ogg"));
-                    let (sound, kind, ending) =
-                        spoken.or(message.audio.map(|audio| (audio, "audio", "mp3")))?;
+                    let (sound, kind, ending) = spoken
+                        .or(message.audio.map(|audio| (audio, "audio", "mp3")))
+                        .or(message.video_note.map(|round| (round, "video", "mp4")))
+                        .or(message.video.map(|video| (video, "video", "mp4")))?;
                     let name = sound
                         .file_name
                         .unwrap_or_else(|| format!("{kind}-{}.{ending}", update.update_id));
@@ -703,6 +705,8 @@ struct Incoming {
     photo: Option<Vec<Attached>>,
     voice: Option<Attached>,
     audio: Option<Attached>,
+    video_note: Option<Attached>,
+    video: Option<Attached>,
 }
 
 /// A file as Telegram describes it.

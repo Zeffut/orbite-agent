@@ -267,3 +267,26 @@ async fn a_local_server_speaking_openais_protocol_needs_no_key() {
     assert!(sent[0].headers.get("authorization").is_none(), "a key was sent to a local server");
     assert!(String::from_utf8_lossy(&sent[0].body).contains("Systran/faster-whisper-small"));
 }
+
+#[tokio::test]
+async fn what_is_said_in_a_video_message_is_written_down_and_the_model_knows_it_saw_nothing() {
+    let listening = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/audio/transcriptions"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({ "text": "Look at this leak." })),
+        )
+        .mount(&listening)
+        .await;
+    let inbox = tempfile::tempdir().unwrap();
+    let video = inbox.path().join("video-100.mp4");
+    std::fs::write(&video, b"video").unwrap();
+    let transcriber = Transcriber::new(listening.uri(), api_key(), "model-that-listens");
+
+    let read = said_to_an_agent_listening_with(transcriber, &orbite::attached(&video)).await;
+
+    assert!(read.contains("Look at this leak."), "{read}");
+    assert!(read.contains("video") && read.contains("cannot see"), "{read}");
+    // The file stays named, for the Agent to look into it with its own tools.
+    assert!(read.contains(&video.display().to_string()), "{read}");
+}

@@ -1010,3 +1010,25 @@ async fn a_recording_sent_as_audio_keeps_its_name() {
     let saved = inbox.path().join("meeting.mp3");
     assert_eq!(said, format!("What was decided?\n{}", orbite::attached(&saved)));
 }
+
+#[tokio::test]
+async fn a_video_message_is_saved_and_handed_over_like_a_file() {
+    let inbox = tempfile::tempdir().unwrap();
+    let round = json!({
+        "update_id": 100,
+        "message": {
+            "message_id": 100,
+            "from": { "id": OWNER, "is_bot": false, "first_name": "Owner" },
+            "chat": { "id": OWNER, "type": "private" },
+            "video_note": { "file_id": "round-1", "file_unique_id": "r1", "duration": 6, "length": 240, "file_size": 5 },
+        }
+    });
+    let server = telegram_with_file(vec![round], b"video").await;
+    let mut channel = telegram(&server).saving_files_in(inbox.path());
+
+    let said = received(&mut channel).await;
+
+    let saved = inbox.path().join("video-100.mp4");
+    assert_eq!(std::fs::read(&saved).unwrap(), b"video");
+    assert_eq!(said, orbite::attached(&saved));
+}

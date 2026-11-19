@@ -1511,6 +1511,10 @@ impl<P: Provider + 'static> Agent<P> {
         };
         self.count(reply.usage.as_ref());
         let thought = reply.text.trim();
+        // For whoever wonders why their Agent stays silent, or speaks up.
+        if std::env::var_os("ORBITE_SHOW_WAKE_UPS").is_some() {
+            eprintln!("Wake-up at {}: {}", now.format("%H:%M"), clip(thought, 600));
+        }
         if thought.is_empty() || thought.contains(SILENT) {
             return;
         }
@@ -2040,6 +2044,12 @@ impl<P: Provider + 'static> Agent<P> {
             let line = crate::attached(&recording);
             let instead = match &self.transcriber {
                 Some(transcriber) => match transcriber.written(&recording).await {
+                    Ok(said) if crate::transcriber::is_video(&recording) => format!(
+                        "[A video message from your Owner, kept as {}. You cannot see it; what \
+                         is said in it was written down for you, and a word may have been \
+                         misheard]\n{said}",
+                        recording.display()
+                    ),
                     Ok(said) => format!(
                         "[A voice message from your Owner, written down for you; a word may have \
                          been misheard]\n{said}"
@@ -2049,11 +2059,19 @@ impl<P: Provider + 'static> Agent<P> {
                          Tell them so and ask them to write it or say it again.]"
                     ),
                 },
-                None => "[Your Owner sent a voice message, which you cannot hear: none of your \
-                         Providers writes speech down. Tell them so, and that adding one that \
-                         does (OpenAI or Groq, with an API key) would let you: orbite providers \
-                         add, on the machine.]"
+                None => "[Your Owner sent a voice message, which you cannot hear: nothing is set \
+                         up to write speech down. Tell them so, and that on the machine `orbite \
+                         transcription` sets it up, or `orbite providers add` with OpenAI or Groq \
+                         and an API key.]"
                     .to_owned(),
+            };
+            // A video stays named: the Agent may still look into the file.
+            let instead = match crate::transcriber::is_video(&recording) && !instead.contains(&line)
+            {
+                true if !instead.contains(&recording.display().to_string()) => {
+                    format!("{}\n{line}", instead.replace("voice message", "video message"))
+                }
+                _ => instead,
             };
             heard = heard.replace(&line, &instead);
         }
