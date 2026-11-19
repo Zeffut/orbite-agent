@@ -2,7 +2,9 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## Unreleased
+## 0.3.9
+
+Released on 2026-11-19.
 
 - `/usage` now counts everything the model answered: what wake-ups, summaries, sub-agents and routines cost was left out, so the figures were below what was really used.
 
