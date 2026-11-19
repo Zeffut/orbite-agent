@@ -13,12 +13,42 @@ use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
 pub struct Screen {
     display: String,
     serving: Option<Child>,
+    /// The key to the screen, and the file programs read it from: without
+    /// it, no other account of the machine can look at the screen or act on
+    /// it. None for a screen Orbite did not start.
+    key: Option<(Vec<u8>, PathBuf)>,
 }
+
+/// The way of proving oneself to a screen that Orbite uses.
+const KEY_KIND: &[u8] = b"MIT-MAGIC-COOKIE-1";
 
 impl Screen {
     /// Starts a screen of its own, `width` by `height`, that nothing else
     /// on the machine looks at; it ends with this value.
     pub fn start(width: u16, height: u16) -> io::Result<Self> {
+        // A key made for this screen, in a file only this account reads, in
+        // the form X programs look their key up in: for any host, any number.
+        let mut key = vec![0u8; 16];
+        getrandom::fill(&mut key).map_err(io::Error::other)?;
+        static SCREENS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let kept = std::env::temp_dir().join(format!(
+            "orbite-screen-{}-{}.key",
+            std::process::id(),
+            SCREENS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut entry = vec![0xff, 0xff, 0, 0, 0, 0];
+        entry.extend_from_slice(&(KEY_KIND.len() as u16).to_be_bytes());
+        entry.extend_from_slice(KEY_KIND);
+        entry.extend_from_slice(&(key.len() as u16).to_be_bytes());
+        entry.extend_from_slice(&key);
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let _ = std::fs::remove_file(&kept);
+            let mut file =
+                std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&kept)?;
+            file.write_all(&entry)?;
+        }
         // The display's number is chosen by the server, which says it on its output.
         let mut serving = Command::new("Xvfb")
             .args([
@@ -29,7 +59,9 @@ impl Screen {
                 &format!("{width}x{height}x24"),
                 "-nolisten",
                 "tcp",
+                "-auth",
             ])
+            .arg(&kept)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -40,19 +72,44 @@ impl Screen {
         if !matches!(told, Some(Ok(_))) || number.is_empty() || number.parse::<u32>().is_err() {
             let _ = serving.kill();
             let _ = serving.wait();
+            let _ = std::fs::remove_file(&kept);
             return Err(io::Error::other("the screen did not start"));
         }
-        Ok(Self { display: format!(":{number}"), serving: Some(serving) })
+        Ok(Self { display: format!(":{number}"), serving: Some(serving), key: Some((key, kept)) })
     }
 
     /// A screen that is already there, by its X display name.
     pub fn at(display: impl Into<String>) -> Self {
-        Self { display: display.into(), serving: None }
+        Self { display: display.into(), serving: None, key: None }
     }
 
     /// The screen's X display name, for programs to show themselves on it.
     pub fn display(&self) -> &str {
         &self.display
+    }
+
+    /// A connection to the screen, as Orbite itself has: with its key.
+    pub fn connect(&self) -> io::Result<(x11rb::rust_connection::RustConnection, usize)> {
+        let Some((key, _)) = &self.key else {
+            return x11rb::connect(Some(&self.display)).map_err(io::Error::other);
+        };
+        let number = self.display.trim_start_matches(':');
+        let socket = std::os::unix::net::UnixStream::connect(format!("/tmp/.X11-unix/X{number}"))?;
+        let (stream, _) = x11rb::rust_connection::DefaultStream::from_unix_stream(socket)
+            .map_err(io::Error::other)?;
+        let connection = x11rb::rust_connection::RustConnection::connect_to_stream_with_auth_info(
+            stream,
+            0,
+            KEY_KIND.to_vec(),
+            key.clone(),
+        )
+        .map_err(io::Error::other)?;
+        Ok((connection, 0))
+    }
+
+    /// The file programs shown on this screen read its key from.
+    pub fn key_file(&self) -> Option<&Path> {
+        self.key.as_ref().map(|(_, kept)| kept.as_path())
     }
 
     /// What the screen shows now, as a PNG file.
@@ -64,7 +121,7 @@ impl Screen {
     /// What the screen shows now: its size, then red, green and blue for
     /// each point, row after row.
     fn points(&self) -> io::Result<(u32, u32, Vec<u8>)> {
-        let (connection, number) = x11rb::connect(Some(&self.display)).map_err(io::Error::other)?;
+        let (connection, number) = self.connect()?;
         let screen = &connection.setup().roots[number];
         let (width, height) = (screen.width_in_pixels, screen.height_in_pixels);
         let taken = connection
@@ -123,14 +180,13 @@ impl Screen {
 
     /// Has the mouse and keyboard do something on this screen.
     fn act(&self, gesture: &[&str]) -> io::Result<()> {
-        let done = Command::new("xdotool")
-            .args(gesture)
-            .env("DISPLAY", &self.display)
-            .env_remove("XAUTHORITY")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()?;
+        let mut acting = Command::new("xdotool");
+        acting.args(gesture).env("DISPLAY", &self.display).env_remove("XAUTHORITY");
+        if let Some(key) = self.key_file() {
+            acting.env("XAUTHORITY", key);
+        }
+        let done =
+            acting.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).output()?;
         if done.status.success() {
             Ok(())
         } else {
@@ -141,6 +197,9 @@ impl Screen {
 
 impl Drop for Screen {
     fn drop(&mut self) {
+        if let Some((_, kept)) = &self.key {
+            let _ = std::fs::remove_file(kept);
+        }
         if let Some(serving) = &mut self.serving {
             let _ = serving.kill();
             let _ = serving.wait();
@@ -259,6 +318,7 @@ impl Computer {
             .env_remove("WAYLAND_DISPLAY")
             .env_remove("XDG_SESSION_TYPE")
             .env_remove("XAUTHORITY")
+            .envs(self.screen.key_file().map(|key| ("XAUTHORITY", key)))
             .env("MOZ_ENABLE_WAYLAND", "0")
             // Whatever the browser keeps outside its profile stays with it,
             // in the Agent's folder, whoever asked for it to be started.

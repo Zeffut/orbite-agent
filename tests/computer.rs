@@ -51,7 +51,7 @@ struct Window {
 
 impl Window {
     fn on(screen: &Screen) -> Self {
-        let (connection, number) = x11rb::connect(Some(screen.display())).unwrap();
+        let (connection, number) = screen.connect().unwrap();
         let root = &connection.setup().roots[number];
         let window = connection.generate_id().unwrap();
         let look = CreateWindowAux::new()
@@ -222,7 +222,13 @@ mod browser {
         let Some(mut first) = started(&profile) else { return };
         first.open(&address).unwrap();
         assert!(becomes(&first, (255, 0, 0)), "the page did not show");
-        let left_behind = first.screen().display().to_owned();
+        // The programs it started, as it noted them.
+        let left_behind: Vec<String> = std::fs::read_to_string(home.path().join("profile.running"))
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(left_behind.len(), 2, "{left_behind:?}");
         // Orbite is killed: nothing of it gets to tidy up.
         std::mem::forget(first);
 
@@ -233,12 +239,14 @@ mod browser {
             becomes(&second, (255, 0, 0)),
             "the address went to the browser left behind, on a screen nobody looks at"
         );
-        // What was left behind is gone.
+        // What was left behind is gone: stopped, whether or not anything
+        // has taken note of it yet.
         std::thread::sleep(Duration::from_millis(500));
-        assert!(
-            orbite::Screen::at(left_behind).picture().is_err(),
-            "the old screen is still served"
-        );
+        let running = |pid: &String| {
+            std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|command| !command.is_empty())
+        };
+        let still: Vec<&String> = left_behind.iter().filter(|pid| running(pid)).collect();
+        assert!(still.is_empty(), "left running: {still:?}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -293,4 +301,24 @@ fn the_command_says_whether_the_computer_works_on_this_machine() {
     // It leaves a picture of what it saw, and nothing running.
     let picture = std::fs::read(home.path().join("computer/check.png")).unwrap();
     assert_eq!(&picture[1..4], b"PNG");
+}
+
+#[test]
+fn nobody_without_the_screens_own_key_can_look_at_it_or_act_on_it() {
+    let Some(screen) = screen() else { return };
+
+    // Another program of the machine, with whatever it has of its own.
+    let stranger = x11rb::connect(Some(screen.display()));
+    assert!(stranger.is_err(), "the screen let a stranger in");
+    let acted = std::process::Command::new("xdotool")
+        .args(["mousemove", "10", "10"])
+        .env("DISPLAY", screen.display())
+        .env_remove("XAUTHORITY")
+        .output()
+        .unwrap();
+    assert!(!acted.status.success(), "a stranger moved the pointer");
+
+    // Orbite itself still sees it and acts on it.
+    assert!(screen.picture().is_ok());
+    screen.click(20, 20).unwrap();
 }
