@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.3.3
+
+Released on 2026-11-19.
+
+- **An MCP server with many tools no longer costs its whole description on every turn.** A server that says a great deal about its tools (Notion offers 77) is offered to the model as one action: it lists the tools in a line each, says what a tool takes when asked, then calls it. Measured with Notion connected: about 6,500 tokens a turn instead of 57,000.
+- Correction to the note of 0.3.0: OpenAI does cache on a ChatGPT plan when requests are large (about a fifth of what was read, over nineteen large requests); it cached nothing on small ones.
+
 ## 0.3.2
 
 Released on 2026-11-19.
@@ -31,7 +38,7 @@ Released on 2026-11-19.
 Released on 2026-11-19.
 
 - **Several providers, in order.** `orbite providers add` sets one more up behind those there are; the first answers while it can and the next takes over when it is out of usage, unreachable, or over the daily limit you gave it (`orbite providers limit NAME TOKENS`). `first` and `remove` change the line-up; `/providers` shows and changes it from the conversation.
-- `/providers connect chatgpt` signs in again from the conversation when a sign-in ends; removing the plan signs out at OpenAI too. OpenAI caches nothing on this path for now, so each turn counts its whole context against the plan.
+- `/providers connect chatgpt` signs in again from the conversation when a sign-in ends; removing the plan signs out at OpenAI too. Each turn counts its context against the plan (see 0.3.3 on caching).
 - A picture of the agent's screen is no longer taken while the browser shows all black between two paintings.
 - **ChatGPT plans.** `orbite setup` offers "ChatGPT plan": sign in with a link, paste back the address your browser ends on, and your agent thinks with the usage included in your Plus or Pro plan, with no API key. It uses OpenAI's sign-in for open-source programs and nothing else. Tried for real with one account: sign-in, models, actions, images and a conversation in Telegram.
 

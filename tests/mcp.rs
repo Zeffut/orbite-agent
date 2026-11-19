@@ -447,3 +447,115 @@ async fn an_earlier_server_that_quits_at_a_request_it_does_not_know_is_started_a
 
     assert_eq!(outcome(&provider), "read-note shopping: token none\nsecond part");
 }
+
+/// A remote server offering thirty tools, each described at length, as the
+/// servers of large services do.
+async fn a_server_with_many_tools() -> MockServer {
+    let server = MockServer::start().await;
+    let answering = |result: Value| {
+        move |request: &wiremock::Request| {
+            let asked: Value = serde_json::from_slice(&request.body).unwrap();
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "jsonrpc": "2.0", "id": asked["id"], "result": result }))
+        }
+    };
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({ "method": "initialize" })))
+        .respond_with(answering(json!({
+            "protocolVersion": "2025-06-18", "capabilities": {},
+            "serverInfo": { "name": "big", "version": "1" },
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({ "method": "notifications/initialized" })))
+        .respond_with(ResponseTemplate::new(202))
+        .mount(&server)
+        .await;
+    let tools: Vec<Value> = (0..30)
+        .map(|number| {
+            json!({
+                "name": format!("tool-{number}"),
+                "description": format!("Paints thing {number}. {}", "It has a great deal to say about itself. ".repeat(12)),
+                "inputSchema": { "type": "object", "required": ["colour"], "properties": {
+                    "colour": { "type": "string", "description": "The colour to paint it. ".repeat(6) },
+                } },
+            })
+        })
+        .collect();
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({ "method": "tools/list" })))
+        .respond_with(answering(json!({ "tools": tools })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({ "method": "tools/call" })))
+        .respond_with(|request: &wiremock::Request| {
+            let asked: Value = serde_json::from_slice(&request.body).unwrap();
+            let said = format!(
+                "{} painted {}",
+                asked["params"]["name"].as_str().unwrap(),
+                asked["params"]["arguments"]["colour"].as_str().unwrap()
+            );
+            ResponseTemplate::new(200).set_body_json(json!({ "jsonrpc": "2.0", "id": asked["id"],
+                "result": { "content": [{ "type": "text", "text": said }] } }))
+        })
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn a_server_with_many_tools_is_offered_as_one_action_that_says_what_each_tool_takes() {
+    let server = a_server_with_many_tools().await;
+    let home = home_with(json!({ "big": { "url": server.uri() } }));
+    let provider = ScriptedProvider::default();
+    provider
+        // Asked what a tool takes: nothing is done, and it says.
+        .then_acts([("big", json!({ "tool": "tool-3" }))])
+        .then_acts([("big", json!({ "tool": "tool-3", "input": { "colour": "red" } }))])
+        .then(Ok("Painted.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Paint thing three red.");
+    // Only the tool that acts asks; learning what it takes does not.
+    let approval = owner.is_asked().await;
+    assert!(approval.detail.contains("red"), "{approval:?}");
+    owner.allows();
+    assert_eq!(owner.hears().await, "Painted.");
+
+    // One Action stands for the thirty, so that every turn does not carry them all.
+    let offered = provider.last_offered();
+    assert!(offered.contains(&"big".to_owned()), "{offered:?}");
+    assert!(!offered.iter().any(|name| name.starts_with("big_")), "{offered:?}");
+    let told: Vec<String> = provider
+        .last_asked()
+        .into_iter()
+        .filter_map(|message| match message {
+            Message::Outcome { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(told[0].contains("colour") && told[0].contains("Paints thing 3"), "{}", told[0]);
+    assert_eq!(told[1], "tool-3 painted red");
+    let called = server.received_requests().await.unwrap();
+    let calls = called
+        .iter()
+        .filter(|request| String::from_utf8_lossy(&request.body).contains("tools/call"));
+    assert_eq!(calls.count(), 1, "asking what a tool takes called the server");
+}
+
+#[tokio::test]
+async fn a_tool_that_does_not_exist_on_such_a_server_is_said_with_those_that_do() {
+    let server = a_server_with_many_tools().await;
+    let home = home_with(json!({ "big": { "url": server.uri() } }));
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("big", json!({ "tool": "tool-99" }))]).then(Ok("Sorry.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Paint thing ninety-nine.");
+    owner.hears().await;
+
+    let told = outcome(&provider);
+    assert!(told.contains("tool-99") && told.contains("tool-0"), "{told}");
+}

@@ -136,6 +136,14 @@ struct SignedIn {
     resource: String,
 }
 
+/// A server, one of its tools, and what the tool is given: nothing when
+/// the model only asks what the tool takes.
+type Aimed<'a> = (&'a Server, Tool, Option<Value>);
+
+/// How much a server may say about its tools, in bytes, before they are
+/// offered as one Action: about three thousand tokens.
+const HEAVY: usize = 12_000;
+
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -674,6 +682,42 @@ impl Mcp {
         let mut specs: Vec<ActionSpec> = Vec::new();
         for server in &self.servers {
             let Some(Ok(tools)) = &*server.tools.lock().unwrap() else { continue };
+            // A server that says a great deal about its tools is offered as
+            // one Action: said in full on every turn, its tools would cost
+            // more than everything else the model is told.
+            let as_one = plain(&server.name);
+            if weighs_much(tools) && !taken.iter().chain(&specs).any(|other| other.name == as_one) {
+                let listed: Vec<String> = tools
+                    .iter()
+                    .map(|tool| {
+                        let about = one_sentence(&tool.description);
+                        let about: String = about.chars().take(90).collect();
+                        format!("{}: {about}", tool.name)
+                    })
+                    .collect();
+                let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+                specs.push(ActionSpec {
+                    name: as_one,
+                    description: format!(
+                        "The {} tools of {} (an MCP server). `tool` names one and `input` is what it \
+                         takes. You do not know what a tool takes until you ask: call with `tool` \
+                         alone, nothing is done and its full description and input are returned. \
+                         Then call again with `input`.\n{}",
+                        tools.len(),
+                        server.name,
+                        listed.join("\n")
+                    ),
+                    input: json!({
+                        "type": "object",
+                        "properties": {
+                            "tool": { "type": "string", "enum": names },
+                            "input": { "type": "object", "description": "What the tool takes." },
+                        },
+                        "required": ["tool"],
+                    }),
+                });
+                continue;
+            }
             for tool in tools {
                 if taken.iter().chain(&specs).any(|other| other.name == tool.action) {
                     continue;
@@ -688,19 +732,41 @@ impl Mcp {
         specs
     }
 
-    fn find(&self, request: &ActionRequest) -> Option<(&Server, Tool)> {
-        self.servers.iter().find_map(|server| {
+    /// The server and tool `request` is for, with what the tool is given;
+    /// nothing given when the model only asks what the tool takes. The
+    /// error is for the model: no such tool on a server offered as one Action.
+    fn find(&self, request: &ActionRequest) -> Option<Result<Aimed<'_>, String>> {
+        for server in &self.servers {
             let tools = server.tools.lock().unwrap();
-            let tool =
-                tools.as_ref()?.as_ref().ok()?.iter().find(|tool| tool.action == request.name)?;
-            Some((server, tool.clone()))
-        })
+            let Some(Ok(tools)) = tools.as_ref() else { continue };
+            if let Some(tool) = tools.iter().find(|tool| tool.action == request.name) {
+                return Some(Ok((server, tool.clone(), Some(request.input.clone()))));
+            }
+            if weighs_much(tools) && request.name == plain(&server.name) {
+                let wanted = request.input["tool"].as_str().unwrap_or_default();
+                let Some(tool) = tools
+                    .iter()
+                    .find(|tool| tool.name == wanted || plain(&tool.name) == plain(wanted))
+                else {
+                    let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
+                    return Some(Err(format!(
+                        "{} has no tool called \"{wanted}\". Its tools: {}.",
+                        server.name,
+                        names.join(", ")
+                    )));
+                };
+                let given = request.input.get("input").filter(|given| !given.is_null()).cloned();
+                return Some(Ok((server, tool.clone(), given)));
+            }
+        }
+        None
     }
 
     /// What the Owner is asked before `request`, when it is for a server's
     /// tool: None inside when the tool only reads.
     pub(crate) fn review(&self, request: &ActionRequest) -> Option<Option<Approval>> {
-        let (server, tool) = self.find(request)?;
+        // Nothing is asked about what will only be explained to the model.
+        let Ok((server, tool, Some(given))) = self.find(request)? else { return Some(None) };
         if tool.only_reads {
             return Some(None);
         }
@@ -709,7 +775,7 @@ impl Mcp {
         let what = if what.is_empty() { &tool.name } else { what };
         Some(Some(Approval {
             summary: format!("{what} ({})", server.name),
-            detail: serde_json::to_string_pretty(&request.input).unwrap_or_default(),
+            detail: serde_json::to_string_pretty(&given).unwrap_or_default(),
             irreversible: tool.destroys,
             critical: false,
             contained: false,
@@ -718,7 +784,19 @@ impl Mcp {
 
     /// Carries out `request` when it is for a server's tool; the text is its Outcome.
     pub(crate) async fn carry_out(&self, request: &ActionRequest) -> Option<String> {
-        let (server, tool) = self.find(request)?;
+        let (server, tool, given) = match self.find(request)? {
+            Ok(found) => found,
+            Err(unknown) => return Some(unknown),
+        };
+        // Asked what the tool takes: it is said, and nothing is done.
+        let Some(given) = given else {
+            return Some(format!(
+                "{}: {}\nIts input:\n{}\nNothing was done. Call again with `input`.",
+                tool.name,
+                tool.description,
+                serde_json::to_string_pretty(&tool.input).unwrap_or_default()
+            ));
+        };
         let mut link = server.link.lock().await;
         // What a sign-in obtained does not last: about to end, it is renewed
         // and the server reached afresh with the new one.
@@ -740,7 +818,7 @@ impl Mcp {
                 }
             }
         }
-        let call = json!({ "name": tool.name, "arguments": request.input });
+        let call = json!({ "name": tool.name, "arguments": given });
         let asked = link.as_mut()?.ask("tools/call", call);
         let answer = match tokio::time::timeout(CALL_LIMIT, asked).await {
             Ok(Ok(answer)) => answer,
@@ -1073,6 +1151,14 @@ fn plain(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
         .collect()
+}
+
+/// True when saying all of `tools` to the model on every turn would cost
+/// more than a few thousand tokens.
+fn weighs_much(tools: &[Tool]) -> bool {
+    let said: usize =
+        tools.iter().map(|tool| tool.description.len() + tool.input.to_string().len()).sum();
+    said > HEAVY
 }
 
 /// The first sentence of `text`, without its full stop.
