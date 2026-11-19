@@ -479,6 +479,28 @@ impl Extensions {
         } else {
             self.time_limit.min(Duration::from_secs(2))
         };
+        // One run at a time of an Extension that keeps things, in this
+        // program and in any other of the installation: a second run would
+        // start from what the first had not kept yet, and overwrite it. The
+        // wait is not counted against the script.
+        let _alone = match &reaching {
+            Some(_) => {
+                use std::os::fd::AsRawFd;
+                let folder = self.folder.join(&extension.name);
+                let lock = fs::create_dir_all(&folder)
+                    .and_then(|()| fs::File::create(folder.join("data.lock")))
+                    .map_err(|error| {
+                        Failure::Threw(format!("it could not be run alone: {error}"))
+                    })?;
+                // SAFETY: a lock on a file opened just above, let go when it is closed.
+                if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+                    let error = std::io::Error::last_os_error();
+                    return Err(Failure::Threw(format!("it could not be run alone: {error}")));
+                }
+                Some(lock)
+            }
+            None => None,
+        };
         let deadline = Instant::now() + limit;
         // Whatever went wrong, running out of time is what is reported.
         let failed = move |problem: String, breaks: bool| {

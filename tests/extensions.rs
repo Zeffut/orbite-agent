@@ -730,3 +730,45 @@ async fn a_secret_a_service_sends_back_in_another_dress_is_still_not_handed_over
     assert!(!told.contains(&dressed), "{told}");
     assert!(told.contains("[WEATHER_KEY]"), "{told}");
 }
+
+/// An Extension that counts: it reads what it kept, takes its time, and
+/// keeps one more.
+const COUNTER: &str = r#"
+function describe() {
+  return [{ name: "bump", description: "Count one more.", parameters: {} }];
+}
+function run(action, input) {
+  const before = store.get("count") || 0;
+  let spin = 0;
+  for (let i = 0; i < 200000; i++) { spin += i % 7; }
+  store.set("count", before + 1);
+  return String(before + 1);
+}
+"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_runs_of_one_extension_at_once_do_not_lose_what_the_other_kept() {
+    let extensions = tempfile::tempdir().unwrap();
+    install(extensions.path(), "counter", json!({ "description": "Counts." }), COUNTER);
+    // Two programs of one installation, as `orbite chat` beside the service.
+    let mut owners = Vec::new();
+    for _ in 0..2 {
+        let provider = ScriptedProvider::default();
+        for _ in 0..15 {
+            provider.then_acts([("counter_bump", json!({}))]);
+        }
+        provider.then(Ok("Counted.".into()));
+        let owner = agent_extended_in(extensions.path(), &provider);
+        owner.says("Count fifteen times.");
+        owners.push(owner);
+    }
+    for owner in &mut owners {
+        assert_eq!(owner.hears().await, "Counted.");
+    }
+
+    let kept: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(extensions.path().join("counter").join("data.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(kept["count"], 30, "one run overwrote what another had kept");
+}
