@@ -2132,8 +2132,12 @@ impl<P: Provider + 'static> Agent<P> {
         // A delay is counted from this very second: written as a moment by
         // the model, it would lose up to a minute.
         let delay = &request.input["in_minutes"];
-        let delay =
+        let written =
             delay.as_f64().or_else(|| delay.as_str().and_then(|text| text.trim().parse().ok()));
+        // Some models write every field, zero when unused: no delay then,
+        // unless a delay is all that was given.
+        let another_way = field("cron").is_some() || field("at").is_some();
+        let delay = written.filter(|minutes| *minutes > 0.0 || !another_way);
         let (cron, next) = match (field("cron"), field("at"), delay) {
             (None, None, None) => {
                 return Err("A routine needs `cron` (to recur), or `at` or `in_minutes` (to run \

@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.3.5
+
+Released on 2026-11-19.
+
+- A recurring routine could not be scheduled by a model that writes every field of an action, zero or empty when unused: the unused delay introduced in 0.3.3 was taken for a second way of scheduling. Seen in a real try.
+
 ## 0.3.4
 
 Released on 2026-11-19.

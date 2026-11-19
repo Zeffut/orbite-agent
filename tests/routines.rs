@@ -435,3 +435,29 @@ async fn a_moment_and_a_delay_are_not_both_given() {
     .await;
     assert!(refused.contains("in_minutes"), "{refused}");
 }
+
+#[tokio::test]
+async fn a_model_that_fills_in_every_field_still_schedules_what_it_means() {
+    let clock = Clock::at("2026-11-19 08:00");
+    let provider = obedient(|_| Ok(saying("Done.")));
+    let mut owner = agent_with(&provider, Store::in_memory(), &clock);
+
+    // Some models write every field of an Action, empty or zero when unused.
+    owner.says(&format!(
+        "schedule_routine {}",
+        json!({ "name": "tokyo", "instruction": "Say the time in Tokyo.", "cron": "0 9 * * *", "at": "", "in_minutes": 0 })
+    ));
+    owner.is_asked().await;
+    owner.allows();
+    owner.hears().await;
+    let listed = dictate(&mut owner, "list_routines", json!({})).await;
+    assert!(listed.contains("tokyo") && listed.contains("0 9 * * *"), "{listed}");
+
+    let set = dictate(
+        &mut owner,
+        "schedule_routine",
+        json!({ "name": "tea", "instruction": "Remind the Owner of the tea.", "cron": "", "at": "", "in_minutes": 5 }),
+    )
+    .await;
+    assert!(set.contains("08:05"), "{set}");
+}
