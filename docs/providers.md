@@ -31,7 +31,21 @@ Anthropic is spoken to in its own protocol; every other provider through the Ope
 
 ## With a subscription
 
-Using a flat-rate plan (ChatGPT, GitHub Copilot) instead of an API key is **not available yet**. For Claude, Orbite takes an API key only: Anthropic does not let other programs offer its sign-in. If your Claude plan comes with API credit, a key created in Anthropic's console draws on it. When it is, it will go only through each provider's official sign-in for third-party programs, never through a path a provider forbids (see [ADR 0006](adr/0006-subscriptions-through-official-paths-only.md)), and each one will have its page here stating that path and its risk.
+### ChatGPT (Plus or Pro)
+
+Choose `chatgpt` in `orbite setup` to have your agent think with the usage included in your ChatGPT plan, with no API key. This goes through the sign-in OpenAI opens to open-source programs that run on their user's machine ("Sign in with ChatGPT", ChatGPT plan usage), and through nothing else.
+
+1. Setup shows a link under **Continue with ChatGPT**. Open it in a browser on any device and sign in.
+2. Your browser ends on a page that does not load, at an address starting with `http://127.0.0.1:1455`. That is expected: nothing listens there. Copy the whole address and paste it into setup.
+3. Setup confirms **You're using your ChatGPT plan**, lists the models your plan offers, and tries the one you choose.
+
+What lets your agent in is sealed with its other secrets and renewed by itself. `/usage` says when your plan is being used; you see and limit what Orbite may use at [chatgpt.com/settings/usage](https://chatgpt.com/settings/usage), and you can disconnect it there at any time. If the sign-in ends (it does after thirty days without use, or when you disconnect it), your agent says so and `orbite setup provider` signs in again.
+
+**The risks.** OpenAI calls this programme a preview: it may change it or end it, and Orbite would then need an API key again. On a Plus plan the usage limits are shared with everything else you do with ChatGPT; when they are reached your agent says so and waits. OpenAI's documentation describes signing in on the machine that runs the program; pasting the final address from another device follows the same exchange but is not a procedure OpenAI describes. Written from OpenAI's documentation and tested against a stand-in: **not yet tried with a real plan**.
+
+### Others
+
+GitHub Copilot is **not available yet**. For Claude, Orbite takes an API key only: Anthropic does not let other programs offer its sign-in. If your Claude plan comes with API credit, a key created in Anthropic's console draws on it. A plan is only ever used through its provider's official sign-in for third-party programs, never through a path a provider forbids (see [ADR 0006](adr/0006-subscriptions-through-official-paths-only.md)).
 
 ## Choosing a model
 

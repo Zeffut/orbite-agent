@@ -1,6 +1,8 @@
 //! The Providers known by name, and how each is reached.
 
-use crate::{Anthropic, OpenAiCompatible, Provider, ProviderError, Reply, Request};
+use std::path::Path;
+
+use crate::{Anthropic, ChatGpt, OpenAiCompatible, Provider, ProviderError, Reply, Request};
 
 /// The protocol a Provider speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -9,6 +11,8 @@ pub enum Speaks {
     OpenAi,
     /// Anthropic's Messages API.
     Anthropic,
+    /// OpenAI's Responses API, as whoever signed in with their ChatGPT plan.
+    ChatGptPlan,
 }
 
 /// A Provider Orbite can be pointed at by name.
@@ -42,6 +46,13 @@ const KNOWN: &[KnownProvider] = &[
         needs_key: true,
     },
     openai("openai", "OpenAI", "https://api.openai.com/v1"),
+    KnownProvider {
+        name: "chatgpt",
+        label: "ChatGPT plan (Plus or Pro, no API key)",
+        speaks: Speaks::ChatGptPlan,
+        api_root: "https://api.openai.com/v1",
+        needs_key: false,
+    },
     openai("google", "Google (Gemini)", "https://generativelanguage.googleapis.com/v1beta/openai"),
     openai("xai", "xAI (Grok)", "https://api.x.ai/v1"),
     openai("mistral", "Mistral", "https://api.mistral.ai/v1"),
@@ -64,6 +75,7 @@ pub fn known_providers() -> &'static [KnownProvider] {
 pub enum Connected {
     OpenAi(OpenAiCompatible),
     Anthropic(Anthropic),
+    ChatGpt(ChatGpt),
 }
 
 impl Provider for Connected {
@@ -71,7 +83,34 @@ impl Provider for Connected {
         match self {
             Self::OpenAi(provider) => provider.reply(request).await,
             Self::Anthropic(provider) => provider.reply(request).await,
+            Self::ChatGpt(provider) => provider.reply(request).await,
         }
+    }
+}
+
+/// As [`connect`], for the installation whose folder is `home`: a Provider
+/// the Owner signed in to, rather than gave a key for, keeps there what lets
+/// the Agent in.
+pub fn connect_in(
+    home: &Path,
+    name: &str,
+    api_key: Option<&str>,
+    model: &str,
+    api_root: Option<&str>,
+) -> Result<Connected, String> {
+    let chatgpt = KNOWN.iter().find(|known| known.speaks == Speaks::ChatGptPlan);
+    match chatgpt.filter(|known| known.name == name.trim().to_lowercase()) {
+        Some(known) => {
+            let provider = ChatGpt::kept_in(home, model).named(known.name);
+            // Its own addresses, unless it is reached somewhere else.
+            let elsewhere =
+                api_root.map(str::trim).filter(|root| !root.is_empty() && *root != known.api_root);
+            Ok(Connected::ChatGpt(match elsewhere {
+                Some(address) => provider.at(address),
+                None => provider,
+            }))
+        }
+        None => connect(name, api_key, model, api_root),
     }
 }
 
@@ -116,6 +155,9 @@ pub fn connect(
     // A local server ignores the key, but the protocol wants one sent.
     let api_key = api_key.unwrap_or("none");
     Ok(match known.speaks {
+        Speaks::ChatGptPlan => {
+            return Err("A ChatGPT plan is signed in to: run `orbite setup provider`.".into());
+        }
         Speaks::OpenAi => {
             Connected::OpenAi(OpenAiCompatible::new(api_root, api_key, model).named(known.name))
         }

@@ -215,3 +215,28 @@ async fn the_owner_can_see_what_was_used_by_provider() {
     assert!(shown.contains("2,400") && shown.contains("400") && shown.contains("60"), "{shown}");
     assert_eq!(asked.times_asked(), 2, "/usage is not sent to the model");
 }
+
+#[tokio::test]
+async fn an_owner_on_their_chatgpt_plan_sees_so_with_what_was_used_and_where_to_manage_it() {
+    let provider = ScriptedProvider::default();
+    provider.costing(Usage {
+        by: "chatgpt".into(),
+        model: "gpt-of-the-plan".into(),
+        input: 100,
+        cached: 0,
+        output: 10,
+    });
+    provider.then(Ok("One.".into()));
+    let (mut channel, mut owner) = memory_channel();
+    tokio::spawn(
+        async move { Agent::new(provider, Store::in_memory()).converse(&mut channel).await },
+    );
+    owner.says("1");
+    owner.hears().await;
+
+    owner.says("/usage");
+    let shown = owner.hears().await;
+
+    assert!(shown.contains("Using ChatGPT plan"), "{shown}");
+    assert!(shown.contains("[Manage usage](https://chatgpt.com/settings/usage)"), "{shown}");
+}

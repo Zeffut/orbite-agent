@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::{
     Config, KnownProvider, Language, Message, Provider, ProviderChoice, ProviderError, Request,
-    Secrets, Speaks, connect, known_providers,
+    Secrets, Speaks, connect_in, known_providers,
 };
 
 /// Under these names the installation's own keys are sealed. The Agent
@@ -207,6 +207,9 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         };
         let root = address.clone().unwrap_or_else(|| known.api_root.to_owned());
 
+        if known.speaks == Speaks::ChatGptPlan {
+            self.continue_with_chatgpt(&root, language).await?;
+        }
         // The key first, checked for real, then the model.
         let key = loop {
             if !known.needs_key {
@@ -272,8 +275,9 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                         "Trying this model out on a few real tasks (about a minute)...",
                         "Essai de ce modèle sur quelques vraies tâches (environ une minute)...",
                     ))?;
-                    let tried = connect(known.name, key.as_deref(), &model, Some(&root))
-                        .map_err(ProviderError::Failed);
+                    let tried =
+                        connect_in(&self.home, known.name, key.as_deref(), &model, Some(&root))
+                            .map_err(ProviderError::Failed);
                     let tried = match tried {
                         Ok(provider) => crate::try_out(&provider).await,
                         Err(error) => Err(error),
@@ -354,6 +358,63 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         }
     }
 
+    /// Signs the Owner in to their ChatGPT plan: a link to follow in any
+    /// browser, then the address that browser ended on, pasted here.
+    async fn continue_with_chatgpt(
+        &mut self,
+        root: &str,
+        language: Language,
+    ) -> Result<(), SetupError> {
+        let Ok(crate::Connected::ChatGpt(chatgpt)) =
+            connect_in(&self.home, "chatgpt", None, "", Some(root))
+        else {
+            return Err(SetupError("The ChatGPT plan could not be prepared.".into()));
+        };
+        self.say(language.say(
+            "\nYour agent will think with the usage included in your ChatGPT plan (an eligible \
+             Plus or Pro plan), through OpenAI's sign-in for open-source apps. That programme is \
+             a preview: OpenAI may change it or end it.",
+            "\nVotre agent réfléchira avec l'utilisation comprise dans votre forfait ChatGPT \
+             (un forfait Plus ou Pro éligible), par la connexion qu'OpenAI ouvre aux applications \
+             libres. Ce programme est un aperçu : OpenAI peut le modifier ou l'arrêter.",
+        ))?;
+        let account = loop {
+            let begun = chatgpt.sign_in().map_err(stopped)?;
+            self.say(&format!(
+                "\n{}\n  {}\n{}",
+                language.say(
+                    "Continue with ChatGPT: open this link in a browser, on any device, and sign in.",
+                    "Continuer avec ChatGPT : ouvrez ce lien dans un navigateur, sur n'importe \
+                     quel appareil, et connectez-vous.",
+                ),
+                begun.link(),
+                language.say(
+                    "Your browser then ends on a page that does not load, at an address starting \
+                     with http://127.0.0.1:1455 . That is expected: copy that whole address and \
+                     paste it here.",
+                    "Votre navigateur finit alors sur une page qui ne s'affiche pas, à une adresse \
+                     commençant par http://127.0.0.1:1455 . C'est normal : copiez cette adresse \
+                     entière et collez-la ici.",
+                ),
+            ))?;
+            let ended_on = self.ask(language.say("Address > ", "Adresse > "))?;
+            match chatgpt.signed_in_at(&begun, &ended_on).await {
+                Ok(account) => break account,
+                Err(reason) => self.say(&format!(
+                    "{} {reason}.",
+                    language.say("That did not work:", "Cela n'a pas fonctionné :")
+                ))?,
+            }
+        };
+        self.say(&format!(
+            "{}{} ✓\n{} {}",
+            language.say("You're using your ChatGPT plan", "Vous utilisez votre forfait ChatGPT"),
+            if account.is_empty() { String::new() } else { format!(" ({account})") },
+            language.say("Manage usage:", "Gérer l'utilisation :"),
+            crate::chatgpt::MANAGE_USAGE,
+        ))
+    }
+
     /// Asks the Provider for one word, to see that the key and model work.
     async fn check(
         &self,
@@ -363,8 +424,8 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         root: &str,
     ) -> Result<(), ProviderError> {
         let model = if model.is_empty() { "check" } else { model };
-        let provider =
-            connect(known.name, Some(key), model, Some(root)).map_err(ProviderError::Failed)?;
+        let provider = connect_in(&self.home, known.name, Some(key), model, Some(root))
+            .map_err(ProviderError::Failed)?;
         let conversation = [Message::from_owner("Reply with the single word: ok")];
         let request = Request {
             instructions: "",
@@ -378,6 +439,14 @@ impl<R: BufRead, W: Write> Setup<R, W> {
 
     /// The models the Provider offers, when it says; a few of them.
     async fn models(&self, known: &KnownProvider, key: Option<&str>, root: &str) -> Vec<String> {
+        if known.speaks == Speaks::ChatGptPlan {
+            let Ok(crate::Connected::ChatGpt(chatgpt)) =
+                connect_in(&self.home, known.name, None, "", Some(root))
+            else {
+                return Vec::new();
+            };
+            return chatgpt.models().await.into_iter().map(|(slug, _)| slug).take(15).collect();
+        }
         if known.speaks == Speaks::Anthropic {
             return ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
                 .map(String::from)

@@ -2,6 +2,10 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## Unreleased
+
+- **ChatGPT plans.** `orbite setup` offers "ChatGPT plan": sign in with a link, paste back the address your browser ends on, and your agent thinks with the usage included in your Plus or Pro plan, with no API key. It uses OpenAI's sign-in for open-source programs and nothing else. Not yet tried with a real plan.
+
 ## 0.2.1
 
 Released on 2026-11-19.

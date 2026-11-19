@@ -34,8 +34,8 @@ Already there:
 
 Still to come before 1.0:
 
-- Running on your own subscriptions (ChatGPT, GitHub Copilot, Claude), through each provider's official path only.
-- Gmail and Google Calendar, and MCP servers that need signing in.
+- Running on a subscription you already pay for, through each provider's official path only: a ChatGPT plan is written and awaits its first real try, GitHub Copilot comes next.
+- Gmail and Google Calendar.
 
 ## Developing
 

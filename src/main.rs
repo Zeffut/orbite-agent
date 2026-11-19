@@ -6,7 +6,7 @@ use std::process::ExitCode;
 use orbite::{
     Agent, Both, Config, Connected, Language, PROVIDER_KEY, RELEASE_KEY, Routed, SETTINGS, Secrets,
     Settings, Setup, SetupStep, Store, Systemd, TELEGRAM_TOKEN, Telegram, Terminal, Updater,
-    connect, known_providers,
+    connect_in, known_providers,
 };
 use tokio::io::{BufReader, stdin, stdout};
 
@@ -178,7 +178,7 @@ fn usual_provider(model: Option<String>) -> Result<Connected, Failure> {
         None => Secrets::kept_in(&home).get(PROVIDER_KEY)?,
     };
     let address = setting("ORBITE_BASE_URL").or(chosen.and_then(|chosen| chosen.address));
-    Ok(connect(&name, key.as_deref(), &model, address.as_deref())?)
+    Ok(connect_in(&home, &name, key.as_deref(), &model, address.as_deref())?)
 }
 
 /// The Agent of this installation: its Provider and the folder holding its data.
@@ -199,11 +199,14 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         None => secrets.get(PROVIDER_KEY)?,
     };
     let address = setting("ORBITE_BASE_URL").or(chosen.and_then(|chosen| chosen.address));
-    let mut provider =
-        Routed::through(&name, connect(&name, key.as_deref(), &model, address.as_deref())?);
+    let mut provider = Routed::through(
+        &name,
+        connect_in(&home, &name, key.as_deref(), &model, address.as_deref())?,
+    );
     // Another Provider to fall back on when the usual one cannot answer.
     if let Some(other) = setting("ORBITE_FALLBACK_PROVIDER") {
-        let fallback = connect(
+        let fallback = connect_in(
+            &home,
             &other,
             setting("ORBITE_FALLBACK_API_KEY").as_deref(),
             &required("ORBITE_FALLBACK_MODEL")?,
@@ -217,11 +220,12 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         let light = match setting("ORBITE_LIGHT_PROVIDER") {
             Some(other) => {
                 let key = setting("ORBITE_LIGHT_API_KEY");
-                (other.clone(), connect(&other, key.as_deref(), &light_model, None)?)
+                (other.clone(), connect_in(&home, &other, key.as_deref(), &light_model, None)?)
             }
-            None => {
-                (name.clone(), connect(&name, key.as_deref(), &light_model, address.as_deref())?)
-            }
+            None => (
+                name.clone(),
+                connect_in(&home, &name, key.as_deref(), &light_model, address.as_deref())?,
+            ),
         };
         provider = provider.with_light(&format!("{} (light)", light.0), light.1);
     }

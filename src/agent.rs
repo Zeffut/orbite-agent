@@ -1843,6 +1843,15 @@ impl<P: Provider + 'static> Agent<P> {
             }
             shown.push('\n');
         }
+        // OpenAI asks that whoever uses their plan sees so, and where to manage it.
+        if used.iter().any(|(_, _, usage)| usage.by == "chatgpt") {
+            shown.push_str(&format!(
+                "{} · [{}]({})\n",
+                self.language.say("Using ChatGPT plan", "Avec votre forfait ChatGPT"),
+                self.language.say("Manage usage", "Gérer l'utilisation"),
+                crate::chatgpt::MANAGE_USAGE
+            ));
+        }
         shown.trim_end().to_owned()
     }
 
@@ -2460,6 +2469,14 @@ const TURNS_BEFORE_BLAMING_THE_MODEL: u8 = 3;
 pub(crate) fn explain(error: &ProviderError, language: Language) -> String {
     let french = language == Language::French;
     match error {
+        // The reason already says what to do when it is not about a key.
+        ProviderError::Rejected(reason) if reason.contains("`orbite setup") => {
+            if french {
+                format!("Mon fournisseur d'IA a refusé mon accès ({reason}).")
+            } else {
+                format!("My AI provider refused my access ({reason}).")
+            }
+        }
         ProviderError::Rejected(reason) if french => {
             format!(
                 "Mon fournisseur d'IA a refusé mon accès ({reason}). Vérifiez la clé d'API, puis réessayez."

@@ -425,3 +425,140 @@ async fn a_lighter_model_can_be_chosen_for_simple_work_or_passed_over() {
     set_up(home.path(), &without, &provider, &telegram, Some(Step::Provider)).await;
     assert_eq!(Config::load(home.path()).unwrap().light_model, None);
 }
+
+/// What the Owner's browser asked for by following the last link shown.
+fn asked_by_the_link(shown: &[u8]) -> std::collections::HashMap<String, String> {
+    let shown = String::from_utf8_lossy(shown);
+    let link = shown.split_whitespace().rfind(|word| word.contains("/api/accounts/authorize?"));
+    url::Url::parse(link.expect("a link was shown")).unwrap().query_pairs().into_owned().collect()
+}
+
+/// An Owner who answers what they are shown: each line typed as it is,
+/// except `<address>`, the address their browser ended on after the link.
+struct Answering {
+    lines: std::collections::VecDeque<String>,
+    shown: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl std::io::Read for Answering {
+    fn read(&mut self, into: &mut [u8]) -> std::io::Result<usize> {
+        let Some(line) = self.lines.pop_front() else { return Ok(0) };
+        let line = if line == "<address>" {
+            let asked = asked_by_the_link(&self.shown.lock().unwrap());
+            format!(
+                "{}?code=code-of-the-plan&state={}&client_id=oaiapp_setup",
+                asked["redirect_uri"], asked["state"]
+            )
+        } else {
+            line
+        };
+        let written = format!("{line}\n");
+        into[..written.len()].copy_from_slice(written.as_bytes());
+        Ok(written.len())
+    }
+}
+
+#[derive(Clone)]
+struct Shown(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Shown {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// OpenAI as an Owner with a ChatGPT plan meets it: a sign-in that lets in
+/// whoever followed the link last shown, then models answering as them.
+async fn openai_with_a_plan(shown: std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> MockServer {
+    use base64::Engine;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/accounts/oauth/token"))
+        .respond_with(move |_: &wiremock::Request| {
+            let part = |value: Value| {
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string())
+            };
+            let nonce = asked_by_the_link(&shown.lock().unwrap())["nonce"].clone();
+            let identity = json!({
+                "iss": "https://auth.openai.com", "aud": "oaiapp_setup", "nonce": nonce,
+                "exp": 99_999_999_999u64, "email": "owner@example.org",
+            });
+            ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "access-of-the-plan", "refresh_token": "refresh-of-the-plan",
+                "id_token": format!("{}.{}.s", part(json!({})), part(identity)),
+                "token_type": "Bearer", "expires_in": 3600,
+                "scope": "openid offline_access resource.invoke chatgpt.tokens.use.direct",
+            }))
+        })
+        .mount(&server)
+        .await;
+    let signed_in = || header("authorization", "Bearer access-of-the-plan");
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .and(signed_in())
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "models": [
+            { "slug": "gpt-of-the-plan", "display_name": "GPT", "visibility": "list" },
+        ] })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .and(signed_in())
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            format!(
+                "data: {}\n\ndata: {}\n\n",
+                json!({ "type": "response.output_text.delta", "delta": "ok" }),
+                json!({ "type": "response.completed", "response": { "usage": {} } })
+            ),
+            "text/event-stream",
+        ))
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn an_owner_with_a_chatgpt_plan_signs_in_by_a_link_instead_of_giving_a_key() {
+    let home = tempfile::tempdir().unwrap();
+    let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let openai = openai_with_a_plan(shown.clone()).await;
+    let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
+    // English, the ChatGPT plan, a wrong paste then the right address, the
+    // model offered (kept though this fake only ever talks), no lighter
+    // model, the bot's token, a name.
+    let bot = bot_token();
+    let typed = ["1", "chatgpt", "nonsense", "<address>", "1", "yes", "", bot.as_str(), "Nova"];
+    let owner = Answering {
+        lines: typed.iter().map(|line| line.to_string()).collect(),
+        shown: shown.clone(),
+    };
+
+    Setup::in_home(home.path(), std::io::BufReader::new(owner), Shown(shown.clone()))
+        .reaching_providers_at(openai.uri())
+        .reaching_telegram_at(telegram.uri())
+        .linking_with_code(CODE)
+        .waiting_between_looks(Duration::from_millis(10))
+        .giving_up_linking_after(Duration::from_millis(400))
+        .run(None)
+        .await
+        .unwrap();
+
+    let shown = String::from_utf8(shown.lock().unwrap().clone()).unwrap();
+    // The words OpenAI asks for where its sign-in is offered and used.
+    assert!(shown.contains("Continue with ChatGPT"), "{shown}");
+    assert!(shown.contains("You're using your ChatGPT plan (owner@example.org)"), "{shown}");
+    assert!(shown.contains("Manage usage: https://chatgpt.com/settings/usage"), "{shown}");
+    assert!(shown.contains("OpenAI may change it or end it"), "{shown}");
+    assert!(!shown.contains("API key (not shown)"), "no key is asked for:\n{shown}");
+    assert!(shown.contains("That did not work: that is not an address"), "{shown}");
+    let chosen = Config::load(home.path()).unwrap().provider.unwrap();
+    assert_eq!((chosen.name.as_str(), chosen.model.as_str()), ("chatgpt", "gpt-of-the-plan"));
+    let secrets = Secrets::kept_in(home.path());
+    assert!(secrets.get("ORBITE_CHATGPT").unwrap().unwrap().contains("refresh-of-the-plan"));
+    assert!(secrets.get(orbite::PROVIDER_KEY).unwrap().is_none());
+    assert!(sent_to_owner(&telegram).await.last().unwrap().contains("Nova"));
+}
