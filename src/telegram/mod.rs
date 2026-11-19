@@ -251,15 +251,34 @@ impl Bot {
 
     /// Sends the Owner `file` as a document, with `caption`.
     async fn upload(&self, file: &Path, caption: &str) -> io::Result<()> {
+        // A picture is shown in the Conversation; when Telegram will not
+        // show it (too large, too long), it is delivered as a file.
+        let pictured = matches!(
+            file.extension().and_then(|kind| kind.to_str()).map(str::to_lowercase).as_deref(),
+            Some("png" | "jpg" | "jpeg" | "webp")
+        );
+        if pictured && self.upload_as("sendPhoto", "photo", file, caption).await.is_ok() {
+            return Ok(());
+        }
+        self.upload_as("sendDocument", "document", file, caption).await
+    }
+
+    async fn upload_as(
+        &self,
+        method: &str,
+        field: &'static str,
+        file: &Path,
+        caption: &str,
+    ) -> io::Result<()> {
         let name = file.file_name().and_then(|name| name.to_str()).unwrap_or("file").to_owned();
         let content = std::fs::read(file)?;
         let form = reqwest::multipart::Form::new()
             .text("chat_id", self.owner.to_string())
             .text("caption", caption.to_owned())
-            .part("document", reqwest::multipart::Part::bytes(content).file_name(name));
+            .part(field, reqwest::multipart::Part::bytes(content).file_name(name));
         let response = self
             .http
-            .post(format!("{}/bot{}/sendDocument", self.api_root, self.token))
+            .post(format!("{}/bot{}/{method}", self.api_root, self.token))
             .timeout(Duration::from_secs(300))
             .multipart(form)
             .send()

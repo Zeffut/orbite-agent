@@ -739,6 +739,55 @@ async fn the_agent_sends_a_file_as_a_document_with_its_caption() {
 }
 
 #[tokio::test]
+async fn a_picture_is_sent_as_a_picture_shown_in_the_conversation() {
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("screen.png");
+    std::fs::write(&file, b"\x89PNG picture bytes").unwrap();
+    let server = MockServer::start().await;
+    Mock::given(path("/botTOKEN/sendPhoto"))
+        .respond_with(ok(json!({ "message_id": 8 })))
+        .mount(&server)
+        .await;
+    let mut channel = telegram(&server);
+
+    channel.send_file(&file, "The screen.").await.unwrap();
+
+    let asked = server.received_requests().await.unwrap();
+    let upload = asked
+        .iter()
+        .find(|request| request.url.path().ends_with("/sendPhoto"))
+        .expect("not sent as a picture");
+    let body = String::from_utf8_lossy(&upload.body);
+    assert!(body.contains("name=\"photo\"") && body.contains("filename=\"screen.png\""), "{body}");
+    assert!(body.contains("The screen."), "{body}");
+}
+
+#[tokio::test]
+async fn a_picture_telegram_will_not_show_is_still_delivered_as_a_file() {
+    let folder = tempfile::tempdir().unwrap();
+    let file = folder.path().join("huge.png");
+    std::fs::write(&file, b"\x89PNG picture bytes").unwrap();
+    let server = MockServer::start().await;
+    Mock::given(path("/botTOKEN/sendPhoto"))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .set_body_json(json!({ "ok": false, "description": "PHOTO_INVALID_DIMENSIONS" })),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(path("/botTOKEN/sendDocument"))
+        .respond_with(ok(json!({ "message_id": 8 })))
+        .mount(&server)
+        .await;
+    let mut channel = telegram(&server);
+
+    channel.send_file(&file, "The screen.").await.unwrap();
+
+    let asked = server.received_requests().await.unwrap();
+    assert!(asked.iter().any(|request| request.url.path().ends_with("/sendDocument")));
+}
+
+#[tokio::test]
 async fn an_approval_shows_what_is_acted_on_apart_from_the_rest() {
     let server = telegram_asking(vec![tap(100, OWNER, 7, "allow")]).await;
     let mut channel = telegram(&server);

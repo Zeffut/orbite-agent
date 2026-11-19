@@ -176,7 +176,10 @@ async fn the_owner_is_sent_a_picture_of_the_screen_when_they_ask_for_one() {
     let picture = home.path().join("computer/pictures/screen-0.png");
     let provider = ScriptedProvider::default();
     provider
-        .then_acts([("computer", json!({ "do": "open", "url": address, "purpose": "show the page" }))])
+        .then_acts([(
+            "computer",
+            json!({ "do": "open", "url": address, "purpose": "show the page" }),
+        )])
         .then_acts([("send_file", json!({ "path": picture, "caption": "The page." }))])
         .then(Ok("Sent.".into()));
     let mut owner = agent_in(home.path(), &provider);
