@@ -2,9 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## Unreleased
+## 0.3.0
+
+Released on 2026-11-19.
 
 - **Several providers, in order.** `orbite providers add` sets one more up behind those there are; the first answers while it can and the next takes over when it is out of usage, unreachable, or over the daily limit you gave it (`orbite providers limit NAME TOKENS`). `first` and `remove` change the line-up; `/providers` shows and changes it from the conversation.
+- `/providers connect chatgpt` signs in again from the conversation when a sign-in ends; removing the plan signs out at OpenAI too. OpenAI caches nothing on this path for now, so each turn counts its whole context against the plan.
+- A picture of the agent's screen is no longer taken while the browser shows all black between two paintings.
 - **ChatGPT plans.** `orbite setup` offers "ChatGPT plan": sign in with a link, paste back the address your browser ends on, and your agent thinks with the usage included in your Plus or Pro plan, with no API key. It uses OpenAI's sign-in for open-source programs and nothing else. Tried for real with one account: sign-in, models, actions, images and a conversation in Telegram.
 
 ## 0.2.1
