@@ -57,6 +57,13 @@ impl Screen {
 
     /// What the screen shows now, as a PNG file.
     pub fn picture(&self) -> io::Result<Vec<u8>> {
+        let (width, height, points) = self.points()?;
+        Ok(crate::png::encode(width, height, &points))
+    }
+
+    /// What the screen shows now: its size, then red, green and blue for
+    /// each point, row after row.
+    fn points(&self) -> io::Result<(u32, u32, Vec<u8>)> {
         let (connection, number) = x11rb::connect(Some(&self.display)).map_err(io::Error::other)?;
         let screen = &connection.setup().roots[number];
         let (width, height) = (screen.width_in_pixels, screen.height_in_pixels);
@@ -76,7 +83,7 @@ impl Screen {
         for point in taken.data.chunks_exact(across) {
             points.extend_from_slice(&[point[2], point[1], point[0]]);
         }
-        Ok(crate::png::encode(width.into(), height.into(), &points))
+        Ok((width.into(), height.into(), points))
     }
 
     /// Moves the pointer to a point of the screen and clicks there.
@@ -325,6 +332,10 @@ pub(crate) struct Desk {
 /// The size of the Computer's screen.
 const SCREEN: (u16, u16) = (1280, 800);
 
+/// How much of the screen may differ between two looks for it to count as
+/// still: about a text cursor that blinks, in colour values.
+const CURSOR_SIZED: usize = 600;
+
 /// How many pictures of the screen are kept on disk.
 const PICTURES_KEPT: u32 = 6;
 
@@ -354,17 +365,20 @@ impl Desk {
 
     /// A picture of the screen once it has stopped changing for `calm`
     /// looks in a row, half a second apart, or after `patience` at most,
-    /// kept as a file.
+    /// kept as a file. A blinking cursor is not a change.
     pub(crate) async fn picture(&self, patience: Duration, calm: u32) -> io::Result<PathBuf> {
         let until = Instant::now() + patience;
-        let mut seen = self.with(|computer| computer.screen().picture())?;
+        let mut seen = self.with(|computer| computer.screen().points())?;
         let mut still = 0;
         while still < calm && Instant::now() < until {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            let now = self.with(|computer| computer.screen().picture())?;
-            still = if now == seen { still + 1 } else { 0 };
+            let now = self.with(|computer| computer.screen().points())?;
+            let changed = now.2.iter().zip(&seen.2).filter(|(new, old)| new != old).count();
+            still =
+                if now.2.len() == seen.2.len() && changed <= CURSOR_SIZED { still + 1 } else { 0 };
             seen = now;
         }
+        let seen = crate::png::encode(seen.0, seen.1, &seen.2);
         let number = self.taken.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let pictures = self.folder.join("pictures");
         std::fs::create_dir_all(&pictures)?;
