@@ -26,6 +26,8 @@ impl Machine {
         for command in ["useradd", "systemctl", "chown", "apt-get", "runuser"] {
             machine.stand_in(command, "exit 0");
         }
+        // What gpg says of Mozilla's own key.
+        machine.stand_in("gpg", "echo 'fpr:::::::::35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3:'");
         machine
             .stand_in("id", "[ \"$1\" = \"-u\" ] && [ -z \"$2\" ] && { echo 0; exit 0; }; exit 1");
         machine.stand_in(
@@ -370,4 +372,45 @@ fn a_machine_whose_openssl_cannot_check_the_signature_is_told_so_and_not_that_th
     assert!(shown(&refused).contains("OpenSSL 3"), "{}", shown(&refused));
     assert!(!shown(&refused).contains("not signed"), "{}", shown(&refused));
     assert!(!machine.path("usr/local/bin/orbite").exists());
+}
+
+#[test]
+fn a_service_file_the_owner_edited_is_kept_aside_when_installing_again_and_they_are_told() {
+    let machine = Machine::debian();
+    assert!(machine.install().status.success());
+    let service = machine.path("etc/systemd/system/orbite.service");
+    let written = fs::read_to_string(&service).unwrap();
+    // The file says where an Owner's own changes belong.
+    assert!(written.contains("systemctl edit orbite"), "{written}");
+
+    // Untouched, installing again says nothing and keeps nothing aside.
+    let again = machine.install();
+    assert!(!shown(&again).contains("orbite.service.replaced"), "{}", shown(&again));
+    assert!(!machine.path("etc/systemd/system/orbite.service.replaced").exists());
+
+    let edited =
+        written.replace("RestartSec=3", "RestartSec=30\nEnvironment=ORBITE_CONTEXT_TOKENS=20000");
+    fs::write(&service, &edited).unwrap();
+    let again = machine.install();
+
+    assert!(again.status.success(), "{}", shown(&again));
+    assert_eq!(fs::read_to_string(&service).unwrap(), written);
+    let aside = machine.path("etc/systemd/system/orbite.service.replaced");
+    assert_eq!(fs::read_to_string(aside).unwrap(), edited);
+    assert!(shown(&again).contains("orbite.service.replaced"), "{}", shown(&again));
+    assert!(shown(&again).contains("systemctl edit orbite"), "{}", shown(&again));
+}
+
+#[test]
+fn a_key_that_is_not_mozillas_is_not_trusted_for_the_browser() {
+    let machine = Machine::debian();
+    machine.stand_in("gpg", "echo 'fpr:::::::::0000000000000000000000000000000000000000:'");
+
+    let installed = machine.install();
+
+    // Orbite itself is installed; its Computer is not, and nothing is trusted.
+    assert!(installed.status.success(), "{}", shown(&installed));
+    assert!(shown(&installed).contains("is not Mozilla's"), "{}", shown(&installed));
+    assert!(!machine.path("etc/apt/keyrings/packages.mozilla.org.asc").exists());
+    assert!(!machine.calls().contains("firefox"), "{}", machine.calls());
 }

@@ -112,7 +112,9 @@ chmod 755 "$ROOT$PROGRAM.new"
 mv "$ROOT$PROGRAM.new" "$ROOT$PROGRAM"
 
 mkdir -p "$ROOT$(dirname "$SERVICE")"
-cat >"$ROOT$SERVICE" <<UNIT
+cat >"$WORK/orbite.service" <<UNIT
+# Written by Orbite's installer, and written again each time it runs.
+# Changes of your own belong in a drop-in, which is kept: systemctl edit orbite
 [Unit]
 Description=Orbite, a personal AI agent
 Documentation=https://github.com/Zeffut/orbite-agent
@@ -131,6 +133,15 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 UNIT
+# A service file its Owner changed is not lost without a word.
+grep -v '^#' "$WORK/orbite.service" >"$WORK/service.new"
+[ -f "$ROOT$SERVICE" ] && grep -v '^#' "$ROOT$SERVICE" >"$WORK/service.old"
+if [ -f "$ROOT$SERVICE" ] && ! cmp -s "$WORK/service.new" "$WORK/service.old"; then
+    cp "$ROOT$SERVICE" "$ROOT$SERVICE.replaced"
+    say "The service file had been changed: it is written anew, and the one before is kept as $SERVICE.replaced. Put changes of your own in a drop-in, which is kept: systemctl edit orbite"
+fi
+cp "$WORK/orbite.service" "$ROOT$SERVICE"
+chmod 644 "$ROOT$SERVICE"
 
 # Orbite keeps itself up to date: once a day it installs the latest release
 # signed by its key, and goes back to the one before if that does not start.
@@ -170,12 +181,27 @@ systemctl enable --now orbite-update.timer >/dev/null 2>&1 || systemctl enable -
 # a service account cannot run). ORBITE_WITHOUT_COMPUTER=1 leaves all of this
 # out. Orbite is installed whether or not this part succeeds.
 
+MOZILLA_KEY=35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
+
 computer() {
     mkdir -p "$ROOT/etc/apt/keyrings" "$ROOT/etc/apt/sources.list.d" "$ROOT/etc/apt/preferences.d"
     KEYRING=/etc/apt/keyrings/packages.mozilla.org.asc
     if [ ! -s "$ROOT$KEYRING" ]; then
         curl -fsSL "${ORBITE_MOZILLA_KEY_URL:-https://packages.mozilla.org/apt/repo-signing-key.gpg}" \
-            -o "$ROOT$KEYRING.new" && mv "$ROOT$KEYRING.new" "$ROOT$KEYRING" || return 1
+            -o "$ROOT$KEYRING.new" || return 1
+        # Mozilla publishes the fingerprint of its key: it is checked where
+        # the machine has what it takes, and the key is refused if it differs.
+        if command -v gpg >/dev/null 2>&1; then
+            mkdir -p -m 700 "$WORK/gnupg"
+            gpg --homedir "$WORK/gnupg" -n -q --import --import-options import-show --with-colons \
+                "$ROOT$KEYRING.new" 2>/dev/null |
+                grep -q "^fpr:.*:$MOZILLA_KEY:" || {
+                rm -f "$ROOT$KEYRING.new"
+                say "The key offered for Mozilla's packages is not Mozilla's."
+                return 1
+            }
+        fi
+        mv "$ROOT$KEYRING.new" "$ROOT$KEYRING"
     fi
     echo "deb [signed-by=$KEYRING] https://packages.mozilla.org/apt mozilla main" \
         >"$ROOT/etc/apt/sources.list.d/mozilla.list"
