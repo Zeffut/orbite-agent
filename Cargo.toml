@@ -34,3 +34,9 @@ x11rb = { version = "0.14.0", features = ["xtest"] }
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 tempfile = "3.27.0"
 wiremock = "0.6.5"
+
+# Enough to say where something went wrong, without the full debugging
+# information: with some fifty test programs it took gigabytes of disk.
+[profile.dev]
+debug = "line-tables-only"
+
