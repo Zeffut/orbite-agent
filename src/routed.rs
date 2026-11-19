@@ -45,7 +45,10 @@ impl<P> Named<P> {
 
     /// Notes an answer, or a failure after which it rests for `rest`.
     fn note(&self, rest: Option<Duration>) {
-        *self.resting_until.lock().expect("not poisoned") = rest.map(|rest| Instant::now() + rest);
+        // A wait no clock can hold is as long a one as there is.
+        let far = Duration::from_secs(365 * 24 * 3600);
+        *self.resting_until.lock().expect("not poisoned") =
+            rest.map(|rest| Instant::now() + rest.min(far));
     }
 
     /// True once it used, on `day`, all its Owner lets it use in a day.
@@ -87,7 +90,8 @@ impl<P: Provider> Routed<P> {
     /// this program started.
     pub fn having_used(self, name: &str, tokens: u64) -> Self {
         let day = (self.today)();
-        if let Some(named) = self.usual.iter().find(|named| named.name == name) {
+        // Light work counts with the Provider that does it.
+        if let Some(named) = self.usual.iter().find(|named| named.name == plain(name)) {
             named.count(&day, tokens);
         }
         self
@@ -121,6 +125,11 @@ impl<P: Provider> Routed<P> {
     }
 }
 
+/// The name of the Provider behind `name`, which may be that of its lighter model.
+fn plain(name: &str) -> &str {
+    name.strip_suffix(" (light)").unwrap_or(name)
+}
+
 impl<P: Provider> Provider for Routed<P> {
     fn usual(&self) -> Option<&str> {
         self.usual.first().map(|preferred| preferred.name.as_str())
@@ -130,6 +139,13 @@ impl<P: Provider> Provider for Routed<P> {
         let light = self.light.as_ref().filter(|_| request.light);
         let day = (self.today)();
         // One that used up what its Owner allows for the day is not asked.
+        // Light work is that Provider's work too: it counts towards its
+        // limit and stops with it.
+        let counted_with = |candidate: &Named<P>| {
+            self.usual.iter().find(|usual| usual.name == plain(&candidate.name))
+        };
+        let light =
+            light.filter(|light| !counted_with(light).is_some_and(|with| with.is_spent(&day)));
         let candidates: Vec<&Named<P>> = light
             .into_iter()
             .chain(self.usual.iter().filter(|candidate| !candidate.is_spent(&day)))
@@ -152,7 +168,9 @@ impl<P: Provider> Provider for Routed<P> {
                     candidate.note(None);
                     // Whoever answered is known by the name given here.
                     let usage = reply.usage.take().unwrap_or_default();
-                    candidate.count(&day, usage.input + usage.output);
+                    counted_with(candidate)
+                        .unwrap_or(candidate)
+                        .count(&day, usage.input + usage.output);
                     reply.usage = Some(Usage { by: candidate.name.clone(), ..usage });
                     return Ok(reply);
                 }

@@ -38,6 +38,9 @@ pub(crate) fn give_each_its_key(config: &mut Config, secrets: &Secrets) -> Resul
         let named = key_of(&first.name);
         secrets.set(&named, &key).map_err(|error| error.to_string())?;
         first.key = Some(named);
+        // Under one name only: left there, it would be taken for the key
+        // of whichever Provider comes first next and has none of its own.
+        secrets.remove(PROVIDER_KEY).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -97,6 +100,8 @@ pub fn providers_shown(home: &Path, language: Language, used: &[(String, u64)]) 
 pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, String> {
     let mut config = Config::load(home).map_err(|error| error.to_string())?;
     let mut all = config.providers();
+    let first_was = all.first().map(|first| first.name.clone());
+    let mut removed = None;
     let place = |name: &str| {
         all.iter().position(|provider| provider.name == name.to_lowercase()).ok_or_else(|| {
             let names: Vec<&str> = all.iter().map(|provider| provider.name.as_str()).collect();
@@ -120,21 +125,11 @@ pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, Str
             }
             give_each_its_key(&mut config, &Secrets::kept_in(home))?;
             let mut all = config.providers();
-            let removed = all.remove(at);
+            let gone = all.remove(at);
             config.set_providers(all);
-            if let Some(key) = &removed.key {
-                let _ = Secrets::kept_in(home).remove(key);
-            }
-            // A plan signed in to is signed out of, at its Provider too.
-            if removed.name == "chatgpt" {
-                let chatgpt = crate::ChatGpt::kept_in(home, &removed.model);
-                let chatgpt = match &removed.address {
-                    Some(address) => chatgpt.at(address),
-                    None => chatgpt,
-                };
-                chatgpt.sign_out().await;
-            }
-            format!("{} is removed.", removed.name)
+            let done = format!("{} is removed.", gone.name);
+            removed = Some(gone);
+            done
         }
         ["limit", name, tokens] => {
             let at = place(name)?;
@@ -160,6 +155,26 @@ pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, Str
                 .into());
         }
     };
+    // The lighter model was one of the Provider that came first: it is not
+    // asked of another.
+    if config.provider.as_ref().map(|first| &first.name) != first_was.as_ref() {
+        config.light_model = None;
+    }
     config.save(home).map_err(|error| error.to_string())?;
+    // Only once it is no longer listed is what let it in let go of.
+    if let Some(removed) = removed {
+        if let Some(key) = &removed.key {
+            let _ = Secrets::kept_in(home).remove(key);
+        }
+        // A plan signed in to is signed out of, at its Provider too.
+        if removed.name == "chatgpt" {
+            let chatgpt = crate::ChatGpt::kept_in(home, &removed.model);
+            let chatgpt = match &removed.address {
+                Some(address) => chatgpt.at(address),
+                None => chatgpt,
+            };
+            chatgpt.sign_out().await;
+        }
+    }
     Ok(done)
 }

@@ -585,10 +585,18 @@ async fn another_provider_is_added_after_those_set_up_each_with_a_key_of_its_own
         assert_eq!(secrets.get(key).unwrap(), Some(api_key()), "{key}");
     }
     assert_ne!(all[0].key, all[1].key);
+    // Under its own name only: the name that said just "the Provider" is let go of.
+    assert_eq!(secrets.get(orbite::PROVIDER_KEY).unwrap(), None);
     assert!(shown.contains("place 2"), "{shown}");
     assert!(!shown.contains("lighter model"), "only the first is asked about one:\n{shown}");
 
     // Set up again, it takes the place it had rather than a second one.
     set_up(home.path(), &typed, &provider, &telegram, Some(Step::AnotherProvider)).await;
     assert_eq!(Config::load(home.path()).unwrap().providers().len(), 2);
+    // And the first, set up again this way, stays first.
+    let again = format!("custom\n{}\n1\n", api_key());
+    set_up(home.path(), &again, &provider, &telegram, Some(Step::AnotherProvider)).await;
+    let names: Vec<String> =
+        Config::load(home.path()).unwrap().providers().into_iter().map(|one| one.name).collect();
+    assert_eq!(names, ["custom", "groq"]);
 }

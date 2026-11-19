@@ -184,6 +184,14 @@ fn refused(status: u16, body: &Value, retry_after: Option<Duration>) -> Provider
         (_, 500..) => {
             ProviderError::Busy { reason: format!("HTTP {status}: {words}"), retry_after }
         }
+        // Met while answering: OpenAI's own trouble, not the request's.
+        (code, 200)
+            if ["server_error", "rate_limit", "overloaded", "unavailable"]
+                .iter()
+                .any(|sign| code.contains(sign)) =>
+        {
+            ProviderError::Busy { reason: words, retry_after }
+        }
         (_, 200) => ProviderError::Failed(words),
         _ => ProviderError::Failed(format!("HTTP {status}: {words}")),
     }
@@ -398,8 +406,10 @@ impl ChatGpt {
             Ok(lock)
         })
         .await
-        .map_err(|error| ProviderError::Failed(error.to_string()))?
-        .map_err(|error| ProviderError::Failed(format!("could not renew the sign-in: {error}")))
+        .map_err(|error| ProviderError::Unreachable(error.to_string()))?
+        .map_err(|error| {
+            ProviderError::Unreachable(format!("could not renew the sign-in: {error}"))
+        })
     }
 
     /// What lets the Agent in right now, renewed when it ran out or when
@@ -412,16 +422,42 @@ impl ChatGpt {
                 .clone()
                 .filter(|access| kept.until > now() + 60 && Some(access.as_str()) != stale)
         };
-        let kept = self.kept().map_err(ProviderError::Failed)?;
+        let kept = self.kept().map_err(ProviderError::Unreachable)?;
         if kept.refresh.is_none() {
             return Err(not_signed_in());
         }
         if let Some(access) = usable(&kept) {
             return Ok(access);
         }
+        // Carried to its end even when whoever asked stops waiting: a
+        // renewal OpenAI granted and Orbite did not keep ends the sign-in.
+        let renewing = Self {
+            http: self.http.clone(),
+            home: self.home.clone(),
+            secrets: Secrets::kept_in(&self.home),
+            auth: self.auth.clone(),
+            api: self.api.clone(),
+            model: self.model.clone(),
+            name: self.name.clone(),
+        };
+        let stale = stale.map(str::to_owned);
+        tokio::spawn(async move { renewing.renew(stale.as_deref()).await })
+            .await
+            .unwrap_or_else(|error| Err(ProviderError::Unreachable(error.to_string())))
+    }
+
+    async fn renew(&self, stale: Option<&str>) -> Result<String, ProviderError> {
+        let not_signed_in =
+            || ProviderError::Rejected(format!("nobody is signed in to ChatGPT: {SIGN_IN_AGAIN}"));
+        let usable = |kept: &Kept| {
+            kept.access
+                .clone()
+                .filter(|access| kept.until > now() + 60 && Some(access.as_str()) != stale)
+        };
         let _alone = self.renewing_alone().await?;
-        // Another may have renewed while this one waited.
-        let mut kept = self.kept().map_err(ProviderError::Failed)?;
+        // Another may have renewed while this one waited. Failing to read
+        // says nothing of the request: another Provider may answer.
+        let mut kept = self.kept().map_err(ProviderError::Unreachable)?;
         if let Some(access) = usable(&kept) {
             return Ok(access);
         }
@@ -454,7 +490,11 @@ impl ChatGpt {
                 kept.identity = Some(identity.to_owned());
             }
             kept.until = now() + granted["expires_in"].as_u64().unwrap_or(0);
-            self.keep(&kept).map_err(ProviderError::Failed)?;
+            // Not kept, it still lets the Agent in this once; said aloud,
+            // since the next renewal will not find it.
+            if let Err(error) = self.keep(&kept) {
+                eprintln!("The renewed sign-in to ChatGPT could not be kept: {error}");
+            }
             return Ok(access.to_owned());
         }
         let (code, words) = refusal_in(&granted);
@@ -462,20 +502,15 @@ impl ChatGpt {
             // Who this Agent is to OpenAI is kept: it signs in again as itself.
             kept.access = None;
             kept.refresh = None;
-            self.keep(&kept).map_err(ProviderError::Failed)?;
+            let _ = self.keep(&kept);
             return Err(ProviderError::Rejected(format!(
                 "the sign-in to ChatGPT ended ({code}): {SIGN_IN_AGAIN}"
             )));
         }
-        if status == 429 || status >= 500 {
-            return Err(ProviderError::Busy {
-                reason: format!("OpenAI could not renew the sign-in (HTTP {status})"),
-                retry_after: None,
-            });
-        }
-        Err(ProviderError::Failed(format!(
-            "OpenAI could not renew the sign-in (HTTP {status}: {words})"
-        )))
+        Err(ProviderError::Busy {
+            reason: format!("OpenAI could not renew the sign-in (HTTP {status}: {words})"),
+            retry_after: None,
+        })
     }
 
     /// The models the Owner's plan offers: what to send, and what to show.
@@ -507,6 +542,8 @@ impl ChatGpt {
             .post(format!("{}/responses", self.api))
             .bearer_auth(access)
             .json(body)
+            // Long enough for the longest answer; a stream that stalls ends.
+            .timeout(Duration::from_secs(600))
             .send()
             .await
             .map_err(|error| (0, ProviderError::Unreachable(root_cause(&error))))?;
@@ -515,7 +552,7 @@ impl ChatGpt {
             .headers()
             .get("retry-after")
             .and_then(|value| value.to_str().ok()?.trim().parse::<f64>().ok())
-            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            .filter(|seconds| seconds.is_finite() && (0.0..=86_400.0).contains(seconds))
             .map(Duration::from_secs_f64);
         let written = response
             .text()
@@ -528,6 +565,8 @@ impl ChatGpt {
 
         let (mut text, mut actions, mut usage, mut ended) =
             (String::new(), Vec::new(), None, false);
+        // What a message said, when it came whole, and what the model declined.
+        let (mut whole, mut declined) = (String::new(), String::new());
         for line in written.lines() {
             let Some(event) = line.strip_prefix("data:") else { continue };
             let Ok(event) = serde_json::from_str::<Value>(event.trim()) else { continue };
@@ -549,6 +588,19 @@ impl ChatGpt {
                     };
                     let id = item["call_id"].as_str().unwrap_or("").to_owned();
                     actions.push(ActionRequest { id, name, input });
+                }
+                "response.output_item.done" if event["item"]["type"] == "message" => {
+                    for part in event["item"]["content"].as_array().into_iter().flatten() {
+                        match part["type"].as_str() {
+                            Some("output_text") => {
+                                whole.push_str(part["text"].as_str().unwrap_or(""));
+                            }
+                            Some("refusal") => {
+                                declined.push_str(part["refusal"].as_str().unwrap_or(""));
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 "response.completed" => {
                     let used = &event["response"]["usage"];
@@ -580,6 +632,12 @@ impl ChatGpt {
         if !ended {
             let reason = "the answer was cut before its end".to_owned();
             return Err((status, ProviderError::Busy { reason, retry_after: None }));
+        }
+        if text.is_empty() {
+            text = whole;
+        }
+        if text.is_empty() && actions.is_empty() && !declined.is_empty() {
+            return Err((status, ProviderError::Declined(declined)));
         }
         if text.is_empty() && actions.is_empty() {
             return Err((status, ProviderError::Failed("the answer contained no text".into())));

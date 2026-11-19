@@ -569,11 +569,12 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 continue;
             }
-            if text.trim().starts_with(crate::chatgpt::ENDS_AT)
+            if let Some(ended_on) =
+                text.split_whitespace().find(|word| word.starts_with(crate::chatgpt::ENDS_AT))
                 && let Some((chatgpt, begun)) = self.chatgpt_sign_in.take()
             {
                 channel.erase_last_received().await;
-                let said = match chatgpt.signed_in_at(&begun, &text).await {
+                let said = match chatgpt.signed_in_at(&begun, ended_on).await {
                     Ok(account) => format!(
                         "✅ {}{}\n[{}]({})",
                         self.language.say(
@@ -593,6 +594,22 @@ impl<P: Provider + 'static> Agent<P> {
                     ),
                 };
                 if channel.send(&said).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            // The address of a sign-in nobody is waiting for any more, as
+            // after a restart: not kept, not shown to a model either.
+            if is_a_sign_in_address(&text) {
+                channel.erase_last_received().await;
+                let said = self.language.say(
+                    "That is the address a sign-in ended on, but no sign-in is under way any more. I did not \
+                     keep it. Start again: /providers connect chatgpt, or /mcp connect NAME.",
+                    "C'est l'adresse sur laquelle une connexion s'est terminée, mais aucune connexion n'est \
+                     plus en cours. Je ne l'ai pas gardée. Recommencez : /providers connect chatgpt, ou \
+                     /mcp connect NOM.",
+                );
+                if channel.send(said).await.is_err() {
                     return;
                 }
                 continue;
@@ -851,7 +868,7 @@ impl<P: Provider + 'static> Agent<P> {
                 Attended::Interrupted => {
                     // The Owner added something: think again with it.
                     for text in said {
-                        self.store.append(&Message::from_owner(text))?;
+                        self.store.append(&Message::from_owner(self.fit_to_keep(text)))?;
                     }
                     continue;
                 }
@@ -1055,7 +1072,7 @@ impl<P: Provider + 'static> Agent<P> {
                 return self.stopped(channel, &said).await;
             }
             for text in said {
-                self.store.append(&Message::from_owner(text))?;
+                self.store.append(&Message::from_owner(self.fit_to_keep(text)))?;
             }
         }
         let stopped = format!(
@@ -1961,6 +1978,20 @@ impl<P: Provider + 'static> Agent<P> {
         shown.trim_end().to_owned()
     }
 
+    /// What the Owner said while the Agent was at work, as it may be kept
+    /// and shown to a model: a secret or the address of a sign-in, which
+    /// nothing looked at on the way in, is left out.
+    fn fit_to_keep(&self, text: String) -> String {
+        let allowed = matches!(self.store.setting("secrets_in_conversation"), Ok(Some(_)));
+        if is_a_sign_in_address(&text) || (!allowed && crate::secrets::holds_a_secret(&text)) {
+            return "[Your Owner sent something that looked like a secret or the address of a \
+                    sign-in while you were at work. It was not kept. Tell them so, and to send it \
+                    again now if it was the address of a sign-in they began.]"
+                .into();
+        }
+        text
+    }
+
     /// The models of the ChatGPT plan, when that is what the Agent thinks
     /// with first: each as a choice of the model setting, the one in force marked.
     async fn models_of_the_plan(&self) -> Vec<(String, String)> {
@@ -2601,6 +2632,16 @@ async fn showing_work<T>(channel: &mut impl Channel, work: impl Future<Output = 
             () = tokio::time::sleep(WORKING_SIGNAL_EVERY) => {}
         }
     }
+}
+
+/// True when `text` holds the address a browser ends on after a sign-in:
+/// on this machine, carrying a code to be used once.
+fn is_a_sign_in_address(text: &str) -> bool {
+    text.split_whitespace().any(|word| {
+        word.starts_with("http://127.0.0.1:")
+            && (word.contains("code=") || word.contains("error="))
+            && word.contains("state=")
+    })
 }
 
 fn explain_storage(error: &StoreError) -> String {

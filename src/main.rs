@@ -166,7 +166,10 @@ fn usual_provider(model: Option<String>) -> Result<Connected, Failure> {
         .ok_or("No model is chosen yet. Run `orbite setup`.")?;
     let key = match setting("ORBITE_API_KEY") {
         Some(key) => Some(key),
-        None => Secrets::kept_in(&home).get(PROVIDER_KEY)?,
+        None => {
+            let named = chosen.as_ref().and_then(|chosen| chosen.key.as_deref());
+            Secrets::kept_in(&home).get(named.unwrap_or(PROVIDER_KEY))?
+        }
     };
     let address = setting("ORBITE_BASE_URL").or(chosen.and_then(|chosen| chosen.address));
     Ok(connect_in(&home, &name, key.as_deref(), &model, address.as_deref())?)
@@ -190,7 +193,9 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         let named = choice.and_then(|choice| choice.key.as_deref()).unwrap_or(PROVIDER_KEY);
         Ok(secrets.get(named)?)
     };
-    let key = match setting("ORBITE_API_KEY") {
+    // A key given in the environment is for an Agent with one Provider:
+    // with several, it would go to whichever comes first.
+    let key = match setting("ORBITE_API_KEY").filter(|_| config.fallbacks.is_empty()) {
         Some(key) => Some(key),
         None => key_of(chosen.as_ref())?,
     };

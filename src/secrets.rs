@@ -62,10 +62,28 @@ impl Secrets {
                     .into(),
             ));
         }
+        let _alone = self.alone()?;
         let mut all = self.all()?;
         all.insert(name.clone(), value.to_owned());
         self.write(&all)?;
         Ok(name)
+    }
+
+    /// Alone to change what is kept, in this program and in any other of
+    /// the installation: two changes at once would lose one of them.
+    fn alone(&self) -> Result<fs::File, SecretsError> {
+        use std::os::fd::AsRawFd;
+        if let Some(folder) = self.sealed.parent() {
+            fs::create_dir_all(folder)
+                .map_err(|error| failed("could not create the folder", error))?;
+        }
+        let lock = fs::File::create(self.sealed.with_extension("lock"))
+            .map_err(|error| failed("could not write", error))?;
+        // SAFETY: a lock on a file opened just above, let go when it is closed.
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(failed("could not write", std::io::Error::last_os_error()));
+        }
+        Ok(lock)
     }
 
     pub fn get(&self, name: &str) -> Result<Option<String>, SecretsError> {
@@ -79,6 +97,7 @@ impl Secrets {
 
     /// Deletes the secret called `name`; false when there is none.
     pub fn remove(&self, name: &str) -> Result<bool, SecretsError> {
+        let _alone = self.alone()?;
         let mut all = self.all()?;
         let removed = all.remove(&name.trim().to_uppercase()).is_some();
         if removed {

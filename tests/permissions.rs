@@ -264,3 +264,17 @@ async fn the_level_and_what_is_always_allowed_survive_a_restart() {
     freely(&mut owner, "run_command", json!({ "command": "touch made.txt" })).await;
     assert!(provider.last_instructions().contains("balanced"), "the model is told its level");
 }
+
+#[tokio::test]
+async fn orbites_own_command_run_by_the_agent_is_asked_about_every_time() {
+    let home = tempfile::tempdir().unwrap();
+    let mut owner = agent_in(home.path(), Store::in_memory(), &obedient());
+    raise(&mut owner, "free").await;
+
+    dictate(&owner, "run_command", json!({ "command": "orbite providers remove groq" }));
+
+    let approval = owner.is_asked().await;
+    assert!(approval.critical, "{approval:?}");
+    owner.denies();
+    owner.hears().await;
+}

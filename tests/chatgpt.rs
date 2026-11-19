@@ -590,7 +590,7 @@ async fn a_sign_in_that_ended_is_made_again_from_the_conversation() {
     let link = link.expect("a link is sent").to_owned();
     signing_in(&server, &asked_in(&link)["nonce"], 3600).await;
 
-    owner.says(&ended_on(&link));
+    owner.says(&format!("here it is: {}", ended_on(&link)));
     let said = owner.hears().await;
 
     assert!(said.contains("You're using your ChatGPT plan (owner@example.org)"), "{said}");
@@ -660,4 +660,82 @@ async fn the_models_of_the_plan_are_offered_where_the_owner_changes_the_model() 
     );
     // The one in force is marked, as for every other setting.
     assert!(offered.contains("● GPT Small"), "{offered}");
+}
+
+#[tokio::test]
+async fn an_answer_that_comes_whole_rather_than_piece_by_piece_is_read() {
+    let server = MockServer::start().await;
+    let (_home, chatgpt) = signed_in(&server, 3600).await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(stream(&[
+            json!({ "type": "response.output_item.done", "item": { "type": "message",
+                "content": [{ "type": "output_text", "text": "All at once." }] } }),
+            json!({ "type": "response.completed", "response": { "usage": {} } }),
+        ]))
+        .mount(&server)
+        .await;
+    let conversation = [Message::from_owner("Hello")];
+
+    assert_eq!(chatgpt.reply(question(&conversation, &[])).await.unwrap().text, "All at once.");
+}
+
+#[tokio::test]
+async fn what_the_model_declines_is_said_as_declined_with_its_own_words() {
+    let server = MockServer::start().await;
+    let (_home, chatgpt) = signed_in(&server, 3600).await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(stream(&[
+            json!({ "type": "response.output_item.done", "item": { "type": "message",
+                "content": [{ "type": "refusal", "refusal": "I cannot help with that." }] } }),
+            json!({ "type": "response.completed", "response": { "usage": {} } }),
+        ]))
+        .mount(&server)
+        .await;
+    let conversation = [Message::from_owner("Hello")];
+
+    let failed = chatgpt.reply(question(&conversation, &[])).await.unwrap_err();
+
+    assert_eq!(failed, ProviderError::Declined("I cannot help with that.".into()));
+}
+
+#[tokio::test]
+async fn openais_own_trouble_lets_another_provider_answer() {
+    let server = MockServer::start().await;
+    let (_home, chatgpt) = signed_in(&server, 3600).await;
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(stream(&[json!({ "type": "response.failed", "response": { "error": {
+            "code": "server_error", "message": "Something went wrong on our side.",
+        } } })]))
+        .mount(&server)
+        .await;
+    let conversation = [Message::from_owner("Hello")];
+
+    // Busy, unlike a failure about the request itself, is tried elsewhere.
+    let failed = chatgpt.reply(question(&conversation, &[])).await.unwrap_err();
+    assert!(matches!(failed, ProviderError::Busy { .. }), "{failed:?}");
+}
+
+#[tokio::test]
+async fn an_address_sent_when_no_sign_in_is_under_way_is_neither_kept_nor_shown_to_a_model() {
+    use support::{ScriptedProvider, memory_channel};
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::answering(["Never said."]);
+    let asked = provider.clone();
+    let (mut channel, mut owner) = memory_channel();
+    let folder = home.path().to_owned();
+    tokio::spawn(async move {
+        orbite::Agent::new(provider, orbite::Store::in_memory())
+            .configured_in(folder)
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("here it is http://127.0.0.1:1455/auth/callback?code=only-once&state=of-a-link");
+    let said = owner.hears().await;
+
+    assert!(said.contains("/providers connect chatgpt"), "{said}");
+    assert_eq!(asked.times_asked(), 0);
 }

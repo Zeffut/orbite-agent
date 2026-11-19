@@ -347,9 +347,17 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         if self.adding {
             // Last in line, in place of one of the same name.
             let mut all = config.providers();
-            all.retain(|provider| provider.name != chosen.name);
-            all.push(chosen);
-            let place = all.len();
+            let place = match all.iter().position(|provider| provider.name == chosen.name) {
+                Some(at) => {
+                    chosen.daily_tokens = all[at].daily_tokens;
+                    all[at] = chosen;
+                    at + 1
+                }
+                None => {
+                    all.push(chosen);
+                    all.len()
+                }
+            };
             config.set_providers(all);
             config.save(&self.home).map_err(stopped)?;
             return self.say(&format!(

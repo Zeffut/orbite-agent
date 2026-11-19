@@ -99,7 +99,7 @@ impl Provider for OpenAiCompatible {
             .headers()
             .get("retry-after")
             .and_then(|value| value.to_str().ok()?.trim().parse::<f64>().ok())
-            .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+            .filter(|seconds| seconds.is_finite() && (0.0..=86_400.0).contains(seconds))
             .map(Duration::from_secs_f64);
         let body =
             response.text().await.map_err(|error| ProviderError::Failed(root_cause(&error)))?;

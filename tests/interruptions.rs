@@ -243,3 +243,22 @@ async fn reset_asked_while_the_agent_works_stops_it_and_starts_afresh() {
     assert_eq!(owner.hears().await, "Hello.");
     assert_eq!(provider.last_asked(), [Message::from_owner("Hi")]);
 }
+
+#[tokio::test]
+async fn a_secret_or_a_sign_in_address_sent_while_the_agent_thinks_is_not_shown_to_the_model() {
+    let workspace = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider.then_never_answers().then(Ok("Noted.".into()));
+    let mut owner = agent_in(workspace.path(), &provider);
+    owner.says("Think hard about this.");
+    while provider.times_asked() == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    owner.says("http://127.0.0.1:1455/auth/callback?code=only-once&state=of-the-link");
+
+    assert_eq!(owner.hears().await, "Noted.");
+    let told = format!("{:?}", provider.last_asked());
+    assert!(!told.contains("only-once") && !told.contains("of-the-link"), "{told}");
+    assert!(told.contains("was not kept"), "{told}");
+}

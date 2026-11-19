@@ -2,8 +2,16 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## Unreleased
+## 0.3.2
 
+Released on 2026-11-19.
+
+- From an independent read of 0.3.0's new code:
+  - The address a sign-in ended on is never kept or shown to a model: also when no sign-in is under way any more, when it comes with other words, or while the agent is at work (as for a secret sent then).
+  - Changing which provider comes first no longer leaves the lighter model of the one before; each provider's key is kept under its own name only; `orbite tryout` uses the right key; a key given in the environment is for an agent with one provider.
+  - Light work counts towards its provider's daily limit and stops with it.
+  - On a ChatGPT plan: a renewal is carried to its end even when the turn is interrupted; OpenAI's own trouble lets another provider answer; an answer that comes whole, or a refusal, is read; an answer is waited for ten minutes at most.
+  - Two changes to the secrets at once no longer lose one; `orbite` run by the agent from a command is asked about every time.
 - On a ChatGPT plan, `/settings model` offers the models of your plan as buttons.
 
 ## 0.3.1

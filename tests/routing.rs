@@ -353,3 +353,35 @@ async fn the_owner_sees_and_changes_their_providers_from_the_conversation() {
     assert_eq!(all[0].name, "groq");
     assert_eq!(asked.times_asked(), 1, "/providers is not sent to the model");
 }
+
+#[tokio::test]
+async fn light_work_counts_towards_its_providers_limit_and_stops_with_it() {
+    let usual = ScriptedProvider::answering(["Never said."]);
+    let light = ScriptedProvider::answering(["A summary.", "Never said either."]);
+    light.costing(costing(1000));
+    let second = ScriptedProvider::answering(["From the second.", "From the second again."]);
+    let routed = Routed::through("first", usual.clone())
+        .limited_to(1000)
+        .or("second", second)
+        .with_light("first (light)", light.clone());
+
+    // The light model uses up what the Owner lets this Provider use.
+    assert_eq!(by(routed.reply(hi(true)).await.unwrap().usage), "first (light)");
+
+    assert_eq!(by(routed.reply(hi(true)).await.unwrap().usage), "second");
+    assert_eq!(by(routed.reply(hi(false)).await.unwrap().usage), "second");
+    assert_eq!((usual.times_asked(), light.times_asked()), (0, 1));
+}
+
+#[tokio::test]
+async fn a_wait_too_long_for_any_clock_does_not_bring_the_agent_down() {
+    let first = ScriptedProvider::default();
+    first.then(Err(ProviderError::Busy {
+        reason: "come back never".into(),
+        retry_after: Some(Duration::MAX),
+    }));
+    let second = ScriptedProvider::answering(["From the second."]);
+    let routed = Routed::through("first", first).or("second", second);
+
+    assert_eq!(routed.reply(hi(false)).await.unwrap().text, "From the second.");
+}

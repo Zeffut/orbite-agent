@@ -1212,6 +1212,8 @@ fn only_looks(command: &str) -> bool {
 /// running what was just downloaded. A list of known dangers, not a proof.
 fn is_critical(command: &str) -> bool {
     const DANGEROUS: &[&str] = &[
+        // Orbite's own command changes its Providers, settings and secrets.
+        "orbite",
         "sudo",
         "su",
         "doas",

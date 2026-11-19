@@ -147,6 +147,7 @@ fn with_three_providers(home: &Path) {
     let provider = |name: &str| serde_json::json!({ "name": name, "model": format!("{name}-model"), "key": format!("ORBITE_KEY_{}", name.to_uppercase()) });
     let config = serde_json::json!({
         "language": "en",
+        "light_model": "chatgpt-light",
         "provider": provider("chatgpt"),
         "fallbacks": [provider("groq"), provider("ollama")],
     });
@@ -171,6 +172,8 @@ fn the_owner_sees_their_providers_in_order_and_changes_which_comes_first() {
     assert!(moved.status.success(), "{}", shown(&moved));
     assert!(shown(&moved).contains("next start"), "{}", shown(&moved));
     assert_eq!(provider_names(home.path()), ["groq", "chatgpt", "ollama"]);
+    // The lighter model was one of the Provider that came first.
+    assert_eq!(orbite::Config::load(home.path()).unwrap().light_model, None);
 }
 
 #[test]
