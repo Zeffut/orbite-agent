@@ -432,6 +432,8 @@ impl Host {
                     .split("{{")
                     .skip(1)
                     .filter_map(|after| after.split_once("}}"))
+                    // Orbite's own keys are not the Agent's to type.
+                    .filter(|(name, _)| !name.starts_with("ORBITE_"))
                     .filter_map(|(name, _)| {
                         Some((name.to_owned(), self.secrets.as_ref()?.get(name).ok()??))
                     })
@@ -545,12 +547,14 @@ impl Host {
                 } else {
                     self.language.say("Create a file", "Créer un fichier")
                 };
+                // What decides what the Agent can reach is not an ordinary file.
+                let own = self.is_orbites_own(&path);
                 Review::Ask(Approval {
                     summary: summary.into(),
-                    contained: self.contains(&path),
+                    contained: self.contains(&path) && !own,
                     detail: format!("{path}\n\n{}", preview(&content)),
                     irreversible: replaces,
-                    ..Approval::default()
+                    critical: own,
                 })
             }
             Action::ListSecrets => Review::Free,
@@ -727,7 +731,8 @@ impl Host {
                 Err(problem) => Review::Refuse(problem),
                 Ok(_) => Review::Ask(Approval {
                     summary: self.language.say("Edit a file", "Modifier un fichier").into(),
-                    contained: self.contains(&edit.path),
+                    critical: self.is_orbites_own(&edit.path),
+                    contained: self.contains(&edit.path) && !self.is_orbites_own(&edit.path),
                     detail: format!(
                         "{}\n\n{}\n{}\n\n{}\n{}",
                         edit.path,
@@ -738,7 +743,6 @@ impl Host {
                     ),
                     // The replaced passage stays in the Conversation.
                     irreversible: false,
-                    ..Approval::default()
                 }),
             },
         }
@@ -923,6 +927,38 @@ impl Host {
             }
         }
         resolved.starts_with(&self.workspace)
+    }
+
+    /// True when `path` is one of the files that decide what the Agent can
+    /// reach or holds its secrets: its Extensions, its MCP servers, its
+    /// settings. Writing there goes through the Actions made for it, or is
+    /// asked about at every Permission Level.
+    fn is_orbites_own(&self, path: &str) -> bool {
+        let mut resolved = PathBuf::new();
+        for part in self.locate(path).components() {
+            match part {
+                std::path::Component::ParentDir => {
+                    resolved.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => resolved.push(other),
+            }
+        }
+        let Some(home) = self.workspace.parent() else { return false };
+        let Ok(inside) = resolved.strip_prefix(home) else { return false };
+        let first =
+            inside.components().next().map(|part| part.as_os_str().to_string_lossy().into_owned());
+        matches!(
+            first.as_deref(),
+            Some(
+                "extensions"
+                    | "mcp.json"
+                    | "config.json"
+                    | "secrets.key"
+                    | "secrets.sealed"
+                    | "tryouts.json"
+            )
+        )
     }
 
     /// `path` as the Host sees it: `~` is the home folder, and a relative
@@ -1133,7 +1169,13 @@ fn only_looks(command: &str) -> bool {
         "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint", "-fprint0", "-fprintf",
         "-s", "--set",
     ];
-    if command.contains(|c| ";&><$`(){}\\\n\r!".contains(c)) {
+    // Nothing the shell would work out by itself after this look: what a
+    // pattern or ~ ends up naming cannot be known here.
+    if command.contains(|c| ";&><$`(){}\\\n\r!*?[]~".contains(c)) {
+        return false;
+    }
+    // Where the secrets given to a command can be read back from.
+    if command.contains("/proc/") {
         return false;
     }
     command.split('|').all(|stage| {

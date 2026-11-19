@@ -254,3 +254,75 @@ async fn the_owner_is_told_which_secrets_an_extension_would_use() {
     let kept = fs::read_to_string(extensions.path().join("counter/extension.json")).unwrap();
     assert!(kept.contains("WEATHER_KEY"), "{kept}");
 }
+
+#[tokio::test]
+async fn a_script_the_owner_has_not_approved_changes_nothing_that_is_kept() {
+    let extensions = tempfile::tempdir().unwrap();
+    // A counter that has counted, then a script of the same name that wipes
+    // what is kept, as soon as it is loaded.
+    let wiping = format!(
+        "store.keys().forEach(key => store.remove(key)); store.set('planted', 1);\n{COUNTER}"
+    );
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("create_extension", counter(COUNTER))])
+        .then_acts([("counter_bump", json!({}))])
+        .then_acts([("create_extension", counter(&wiping))])
+        .then_acts([("counter_bump", json!({}))])
+        .then(Ok("Done.".into()));
+    let mut owner = agent_extended_in(extensions.path(), &provider);
+
+    owner.says("Make a counter, then change it.");
+    owner.is_asked().await;
+    owner.allows();
+    owner.is_asked().await;
+    owner.denies();
+    owner.hears().await;
+
+    assert_eq!(
+        outcomes(&provider).last().unwrap(),
+        "Count: 2",
+        "what the counter kept was changed by a script nobody approved"
+    );
+    let kept = fs::read_to_string(extensions.path().join("counter/data.json")).unwrap();
+    assert!(!kept.contains("planted"), "{kept}");
+}
+
+#[tokio::test]
+async fn writing_straight_into_orbites_own_folders_is_asked_about_at_every_level() {
+    let home = tempfile::tempdir().unwrap();
+    let (mut channel, mut owner) = memory_channel();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("set_permission_level", json!({ "level": "free" }))])
+        .then_acts([("write_file", json!({ "path": "../extensions/sneaky/main.js", "content": "function describe() { return []; }" }))])
+        .then_acts([("write_file", json!({ "path": "../mcp.json", "content": "{}" }))])
+        .then_acts([("write_file", json!({ "path": "notes.txt", "content": "fine" }))])
+        .then(Ok("Done.".into()));
+    let (model, folder) = (provider.clone(), home.path().to_owned());
+    tokio::spawn(async move {
+        Agent::new(model, Store::in_memory())
+            .working_in(folder.join("workspace"))
+            .extending_in(folder.join("extensions"))
+            .connecting_servers_in(&folder)
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("Be free, then write these.");
+    owner.is_asked().await; // loosening the level
+    owner.allows();
+    // Free, and still asked: these files decide what the Agent can reach.
+    let first = owner.is_asked().await;
+    assert!(first.critical && first.detail.contains("extensions/sneaky"), "{first:?}");
+    owner.denies();
+    let second = owner.is_asked().await;
+    assert!(second.critical && second.detail.contains("mcp.json"), "{second:?}");
+    owner.denies();
+    owner.hears().await;
+
+    assert!(owner.was_asked_nothing(), "an ordinary file asked at the free level");
+    assert!(
+        !home.path().join("extensions/sneaky").exists() && !home.path().join("mcp.json").exists()
+    );
+}

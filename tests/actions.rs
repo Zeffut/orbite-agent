@@ -118,6 +118,10 @@ async fn commands_that_could_change_something_are_never_taken_for_inspection() {
         "ls\nrm notes.txt",
         "sudo ls",
         "curl https://example.org",
+        "cat ../s*.key",
+        "cat ~/.s?h/id_e*",
+        "cat [n]otes.txt ../secrets.sealed",
+        "grep -z TOKEN /proc/self/environ",
     ] {
         let workspace = tempfile::tempdir().unwrap();
         fs::write(workspace.path().join("notes.txt"), "keep me").unwrap();

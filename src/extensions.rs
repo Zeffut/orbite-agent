@@ -334,6 +334,8 @@ impl Extensions {
         let lent: Vec<(String, String)> = extension
             .secrets
             .iter()
+            // Orbite's own keys are not the Agent's to hand out.
+            .filter(|name| !name.starts_with("ORBITE_"))
             .filter_map(|name| Some((name.clone(), secrets?.get(name).ok()??)))
             .collect();
         let call = format!(
@@ -456,10 +458,17 @@ impl Extensions {
         let context = Context::full(&runtime).map_err(|error| Failure::Broke(error.to_string()))?;
 
         let data = self.folder.join(&extension.name).join("data.json");
-        let kept: BTreeMap<String, Value> = fs::read_to_string(&data)
-            .ok()
-            .and_then(|kept| serde_json::from_str(&kept).ok())
-            .unwrap_or_default();
+        // A script only asked what it adds is not an Extension yet: it is
+        // given nothing that was kept, and keeps nothing.
+        let describing = reaching.is_none();
+        let kept: BTreeMap<String, Value> = if describing {
+            BTreeMap::new()
+        } else {
+            fs::read_to_string(&data)
+                .ok()
+                .and_then(|kept| serde_json::from_str(&kept).ok())
+                .unwrap_or_default()
+        };
         let store = Arc::new(Mutex::new((kept, false)));
 
         let loaded = context.with(|ctx| -> Result<(), String> {
@@ -511,7 +520,11 @@ impl Extensions {
                                 .to_owned())
                         }
                         Some((handle, lent)) => {
-                            handle.block_on(reach(&http, &hosts, lent, &request, deadline))
+                            // Whatever goes wrong, the script is told a
+                            // secret's name, never its value.
+                            handle
+                                .block_on(reach(&http, &hosts, lent, &request, deadline))
+                                .map_err(|problem| named(&problem, lent))
                         }
                     };
                     answer.unwrap_or_else(|problem| json!({ "error": problem })).to_string()
@@ -545,7 +558,7 @@ impl Extensions {
         }
 
         let store = store.lock().unwrap();
-        if store.1 {
+        if store.1 && !describing {
             let folder = self.folder.join(&extension.name);
             let being_written = folder.join("data.writing");
             let written = fs::create_dir_all(&folder)
@@ -675,12 +688,9 @@ format!(
             .text()
             .await
             .map_err(|error| format!("{host} did not answer whole: {}", error.without_url()))?;
-        let text: String = text.chars().take(BODY_LIMIT).collect();
-        // A service that sends a secret back does not hand it to the script.
-        let mut text = text;
-        for (name, value) in lent {
-            text = text.replace(value.as_str(), &format!("[{name}]"));
-        }
+        // A service that sends a secret back does not hand it to the script:
+        // named before the text is cut, so that no part of one is left.
+        let text: String = named(&text, lent).chars().take(BODY_LIMIT).collect();
         return Ok(json!({ "status": status.as_u16(), "body": text }));
     }
     Err(format!("{host} redirects again and again"))
@@ -710,6 +720,25 @@ pub(crate) fn filled(text: &str, lent: &[(String, String)]) -> Result<String, St
         rest = after;
     }
     Ok(filled + rest)
+}
+
+/// `text` with the value of each secret lent replaced by its name, in the
+/// forms an address or an error may give it.
+fn named(text: &str, lent: &[(String, String)]) -> String {
+    let mut named = text.to_owned();
+    for (name, value) in lent {
+        let marked = format!("[{name}]");
+        for form in [value.clone(), value.to_lowercase(), value.to_uppercase()] {
+            if !form.is_empty() {
+                named = named.replace(&form, &marked);
+            }
+        }
+        let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+        if encoded != *value {
+            named = named.replace(&encoded, &marked);
+        }
+    }
+    named
 }
 
 fn listed(hosts: &[String]) -> String {

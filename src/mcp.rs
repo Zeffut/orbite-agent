@@ -244,7 +244,10 @@ impl Mcp {
             filled.push_str(before);
             match after.split_once('}') {
                 Some((name, after)) => {
-                    filled.push_str(&self.secrets.get(name).ok().flatten().unwrap_or_default());
+                    // Orbite's own keys are not given to a server.
+                    if !name.starts_with("ORBITE_") {
+                        filled.push_str(&self.secrets.get(name).ok().flatten().unwrap_or_default());
+                    }
                     rest = after;
                 }
                 None => {
@@ -546,8 +549,10 @@ impl Link {
         if let Some(session) = session {
             sending = sending.header("mcp-session-id", session.as_str());
         }
-        let answer =
-            sending.send().await.map_err(|error| format!("it could not be reached: {error}"))?;
+        let answer = sending
+            .send()
+            .await
+            .map_err(|error| format!("it could not be reached: {}", error.without_url()))?;
         if let Some(given) =
             answer.headers().get("mcp-session-id").and_then(|given| given.to_str().ok())
         {
@@ -563,7 +568,7 @@ impl Link {
         let body = answer
             .text()
             .await
-            .map_err(|error| format!("its answer did not arrive whole: {error}"))?;
+            .map_err(|error| format!("its answer did not arrive whole: {}", error.without_url()))?;
         // An error told in the protocol's own words is an answer.
         if !status.is_success() && !body.contains("\"jsonrpc\"") {
             return Err(format!("it answered HTTP {}", status.as_u16()));
