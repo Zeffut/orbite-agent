@@ -10,6 +10,7 @@ use crate::Language;
 use crate::actions::{Host, Review};
 use crate::attachments::{attachments, is_showable_image};
 use crate::extensions::{Extensions, Unremovable};
+use crate::mcp::Mcp;
 use crate::memory::Memory;
 use crate::routines::{self, Routine};
 use crate::secrets::Secrets;
@@ -190,6 +191,7 @@ impl<P: Provider + 'static> Agent<P> {
             secrets: None,
             language: Language::English,
             extensions: None,
+            mcp: None,
         };
         let (subagents, reports) = Subagents::new();
         Self {
@@ -251,6 +253,13 @@ impl<P: Provider + 'static> Agent<P> {
         if let Some(extensions) = self.host_mut().extensions.as_mut().and_then(Arc::get_mut) {
             extensions.time_limit = limit;
         }
+        self
+    }
+
+    /// The installation's folder, whose `mcp.json` lists the MCP servers
+    /// whose tools the Agent can use.
+    pub fn connecting_servers_in(mut self, home: impl AsRef<std::path::Path>) -> Self {
+        self.host_mut().mcp = Some(Arc::new(Mcp::configured_in(home.as_ref())));
         self
     }
 
@@ -402,6 +411,12 @@ impl<P: Provider + 'static> Agent<P> {
                 Some(false) => return,
                 None => {}
             }
+            if text.trim() == "/mcp" {
+                if channel.send(&self.servers().await).await.is_err() {
+                    return;
+                }
+                continue;
+            }
             if let Some(asked) = text.trim().strip_prefix("/extensions") {
                 if channel.send(&self.extensions(asked)).await.is_err() {
                     return;
@@ -544,7 +559,7 @@ impl<P: Provider + 'static> Agent<P> {
     }
 
     /// The Actions on offer right now, as told to the model.
-    fn actions(&mut self) -> Result<Vec<ActionSpec>, StoreError> {
+    async fn actions(&mut self) -> Result<Vec<ActionSpec>, StoreError> {
         let mut actions = self.host.specs();
         actions.push(search_spec());
         actions.push(send_file_spec());
@@ -554,6 +569,11 @@ impl<P: Provider + 'static> Agent<P> {
         actions.push(wake_ups_spec());
         actions.extend(permission_specs());
         actions.extend(self.host.extension_specs(&actions));
+        if let Some(mcp) = &self.host.mcp {
+            // Servers are started the first time their tools are wanted.
+            mcp.connect(false).await;
+            actions.extend(mcp.specs(&actions));
+        }
         // An Extension that could not say what it adds was just turned off.
         for report in self.host.extensions.iter().flat_map(|extensions| extensions.take_reports()) {
             self.store.append(&Message::Notice(report))?;
@@ -572,7 +592,7 @@ impl<P: Provider + 'static> Agent<P> {
         for _ in 0..STEPS_BEFORE_STOPPING {
             // Asked afresh on every step: the Agent may just have written
             // itself an Extension.
-            let actions = self.actions()?;
+            let actions = self.actions().await?;
             self.fit(channel, &actions).await?;
             let mut conversation = self.store.conversation()?;
             // Every protocol expects the Owner to speak first.
@@ -1261,6 +1281,40 @@ impl<P: Provider + 'static> Agent<P> {
             }
         }
         self.store.append(&Message::Notice(format!("{} {}", report.who, report.ended)))
+    }
+
+    /// The MCP servers and what each offers, trying again those that failed.
+    async fn servers(&self) -> String {
+        let say = |english: &str, french: &str| self.language.say(english, french).to_owned();
+        let Some(mcp) = &self.host.mcp else {
+            return say(
+                "There is nowhere to list MCP servers.",
+                "Il n'y a nulle part où lister des serveurs MCP.",
+            );
+        };
+        mcp.connect(true).await;
+        let (servers, problem) = mcp.status();
+        if let Some(problem) = problem {
+            return format!("🔴 {problem}");
+        }
+        if servers.is_empty() {
+            return say(
+                "No MCP server is set up. They are listed in mcp.json, in Orbite's folder.",
+                "Aucun serveur MCP n'est configuré. Ils se déclarent dans mcp.json, dans le dossier d'Orbite.",
+            );
+        }
+        let mut listed = say("MCP servers:", "Serveurs MCP :");
+        for (name, state) in servers {
+            match state {
+                Ok(tools) => {
+                    listed.push_str(&format!("\n🟢 **{name}**: {tools} {}", say("tools", "outils")))
+                }
+                Err(problem) => {
+                    listed.push_str(&format!("\n🔴 **{name}**: {}", clip(&problem, 200)))
+                }
+            }
+        }
+        listed
     }
 
     /// Lists the Extensions, or turns one on or off, or removes one, as the

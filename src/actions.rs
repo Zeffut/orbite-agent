@@ -14,6 +14,7 @@ use tokio::process::Command;
 
 use crate::Language;
 use crate::extensions::{Extensions, Unremovable};
+use crate::mcp::Mcp;
 use crate::memory::Memory;
 use crate::secrets::Secrets;
 use crate::skills::{Skill, Skills};
@@ -60,6 +61,8 @@ pub(crate) struct Host {
     pub(crate) language: Language,
     /// The Extensions of this installation, when it has somewhere for them.
     pub(crate) extensions: Option<Arc<Extensions>>,
+    /// The MCP servers of this installation, when it has any.
+    pub(crate) mcp: Option<Arc<Mcp>>,
 }
 
 #[derive(Deserialize)]
@@ -310,17 +313,17 @@ impl Host {
         specs
     }
 
-    /// The Extensions, when `request` is not for an Action of Orbite itself.
-    fn extensions_for(&self, request: &ActionRequest) -> Option<&Arc<Extensions>> {
-        self.extensions.as_ref().filter(|_| !is_own(&request.name))
-    }
-
     /// The gate every Action passes through before it is carried out.
     pub(crate) fn review(&self, request: &ActionRequest) -> Review {
-        if let Some(asked) =
-            self.extensions_for(request).and_then(|extensions| extensions.review(request))
-        {
-            return asked.map_or(Review::Free, Review::Ask);
+        if !is_own(&request.name) {
+            let asked = self
+                .extensions
+                .as_ref()
+                .and_then(|extensions| extensions.review(request))
+                .or_else(|| self.mcp.as_ref().and_then(|mcp| mcp.review(request)));
+            if let Some(asked) = asked {
+                return asked.map_or(Review::Free, Review::Ask);
+            }
         }
         let action = match understand(request) {
             Ok(action) => action,
@@ -545,10 +548,17 @@ impl Host {
     }
 
     async fn do_it(&self, request: &ActionRequest) -> String {
-        if let Some(extensions) = self.extensions_for(request)
-            && let Some(outcome) = extensions.carry_out(request).await
-        {
-            return outcome;
+        if !is_own(&request.name) {
+            if let Some(extensions) = &self.extensions
+                && let Some(outcome) = extensions.carry_out(request).await
+            {
+                return outcome;
+            }
+            if let Some(mcp) = &self.mcp
+                && let Some(outcome) = mcp.carry_out(request).await
+            {
+                return outcome;
+            }
         }
         match understand(request) {
             Err(problem) => problem,

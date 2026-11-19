@@ -776,7 +776,7 @@ async fn the_bot_offers_its_commands_in_telegrams_menu() {
         .iter()
         .map(|command| command["command"].as_str().unwrap())
         .collect();
-    assert_eq!(commands, ["stop", "reset", "usage", "extensions"]);
+    assert_eq!(commands, ["stop", "reset", "usage", "mcp", "extensions"]);
 }
 
 // --- One Conversation open in several places ---

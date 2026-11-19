@@ -302,6 +302,7 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
             "Repartir de zéro dans la discussion (la mémoire est gardée)",
         ) },
         { "command": "usage", "description": bot.language.say("What the agent has used", "Ce que l'agent a consommé") },
+        { "command": "mcp", "description": bot.language.say("List the MCP servers and their state", "Lister les serveurs MCP et leur état") },
         { "command": "extensions", "description": bot.language.say(
             "List the extensions, turn one off or remove it",
             "Lister les extensions, en désactiver ou en supprimer une",

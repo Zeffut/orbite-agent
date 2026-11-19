@@ -11,6 +11,7 @@ mod channel;
 mod config;
 mod extensions;
 mod language;
+mod mcp;
 mod memory;
 mod openai_compatible;
 mod provider;

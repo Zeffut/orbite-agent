@@ -16,6 +16,17 @@ The installer checks the machine before changing anything, verifies that what it
 
 An installed Orbite keeps itself up to date: once a day it installs the latest release, only if Orbite's key signed it, and goes back to the previous one if the new one does not start. `orbite update off` turns that off, and `sudo orbite update` updates now.
 
+MCP servers are listed in `mcp.json` in Orbite's folder, in the form other MCP clients use, and their tools become Actions of the Agent behind the same Approval gate; `/mcp` shows their state:
+
+```json
+{ "mcpServers": {
+    "memory": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-memory"] },
+    "github": { "url": "https://api.githubcopilot.com/mcp/", "headers": { "Authorization": "Bearer ${GITHUB_TOKEN}" } }
+} }
+```
+
+`${NAME}` stands for a secret entered with `orbite secret set NAME`, so no key is written in that file.
+
 ## What 1.0 will be
 
 - One command installs Orbite on a Debian or Ubuntu machine: a spare computer, a mini PC, a VPS.

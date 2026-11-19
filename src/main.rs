@@ -175,6 +175,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .learning_in(home.join("skills"))
         .hearing_notices_in(home.join("notices"))
         .extending_in(home.join("extensions"))
+        .connecting_servers_in(&home)
         .keeping_secrets_in(&home)
         .called(config.agent_name.clone().unwrap_or_else(|| "Orbite".into()))
         .speaking(Language::of(config.language.as_deref()))
