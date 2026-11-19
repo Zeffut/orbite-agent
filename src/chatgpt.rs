@@ -16,7 +16,7 @@ use crate::{ActionRequest, Message, Provider, ProviderError, Reply, Request, Sec
 
 /// Where the Owner's browser ends once they agreed. Nothing listens there:
 /// the Owner sends the address back. OpenAI wants this very host.
-const ENDS_AT: &str = "http://127.0.0.1:1455/auth/callback";
+pub(crate) const ENDS_AT: &str = "http://127.0.0.1:1455/auth/callback";
 /// What the tokens are for, whatever address is spoken to.
 const RESOURCE: &str = "https://api.openai.com/v1";
 const ISSUER: &str = "https://auth.openai.com";
@@ -29,8 +29,8 @@ const NAMESPACE: &str = "orbite";
 const KEPT_AS: &str = "ORBITE_CHATGPT";
 /// Where the Owner sees and limits what their plan is used for.
 pub(crate) const MANAGE_USAGE: &str = "https://chatgpt.com/settings/usage";
-const SIGN_IN_AGAIN: &str = "sign in to ChatGPT again by running `orbite setup provider` on the \
-                             machine where I run";
+const SIGN_IN_AGAIN: &str = "sign in to ChatGPT again: send me /providers connect chatgpt, or run \
+                             `orbite setup provider` on the machine where I run";
 /// A refresh that failed in one of these ways will never work again.
 const ENDED: &[&str] = &[
     "invalid_grant",

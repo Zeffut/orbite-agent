@@ -559,3 +559,42 @@ async fn the_models_offered_are_those_openai_lists_for_the_plan() {
         ]
     );
 }
+
+mod support;
+
+#[tokio::test]
+async fn a_sign_in_that_ended_is_made_again_from_the_conversation() {
+    use support::{ScriptedProvider, memory_channel};
+    let server = MockServer::start().await;
+    let home = tempfile::tempdir().unwrap();
+    let config = json!({
+        "language": "en",
+        "provider": { "name": "chatgpt", "model": "gpt-test", "address": server.uri() },
+    });
+    std::fs::write(home.path().join("config.json"), config.to_string()).unwrap();
+    let provider = ScriptedProvider::default();
+    let asked = provider.clone();
+    let (mut channel, mut owner) = memory_channel();
+    let folder = home.path().to_owned();
+    tokio::spawn(async move {
+        orbite::Agent::new(provider, orbite::Store::in_memory())
+            .configured_in(folder)
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("/providers connect chatgpt");
+    let said = owner.hears().await;
+    assert!(said.contains("Continue with ChatGPT"), "{said}");
+    let link = said.split_whitespace().find(|word| word.contains("/api/accounts/authorize?"));
+    let link = link.expect("a link is sent").to_owned();
+    signing_in(&server, &asked_in(&link)["nonce"], 3600).await;
+
+    owner.says(&ended_on(&link));
+    let said = owner.hears().await;
+
+    assert!(said.contains("You're using your ChatGPT plan (owner@example.org)"), "{said}");
+    assert!(said.contains("https://chatgpt.com/settings/usage"), "{said}");
+    assert!(ChatGpt::kept_in(home.path(), "gpt-test").is_signed_in());
+    assert_eq!(asked.times_asked(), 0, "the address is not shown to a model");
+}

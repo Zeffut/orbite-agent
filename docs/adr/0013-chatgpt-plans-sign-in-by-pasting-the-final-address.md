@@ -11,5 +11,5 @@ Three smaller choices go with it. The identity token is checked for who issued i
 ## Consequences
 
 - OpenAI may decide this is not how its sign-in is to be used, or end the programme, which it calls a preview. The Owner is told so when signing in, and an API Key always works.
-- Signing in takes a terminal on the Host (`orbite setup provider`), also when a sign-in ends; doing it from the Conversation can come later.
+- The first sign-in is made in setup, on the Host; signing in again when a sign-in ends is also done from the Conversation, where the pasted address is used once, erased from the Channel and never shown to a model.
 - If OpenAI comes to require the signature check, a dependency is added then.

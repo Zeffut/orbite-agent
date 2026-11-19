@@ -166,6 +166,9 @@ pub struct Agent<P> {
     /// The installation's folder, where the settings not kept with the
     /// Conversation are.
     home: Option<PathBuf>,
+    /// A sign-in to a ChatGPT plan begun in the Conversation, until the
+    /// address it ends on is sent back.
+    chatgpt_sign_in: Option<(crate::ChatGpt, crate::chatgpt::Begun)>,
     /// True when ending the Conversation gets Orbite started again, as a
     /// service does.
     restarted: bool,
@@ -215,6 +218,7 @@ impl<P: Provider + 'static> Agent<P> {
             time_check: Duration::from_secs(20),
             notices: None,
             home: None,
+            chatgpt_sign_in: None,
             restarted: false,
             model_at_fault: 0,
             owed: false,
@@ -528,6 +532,61 @@ impl<P: Provider + 'static> Agent<P> {
             }
             if let Some(asked) = text.trim().strip_prefix("/extensions") {
                 if channel.send(&self.extensions(asked)).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            // Signing in to a ChatGPT plan, again or for the first time on
+            // a Provider already set up: a link, then the address it ends on.
+            if text.trim() == "/providers connect chatgpt"
+                && let Some(home) = self.home.clone()
+            {
+                let said = match self.sign_in_to_chatgpt(&home) {
+                    Ok(link) => format!(
+                        "{}\n\n{link}\n\n{}",
+                        self.language.say(
+                            "Continue with ChatGPT: open this link and sign in.",
+                            "Continuer avec ChatGPT : ouvrez ce lien et connectez-vous."
+                        ),
+                        self.language.say(
+                            "Your browser will then stop on a page that does not load, at an address starting with \
+                             http://127.0.0.1:1455. That is expected: copy that whole address and send it to me here.",
+                            "Votre navigateur s'arrêtera ensuite sur une page qui ne se charge pas, à une adresse \
+                             commençant par http://127.0.0.1:1455. C'est normal : copiez cette adresse entière et \
+                             envoyez-la-moi ici."
+                        )
+                    ),
+                    Err(problem) => format!("🔴 {problem}"),
+                };
+                if channel.send(&said).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            if text.trim().starts_with(crate::chatgpt::ENDS_AT)
+                && let Some((chatgpt, begun)) = self.chatgpt_sign_in.take()
+            {
+                channel.erase_last_received().await;
+                let said = match chatgpt.signed_in_at(&begun, &text).await {
+                    Ok(account) => format!(
+                        "✅ {}{}\n[{}]({})",
+                        self.language.say(
+                            "You're using your ChatGPT plan",
+                            "Vous utilisez votre forfait ChatGPT"
+                        ),
+                        if account.is_empty() { String::new() } else { format!(" ({account})") },
+                        self.language.say("Manage usage", "Gérer l'utilisation"),
+                        crate::chatgpt::MANAGE_USAGE
+                    ),
+                    Err(problem) => format!(
+                        "🔴 {problem}. {}",
+                        self.language.say(
+                            "Start again with /providers connect chatgpt",
+                            "Recommencez avec /providers connect chatgpt"
+                        )
+                    ),
+                };
+                if channel.send(&said).await.is_err() {
                     return;
                 }
                 continue;
@@ -1894,6 +1953,29 @@ impl<P: Provider + 'static> Agent<P> {
             ));
         }
         shown.trim_end().to_owned()
+    }
+
+    /// Begins signing in to the ChatGPT plan set up in `home`; the link to follow.
+    fn sign_in_to_chatgpt(&mut self, home: &std::path::Path) -> Result<String, String> {
+        let set_up = crate::Config::load(home).map_err(|error| error.to_string())?.providers();
+        let Some(choice) = set_up.iter().find(|provider| provider.name == "chatgpt") else {
+            return Err(self
+                .language
+                .say(
+                    "No ChatGPT plan is set up. Add one on the machine: orbite providers add",
+                    "Aucun forfait ChatGPT n'est configuré. Ajoutez-en un sur la machine : orbite providers add",
+                )
+                .into());
+        };
+        let chatgpt = crate::ChatGpt::kept_in(home, &choice.model);
+        let chatgpt = match &choice.address {
+            Some(address) => chatgpt.at(address),
+            None => chatgpt,
+        };
+        let begun = chatgpt.sign_in()?;
+        let link = begun.link().to_owned();
+        self.chatgpt_sign_in = Some((chatgpt, begun));
+        Ok(link)
     }
 
     /// Sends the Owner the file a `send_file` request names; the text is the
