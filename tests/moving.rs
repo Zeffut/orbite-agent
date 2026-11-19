@@ -233,3 +233,69 @@ fn nothing_is_removed_without_the_owner_saying_yes() {
     assert!(machine.has("usr/local/bin/orbite") && machine.has("var/lib/orbite/orbite.db"));
     assert!(machine.calls().is_empty(), "{}", machine.calls());
 }
+
+#[tokio::test]
+async fn links_the_agent_made_are_kept_as_links_and_never_followed() {
+    let home = lived_in().await;
+    // As a Python environment leaves in a workspace: one to a program of the
+    // system, one to something that is not there.
+    std::os::unix::fs::symlink("/usr/bin/env", home.path().join("workspace/env")).unwrap();
+    std::os::unix::fs::symlink("/nowhere/at/all", home.path().join("workspace/dangling")).unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let archive = elsewhere.path().join("export.tar.gz");
+    assert!(orbite(home.path(), &["export", archive.to_str().unwrap()]).status.success());
+
+    let fresh = elsewhere.path().join("home");
+    let restored = orbite(&fresh, &["restore", archive.to_str().unwrap()]);
+
+    assert!(restored.status.success(), "{}", shown(&restored));
+    assert_eq!(
+        fs::read_link(fresh.join("workspace/dangling")).unwrap().to_str(),
+        Some("/nowhere/at/all")
+    );
+    assert_eq!(fs::read_link(fresh.join("workspace/env")).unwrap().to_str(), Some("/usr/bin/env"));
+}
+
+#[tokio::test]
+async fn an_export_written_inside_the_agents_folder_does_not_swallow_itself() {
+    let home = lived_in().await;
+
+    let exported = Command::new(env!("CARGO_BIN_EXE_orbite"))
+        .args(["export", "backup.tar.gz"])
+        .current_dir(home.path())
+        .env("ORBITE_HOME", home.path())
+        .output()
+        .unwrap();
+
+    assert!(exported.status.success(), "{}", shown(&exported));
+    assert!(fs::metadata(home.path().join("backup.tar.gz")).unwrap().len() < 1_000_000);
+    // Nothing of the Conversation is left lying beside it.
+    let left: Vec<_> = fs::read_dir(home.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_string_lossy().contains("copy"))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[tokio::test]
+async fn a_restore_that_cannot_be_whole_changes_nothing() {
+    let home = lived_in().await;
+    let elsewhere = tempfile::tempdir().unwrap();
+    let archive = elsewhere.path().join("export.tar.gz");
+    orbite(home.path(), &["export", archive.to_str().unwrap()]);
+    // No Agent here yet, but a folder of the same name as one in the export, with something in it.
+    let fresh = elsewhere.path().join("home");
+    fs::create_dir_all(fresh.join("workspace")).unwrap();
+    fs::write(fresh.join("workspace/mine.txt"), "kept").unwrap();
+
+    let refused = orbite(&fresh, &["restore", archive.to_str().unwrap()]);
+
+    assert!(!refused.status.success(), "{}", shown(&refused));
+    assert!(shown(&refused).contains("workspace"), "{}", shown(&refused));
+    assert!(
+        !fresh.join("config.json").exists() && !fresh.join("orbite.db").exists(),
+        "it was restored in part"
+    );
+    assert_eq!(fs::read_to_string(fresh.join("workspace/mine.txt")).unwrap(), "kept");
+}

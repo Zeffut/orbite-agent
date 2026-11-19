@@ -63,8 +63,10 @@ for tool in curl openssl sha256sum; do
 done
 if [ -n "$MISSING" ]; then
     say "Installing what the installer needs:$MISSING"
-    apt-get update -qq
-    apt-get install -y -qq --no-install-recommends ca-certificates curl openssl coreutils >/dev/null
+    # Asked nothing: a question here would read the rest of this script as its answer.
+    apt-get update -qq </dev/null
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        ca-certificates curl openssl coreutils </dev/null >/dev/null
 fi
 
 # --- The program is downloaded and checked before it is put anywhere ---
@@ -171,12 +173,13 @@ computer() {
     fi
     echo "deb [signed-by=$KEYRING] https://packages.mozilla.org/apt mozilla main" \
         >"$ROOT/etc/apt/sources.list.d/mozilla.list"
-    printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' \
+    # Only the browser is taken from there, whatever else that source offers.
+    printf 'Package: firefox*\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n\nPackage: *\nPin: origin packages.mozilla.org\nPin-Priority: 1\n' \
         >"$ROOT/etc/apt/preferences.d/mozilla"
-    apt-get update -qq || return 1
+    apt-get update -qq </dev/null || return 1
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends --allow-downgrades \
         xvfb xdotool firefox fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
-        >/dev/null || return 1
+        </dev/null >/dev/null || return 1
 }
 
 if [ "${ORBITE_WITHOUT_COMPUTER:-}" = "1" ]; then
@@ -191,8 +194,13 @@ else
 fi
 
 if [ "$UPDATING" = yes ]; then
-    systemctl restart orbite
-    say "Orbite is updated and running."
+    # An Orbite that was never set up has nothing to run yet.
+    if [ -f "$ROOT$HOME_DIR/config.json" ]; then
+        systemctl restart orbite
+        say "Orbite is updated and running."
+    else
+        say "Orbite is updated. Set it up with: sudo orbite setup"
+    fi
     exit 0
 fi
 

@@ -339,3 +339,16 @@ fn orbite_is_installed_even_when_the_computer_cannot_be() {
     assert!(machine.path("usr/local/bin/orbite").exists());
     assert!(shown(&installed).contains("computer could not be set up"), "{}", shown(&installed));
 }
+
+#[test]
+fn installing_again_does_not_start_an_orbite_that_was_never_set_up() {
+    let machine = Machine::debian();
+    machine.install();
+    fs::remove_file(machine.path("calls.log")).unwrap();
+
+    let again = machine.install();
+
+    assert!(again.status.success(), "{}", shown(&again));
+    assert!(!machine.calls().contains("systemctl restart orbite"), "{}", machine.calls());
+    assert!(shown(&again).contains("orbite setup"), "{}", shown(&again));
+}

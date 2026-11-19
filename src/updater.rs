@@ -10,8 +10,6 @@ use std::time::Duration;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use sha2::{Digest, Sha256};
 
-use crate::Config;
-
 /// The key Orbite's releases are signed with (its public part): the same
 /// one the installer holds.
 pub const RELEASE_KEY: [u8; 32] = [
@@ -88,7 +86,7 @@ impl Updater {
     /// Looks for a newer release and installs it. The text says what was done.
     pub async fn run(self, service: &impl Service) -> Result<String, UpdateError> {
         if let Some(home) = &self.home
-            && Config::load(home).is_ok_and(|config| config.automatic_updates == Some(false))
+            && updates_are_off(home)
         {
             return Ok("Automatic updates are off.".into());
         }
@@ -116,7 +114,9 @@ impl Updater {
         }
 
         // A version that did not start here is left alone until the next one.
-        let refused = self.home.as_ref().map(|home| home.join("update-refused"));
+        // Kept beside the program, where only root writes: the Agent's own
+        // folder is the Agent's, and nothing it could plant there is trusted.
+        let refused = Some(sibling(&self.program, "refused"));
         if let Some(refused) = &refused
             && fs::read_to_string(refused).is_ok_and(|kept| kept.trim() == version)
         {
@@ -149,7 +149,14 @@ impl Updater {
         }
         service.restart().map_err(|error| failed("could not restart Orbite", error))?;
         tokio::time::sleep(self.wait).await;
-        if service.is_running() {
+        // Looked at more than once: a program that starts and falls over is
+        // started again by its service, and one look could catch it standing.
+        let mut running = service.is_running();
+        for _ in 0..2 {
+            tokio::time::sleep(self.wait / 4).await;
+            running &= service.is_running();
+        }
+        if running {
             self.tell(&format!(
                 "Orbite was updated from version {} to version {version}.",
                 self.running
@@ -168,7 +175,6 @@ impl Updater {
         )?;
         let _ = service.restart();
         if let Some(refused) = &refused {
-            let _ = refused.parent().map(fs::create_dir_all);
             let _ = fs::write(refused, &version);
         }
         self.tell(&format!(
@@ -195,27 +201,61 @@ impl Updater {
         Ok(response.bytes().await.map_err(|error| failed(&what, error))?.to_vec())
     }
 
-    /// Leaves a word for the Owner, which the Agent passes on.
+    /// Leaves a word for the Owner, which the Agent passes on. Updates run
+    /// as root and the folder is the Agent's: nothing there is followed if
+    /// it is a link, and nothing changes hands but a folder made here.
     fn tell(&self, text: &str) {
+        use std::io::Write;
+        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
         let Some(home) = &self.home else { return };
         let notices = home.join("notices");
-        if fs::create_dir_all(&notices).is_ok() {
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |since| since.as_millis());
-            let notice = notices.join(format!("{stamp}-update.txt"));
-            let _ = fs::write(&notice, text);
-            // Updates run as root, and the Agent, which is not root, has to
-            // read the notice and remove it.
-            #[cfg(unix)]
-            if let Ok(owner) = fs::metadata(home) {
-                use std::os::unix::fs::{MetadataExt, chown};
-                for path in [&notices, &notice] {
-                    let _ = chown(path, Some(owner.uid()), Some(owner.gid()));
-                }
-            }
+        let made = fs::create_dir_all(home).is_ok() && fs::create_dir(&notices).is_ok();
+        let opened = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(&notices);
+        let Ok(folder) = opened else { return };
+        if made && let Ok(owner) = fs::symlink_metadata(home) {
+            // The Agent, which is not root, has to remove what it has read.
+            // SAFETY: a call on a folder this function holds open.
+            unsafe { libc::fchown(folder.as_raw_fd(), owner.uid(), owner.gid()) };
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_millis());
+        let Ok(name) = std::ffi::CString::new(format!("{stamp}-update.txt")) else { return };
+        let flags = libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW;
+        // SAFETY: a new file, made inside the folder held open and nowhere else.
+        let made = unsafe { libc::openat(folder.as_raw_fd(), name.as_ptr(), flags, 0o644) };
+        if made >= 0 {
+            // SAFETY: the descriptor was just opened and belongs to nothing else.
+            let mut notice = unsafe { fs::File::from_raw_fd(made) };
+            let _ = notice.write_all(text.as_bytes());
         }
     }
+}
+
+/// True when the settings kept in `home` say the Owner wants no automatic
+/// update. Read as root from a folder that is not root's: only a plain file
+/// of an ordinary size is read, and never through a link.
+fn updates_are_off(home: &Path) -> bool {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let opened = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(home.join("config.json"));
+    let Ok(file) = opened else { return false };
+    if !file.metadata().is_ok_and(|about| about.is_file() && about.len() < 1_000_000) {
+        return false;
+    }
+    let mut written = String::new();
+    if file.take(1_000_000).read_to_string(&mut written).is_err() {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(&written)
+        .is_ok_and(|settings| settings["automatic_updates"] == false)
 }
 
 /// Fails unless `content` is what the signed list `sums` says `name` is.

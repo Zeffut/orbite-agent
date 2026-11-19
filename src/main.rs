@@ -49,11 +49,13 @@ async fn main() -> ExitCode {
     // Everything but what changes the machine itself is done as the Agent's
     // own account, even when asked as root.
     let command = env::args().nth(1).unwrap_or_default();
-    if !matches!(
-        command.as_str(),
-        "update" | "uninstall" | "export" | "restore" | "version" | "providers"
-    ) && let Err(failure) = become_the_agents_account()
-    {
+    // (`update on` and `update off` only write the Agent's settings.)
+    let changes_the_machine = match command.as_str() {
+        "update" => env::args().nth(2).is_none(),
+        "uninstall" | "export" | "restore" | "version" | "providers" => true,
+        _ => false,
+    };
+    if !changes_the_machine && let Err(failure) = become_the_agents_account() {
         eprintln!("{failure}");
         return ExitCode::from(2);
     }

@@ -46,29 +46,31 @@ pub fn export(home: &Path, archive: &Path) -> io::Result<()> {
     header.set_cksum();
     packing.append_data(&mut header, MARK, mark.as_bytes())?;
 
-    // The Conversation is copied whole even while the Agent is writing in it.
+    // The Conversation is copied whole even while the Agent is writing in
+    // it, into a folder nobody else can look in.
     if home.join(DATABASE).exists() {
-        let copy = archive.with_extension("db-copy");
-        let _ = fs::remove_file(&copy);
+        let private = private_folder()?;
+        let copy = private.join(DATABASE);
         let copied = Store::open(home.join(DATABASE))
             .and_then(|store| store.copy_to(&copy))
             .map_err(|error| io::Error::other(error.to_string()))
             .and_then(|()| packing.append_path_with_name(&copy, DATABASE));
-        let _ = fs::remove_file(&copy);
+        let _ = fs::remove_dir_all(&private);
         copied?;
     }
+    // The archive itself may be written inside the folder it is made of.
+    let itself = fs::canonicalize(archive).ok();
     for entry in fs::read_dir(home)? {
         let entry = entry?;
         let name = entry.file_name();
         let named = name.to_string_lossy();
-        if named.starts_with(DATABASE) || named.ends_with(".writing") || entry.path() == archive {
+        if named.starts_with(DATABASE)
+            || named.ends_with(".writing")
+            || fs::canonicalize(entry.path()).ok() == itself
+        {
             continue;
         }
-        if entry.file_type()?.is_dir() {
-            packing.append_dir_all(&name, entry.path())?;
-        } else {
-            packing.append_path_with_name(entry.path(), &name)?;
-        }
+        pack(&mut packing, &entry.path(), Path::new(&name))?;
     }
     packing.into_inner()?.finish()?.sync_all()
 }
@@ -99,33 +101,58 @@ pub fn restore(archive: &Path, home: &Path) -> io::Result<()> {
         }
         fs::remove_file(beside.join(MARK))?;
         fs::create_dir_all(home)?;
+        // Nothing is moved unless everything can be: what is already there
+        // under a name of the export would stop it half-way.
+        let mut entries = Vec::new();
         for entry in fs::read_dir(&beside)? {
             let entry = entry?;
-            fs::rename(entry.path(), home.join(entry.file_name()))?;
+            let place = home.join(entry.file_name());
+            match fs::symlink_metadata(&place) {
+                Err(_) => {}
+                // An empty folder, such as one the installer or a first start made, gives way.
+                Ok(there) if there.is_dir() && fs::read_dir(&place)?.next().is_none() => {}
+                Ok(_) => {
+                    return Err(io::Error::other(format!(
+                        "{} already holds {}: nothing was changed",
+                        home.display(),
+                        entry.file_name().to_string_lossy()
+                    )));
+                }
+            }
+            entries.push((entry.path(), place));
+        }
+        // Handed to whoever the folder belongs to while still beside it,
+        // where nobody but this program can change anything.
+        hand_over(&beside, home)?;
+        for (from, place) in entries {
+            if place.is_dir() {
+                fs::remove_dir(&place)?;
+            }
+            fs::rename(from, place)?;
         }
         Ok(())
     })();
     let _ = fs::remove_dir_all(&beside);
     unpacked.map_err(|error| {
         io::Error::other(format!("{} could not be restored: {error}", archive.display()))
-    })?;
-    hand_over(home)
+    })
 }
 
-/// Gives what was restored to whoever the folder belongs to: a restore is
-/// run as root on an installed Host, where the Agent is not root.
-fn hand_over(home: &Path) -> io::Result<()> {
+/// Gives everything in `folder` to whoever `home` belongs to: a restore is
+/// run as root on an installed Host, where the Agent is not root. A link is
+/// given as a link: what it points at is never touched.
+fn hand_over(folder: &Path, home: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{MetadataExt, chown};
+        use std::os::unix::fs::{MetadataExt, lchown};
         let owner = fs::metadata(home)?;
-        let mut pending = vec![home.to_path_buf()];
+        let mut pending = vec![folder.to_path_buf()];
         while let Some(folder) = pending.pop() {
             for entry in fs::read_dir(&folder)? {
                 let entry = entry?;
-                let kept = entry.metadata()?;
+                let kept = fs::symlink_metadata(entry.path())?;
                 if kept.uid() != owner.uid() || kept.gid() != owner.gid() {
-                    chown(entry.path(), Some(owner.uid()), Some(owner.gid()))?;
+                    lchown(entry.path(), Some(owner.uid()), Some(owner.gid()))?;
                 }
                 if kept.is_dir() {
                     pending.push(entry.path());
@@ -134,4 +161,38 @@ fn hand_over(home: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// A new folder that only this program's account can look in.
+fn private_folder() -> io::Result<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    let folder = std::env::temp_dir().join(format!("orbite-export-{}-{stamp}", std::process::id()));
+    // Made, never taken over: a folder already there under that name is refused.
+    fs::DirBuilder::new().mode(0o700).create(&folder)?;
+    Ok(folder)
+}
+
+/// Adds `path` to the archive under `name`: files, folders and links as
+/// they are; anything else a folder may hold (a socket, a pipe) is left out.
+fn pack(
+    packing: &mut tar::Builder<GzEncoder<fs::File>>,
+    path: &Path,
+    name: &Path,
+) -> io::Result<()> {
+    let kind = fs::symlink_metadata(path)?.file_type();
+    if kind.is_dir() {
+        packing.append_dir(name, path)?;
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            pack(packing, &entry.path(), &name.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else if kind.is_file() || kind.is_symlink() {
+        packing.append_path_with_name(path, name)
+    } else {
+        Ok(())
+    }
 }

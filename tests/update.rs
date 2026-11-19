@@ -265,3 +265,44 @@ async fn an_owner_who_turned_updates_off_is_left_alone() {
     assert!(done.contains("off"), "{done}");
     assert_eq!(machine.program(), "the old program");
 }
+
+#[tokio::test]
+async fn a_link_planted_where_orbite_leaves_word_is_never_followed() {
+    // Updates run as root, and the Agent's folder is the Agent's: a link
+    // there must not lead root anywhere else.
+    let machine = Machine::running("the old program");
+    let elsewhere = machine.folder.path().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    fs::create_dir_all(machine.home()).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, machine.home().join("notices")).unwrap();
+    fs::write(elsewhere.join("precious"), "untouched").unwrap();
+    std::os::unix::fs::symlink(elsewhere.join("precious"), machine.home().join("update-refused"))
+        .unwrap();
+    let release = Release::new("0.2.0", "a program that does not start").published().await;
+
+    machine.update_from(&release, "0.1.0").await.unwrap_err();
+
+    let found: Vec<_> =
+        fs::read_dir(&elsewhere).unwrap().map(|entry| entry.unwrap().file_name()).collect();
+    assert_eq!(found.len(), 1, "something was written through the link: {found:?}");
+    assert_eq!(fs::read_to_string(elsewhere.join("precious")).unwrap(), "untouched");
+    assert_eq!(machine.program(), "the old program");
+}
+
+#[tokio::test]
+async fn settings_that_are_not_a_plain_file_do_not_hold_the_update_up() {
+    let machine = Machine::running("the old program");
+    fs::create_dir_all(machine.home()).unwrap();
+    // Something that would never finish being read.
+    std::os::unix::fs::symlink("/dev/zero", machine.home().join("config.json")).unwrap();
+    let release = Release::new("0.2.0", "the new program").published().await;
+
+    let updated = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        machine.update_from(&release, "0.1.0"),
+    )
+    .await;
+
+    assert!(updated.expect("the update hung on the settings").is_ok());
+    assert_eq!(machine.program(), "the new program");
+}
