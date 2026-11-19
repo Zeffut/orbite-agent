@@ -64,6 +64,8 @@ Reading the web is done by fetching pages, which is fast. For what that cannot d
 
 The installer sets the computer up: a virtual screen, Firefox from Mozilla's own packages, and fonts. `sudo orbite computer check` says whether it works on your machine. An Orbite installed with `ORBITE_WITHOUT_COMPUTER=1` has none; running the installer again without it adds one.
 
+When a page asks something of you (a verification code, a confirmation before paying), your agent sends you a picture of its screen with its question, so that you answer knowing what it sees.
+
 ## Commands
 
 Everything else is said in plain words, but a few commands are always there, also in Telegram's menu:

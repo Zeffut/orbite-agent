@@ -337,3 +337,37 @@ async fn a_screen_that_died_is_started_again_for_the_next_action() {
     let (_, picture) = provider.last_images().pop().expect("the model was shown no picture");
     assert_eq!(point(&picture, 600, 400), (255, 0, 0));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agent_shows_its_owner_the_screen_at_a_step_that_matters_in_one_gesture() {
+    if !has_a_computer() {
+        return;
+    }
+    let (_site, address) = site().await;
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([(
+            "computer",
+            json!({ "do": "open", "url": address, "purpose": "The form before I send it", "show": true }),
+        )])
+        .then(Ok("Shall I send it?".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Fill in the form and show me before sending.");
+    asked(&mut owner).await;
+    owner.allows();
+
+    // The picture comes by itself, with what it is about, then the question.
+    let shown = heard(&mut owner).await;
+    assert!(
+        shown.starts_with("(file screen-0.png: ") && shown.ends_with("The form before I send it"),
+        "{shown}"
+    );
+    assert_eq!(heard(&mut owner).await, "Shall I send it?");
+    // The model knows its Owner saw it.
+    let told = provider.last_asked().into_iter().any(|message| {
+        matches!(message, Message::Outcome { text, .. } if text.contains("shown to your Owner"))
+    });
+    assert!(told, "{:?}", provider.last_asked());
+}

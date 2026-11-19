@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.3.11
+
+Released on 2026-11-19.
+
+- **The agent shows you its screen at the steps that matter.** Any gesture on its computer can also send you the picture, with a word on what it is about: before paying or sending, or when a page asks something of you. Tried for real: a site asks for a verification code, the agent shows the page, asks for the code in the conversation, types it and carries on.
+
 ## 0.3.10
 
 Released on 2026-11-19.

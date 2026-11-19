@@ -1059,9 +1059,21 @@ impl<P: Provider + 'static> Agent<P> {
                         }
                     }
                 };
+                let mut text = text;
                 if action.name.starts_with("computer_")
                     && let Some(picture) = attachments(&text).last()
                 {
+                    // Shown to the Owner too when the model asks: the screen
+                    // at a step that matters, whole.
+                    if action.input["show"] == true {
+                        let about = action.input["purpose"].as_str().unwrap_or_default();
+                        match channel.send_file(&picture, about).await {
+                            Ok(()) => text.push_str("\nThis picture was shown to your Owner."),
+                            Err(error) => text.push_str(&format!(
+                                "\nThis picture could not be shown to your Owner: {error}."
+                            )),
+                        }
+                    }
                     // The model is shown the smaller picture made beside it.
                     let shown = crate::computer::shown_to_the_model(&picture);
                     screen = Some(if shown.is_file() { shown } else { picture });
@@ -2552,13 +2564,14 @@ fn folded(actions: Vec<ActionSpec>) -> Vec<ActionSpec> {
             if action.name == "computer_open" {
                 offered.push(ActionSpec {
                     name: "computer".into(),
-                    description: "Your own Computer, with a web browser: use it whenever you are asked to \
-                        go to a site, click, type, search on a site or sign in. A real screen, seen \
+                    description: "Your own Computer, with a web browser: use it to go to a site, click, \
+                        type, search there or sign in. A real screen, seen \
                         through pictures (853 by 533) and acted on with mouse and keyboard. `do` is \
                         open (an address; your Owner is asked first), look, click (at x, y of the last \
                         picture), type (a text where the cursor is; {{NAME}} types a secret you never \
                         see, once your Owner agrees), key (such as Return, Tab, ctrl+l) or scroll \
-                        (notches, positive for down). Each answers with a picture of the screen. Before \
+                        (notches, positive for down). Each answers with a picture of the screen; `show` sends \
+                        it to your Owner too, at the steps that matter. Before \
                         anything that pays, sends or deletes, and when a site asks for a code, ask \
                         your Owner. A page that wants proof of a person (a puzzle, \"verification \
                         required\") is not yours to pass: say so plainly and offer another way."
@@ -2572,6 +2585,7 @@ fn folded(actions: Vec<ActionSpec>) -> Vec<ActionSpec> {
                             "x": { "type": "integer" },
                             "y": { "type": "integer" },
                             "double": { "type": "boolean" },
+                            "show": { "type": "boolean" },
                             "text": { "type": "string" },
                             "keys": { "type": "string" },
                             "notches": { "type": "integer" },
