@@ -168,6 +168,8 @@ pub struct Agent<P> {
     sees_images: bool,
     /// The Provider that gave the latest answer, by name.
     answered_by: Option<String>,
+    /// What the Owner called their Agent.
+    name: Option<String>,
 }
 
 impl<P: Provider + 'static> Agent<P> {
@@ -196,6 +198,7 @@ impl<P: Provider + 'static> Agent<P> {
             last_active: 0,
             sees_images: true,
             answered_by: None,
+            name: None,
         }
     }
 
@@ -261,6 +264,12 @@ impl<P: Provider + 'static> Agent<P> {
     /// The address of the search engine's results page.
     pub fn searching_at(mut self, address: impl Into<String>) -> Self {
         self.host_mut().web.search_at = address.into();
+        self
+    }
+
+    /// The name the Owner gave their Agent.
+    pub fn called(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
         self
     }
 
@@ -380,7 +389,10 @@ impl<P: Provider + 'static> Agent<P> {
     /// Who the Agent is, what it remembers and what it knows how to do, as
     /// told to the model.
     fn instructions(&self) -> String {
-        let mut instructions = INSTRUCTIONS.to_owned();
+        let mut instructions = match &self.name {
+            Some(name) => format!("Your name is {name}. {INSTRUCTIONS}"),
+            None => INSTRUCTIONS.to_owned(),
+        };
         let level = self.level();
         instructions.push_str(&format!(
             "\n\nYour permission level is {}: {}",

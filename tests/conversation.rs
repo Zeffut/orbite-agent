@@ -137,3 +137,22 @@ async fn a_provider_asking_for_a_long_wait_is_not_waited_for() {
     assert!(explanation.contains("daily limit reached"), "{explanation}");
     assert_eq!(asked.times_asked(), 1);
 }
+
+#[tokio::test]
+async fn the_agent_knows_the_name_its_owner_gave_it() {
+    let provider = ScriptedProvider::answering(["I'm Nova."]);
+    let asked = provider.clone();
+    let (mut channel, mut owner) = memory_channel();
+    tokio::spawn(async move {
+        Agent::new(provider, Store::in_memory()).called("Nova").converse(&mut channel).await
+    });
+
+    owner.says("Who are you?");
+    owner.hears().await;
+
+    assert!(
+        asked.last_instructions().contains("Your name is Nova"),
+        "{}",
+        asked.last_instructions()
+    );
+}

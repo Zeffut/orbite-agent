@@ -8,6 +8,10 @@ fn orbite(home: &Path, arguments: &[&str], typed: &str) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_orbite"))
         .args(arguments)
         .env("ORBITE_HOME", home)
+        .env_remove("ORBITE_PROVIDER")
+        .env_remove("ORBITE_MODEL")
+        .env_remove("ORBITE_API_KEY")
+        .env_remove("ORBITE_BASE_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -70,4 +74,42 @@ fn what_is_wrong_with_a_secret_is_said_and_nothing_is_kept() {
     let unknown = orbite(home.path(), &["secret", "remove", "NOTHING"], "");
     assert!(!unknown.status.success());
     assert!(orbite::Secrets::kept_in(home.path()).names().unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn once_set_up_the_command_needs_no_setting_from_the_environment() {
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let key = format!("key-{}", "from-the-sealed-store");
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .and(header("authorization", format!("Bearer {key}").as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "choices": [{ "message": { "role": "assistant", "content": "Hello from the configured provider." } }]
+        })))
+        .mount(&server)
+        .await;
+    let home = tempfile::tempdir().unwrap();
+    orbite::Config {
+        provider: Some(orbite::ProviderChoice {
+            name: "custom".into(),
+            model: "some-model".into(),
+            address: Some(server.uri()),
+        }),
+        agent_name: Some("Nova".into()),
+        ..orbite::Config::default()
+    }
+    .save(home.path())
+    .unwrap();
+    orbite::Secrets::kept_in(home.path()).set("ORBITE_PROVIDER_KEY", &key).unwrap();
+
+    let folder = home.path().to_owned();
+    let chatted =
+        tokio::task::spawn_blocking(move || orbite(&folder, &["chat"], "Hi\n")).await.unwrap();
+
+    assert!(shown(&chatted).contains("Hello from the configured provider."), "{}", shown(&chatted));
+    let asked = server.received_requests().await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&asked[0].body).unwrap();
+    assert!(body["messages"][0]["content"].as_str().unwrap().contains("Your name is Nova"));
 }

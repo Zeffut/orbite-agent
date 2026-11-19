@@ -19,11 +19,12 @@ An open-source personal AI agent that lives on a machine you control, uses the A
 cargo test                                   # the whole test suite
 cargo fmt && cargo clippy --all-targets      # before every commit
 
-# talk to the Agent in a terminal; `cargo run -- providers` lists the Providers known by name
-ORBITE_PROVIDER=openai ORBITE_API_KEY=... ORBITE_MODEL=... cargo run -- chat
-# the same Conversation in Telegram, and in this terminal as well
-ORBITE_TELEGRAM_TOKEN=... ORBITE_TELEGRAM_OWNER=... cargo run -- run --terminal
-# its data lives in ~/.orbite, or in the folder named by ORBITE_HOME
+cargo run -- setup                           # the guided setup: AI, Telegram bot, the agent's name
+cargo run -- run                             # the Conversation in Telegram (add --terminal for here too)
+cargo run -- chat                            # the Conversation in this terminal only
+cargo run -- secret set NAME                 # a secret the agent uses without seeing it
+# everything is kept in ~/.orbite, or in the folder named by ORBITE_HOME;
+# `cargo run` with no command lists the settings that override what setup kept
 ```
 
 ## Documentation

@@ -366,16 +366,18 @@ impl Host {
             Ok(Action::RunCommand(run)) => self.run(&run.command).await,
             Ok(Action::ReadFile(read)) => self.read(&read.path),
             Ok(Action::WriteFile(write)) => self.write(&write.path, &write.content),
-            Ok(Action::ListSecrets) => match self.secrets.as_ref().map(Secrets::names) {
-                Some(Ok(names)) if names.is_empty() => {
-                    "No secret has been entered. Your Owner enters one on the machine with \
+            Ok(Action::ListSecrets) => {
+                match self.secrets.as_ref().map(Secrets::names_for_the_agent) {
+                    Some(Ok(names)) if names.is_empty() => {
+                        "No secret has been entered. Your Owner enters one on the machine with \
                      `orbite secret set NAME`."
-                        .into()
+                            .into()
+                    }
+                    Some(Ok(names)) => names.join("\n"),
+                    Some(Err(error)) => format!("The secrets could not be read: {error}."),
+                    None => "There is nowhere to keep secrets.".into(),
                 }
-                Some(Ok(names)) => names.join("\n"),
-                Some(Err(error)) => format!("The secrets could not be read: {error}."),
-                None => "There is nowhere to keep secrets.".into(),
-            },
+            }
             Ok(Action::SearchWeb(search)) => self.web.search(&search.query).await,
             Ok(Action::ReadPage(page)) => match web_address(&page.url) {
                 Err(problem) => problem,

@@ -280,3 +280,39 @@ async fn a_command_that_does_not_name_a_secret_is_not_given_it() {
     let environment = fs::read_to_string(home.path().join("workspace/env.txt")).unwrap();
     assert!(!environment.contains("GITHUB_TOKEN") && !environment.contains(TOKEN));
 }
+
+#[tokio::test]
+async fn the_keys_orbite_itself_runs_on_are_not_the_agents_to_list_or_use_but_stay_hidden() {
+    let home = tempfile::tempdir().unwrap();
+    let own = format!("provider-key-{}", "0123456789abcdef");
+    Secrets::kept_in(home.path()).set("ORBITE_PROVIDER_KEY", &own).unwrap();
+    fs::create_dir_all(home.path().join("workspace")).unwrap();
+    fs::write(home.path().join("workspace/leak.txt"), format!("key is {own}")).unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("list_secrets", json!({}))])
+        .then_acts([(
+            "run_command",
+            json!({ "command": "echo \"k=$ORBITE_PROVIDER_KEY\" > seen.txt" }),
+        )])
+        .then_acts([("read_file", json!({ "path": "leak.txt" }))])
+        .then(Ok("Done.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Go.");
+    owner.is_asked().await;
+    owner.allows();
+    owner.hears().await;
+
+    let outcomes: Vec<String> = provider
+        .last_asked()
+        .into_iter()
+        .filter_map(|message| match message {
+            Message::Outcome { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(!outcomes[0].contains("ORBITE_PROVIDER_KEY"), "it was listed: {}", outcomes[0]);
+    assert_eq!(fs::read_to_string(home.path().join("workspace/seen.txt")).unwrap().trim(), "k=");
+    assert_eq!(outcomes[2], "key is [secret ORBITE_PROVIDER_KEY]");
+}

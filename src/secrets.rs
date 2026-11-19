@@ -98,10 +98,17 @@ impl Secrets {
     }
 
     /// The secrets `command` names, each as (name, value), to give it as
-    /// environment variables.
+    /// environment variables. Orbite's own are never among them.
     pub(crate) fn named_in(&self, command: &str) -> Vec<(String, String)> {
         let Ok(all) = self.all() else { return Vec::new() };
-        all.into_iter().filter(|(name, _)| command.contains(name.as_str())).collect()
+        all.into_iter()
+            .filter(|(name, _)| !is_orbites_own(name) && command.contains(name.as_str()))
+            .collect()
+    }
+
+    /// The names of the secrets the Agent may use: all but Orbite's own.
+    pub(crate) fn names_for_the_agent(&self) -> Result<Vec<String>, SecretsError> {
+        Ok(self.names()?.into_iter().filter(|name| !is_orbites_own(name)).collect())
     }
 
     fn cipher(&self) -> Result<ChaCha20Poly1305, SecretsError> {
@@ -168,6 +175,12 @@ impl Secrets {
             serde_json::to_vec_pretty(&sealed).map_err(|error| failed("could not write", error))?;
         write_privately(&self.sealed, &written)
     }
+}
+
+/// True of the keys Orbite itself runs on (its Provider's, its bot's): the
+/// Agent neither lists nor uses those.
+fn is_orbites_own(name: &str) -> bool {
+    name.starts_with("ORBITE_")
 }
 
 /// Writes `content` to `path`, whole or not at all, readable by this account only.

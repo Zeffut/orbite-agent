@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use orbite::{
-    Agent, Both, Connected, Routed, Secrets, Store, Telegram, Terminal, connect, known_providers,
+    Agent, Both, Config, Connected, PROVIDER_KEY, Routed, Secrets, Setup, SetupStep, Store,
+    TELEGRAM_TOKEN, Telegram, Terminal, connect, known_providers,
 };
 use tokio::io::{BufReader, stdin, stdout};
 
@@ -15,6 +16,7 @@ Commands:
   run    hold the Conversation in Telegram (add --terminal to open it here as well)
   chat   hold the Conversation in this terminal
   providers  list the Providers known by name
+  setup      set Orbite up, or one part again (language, provider, telegram, name)
   secret     enter (set NAME), list or remove the secrets the Agent uses without seeing them
 
 Read from the environment:
@@ -39,6 +41,7 @@ async fn main() -> ExitCode {
         Some("run") => run().await,
         Some("chat") => chat().await,
         Some("secret") => secret(),
+        Some("setup") => setup().await,
         Some("providers") => {
             for provider in known_providers() {
                 println!("{:<11} {}", provider.name, provider.label);
@@ -61,12 +64,23 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), Failure> {
-    let token = required("ORBITE_TELEGRAM_TOKEN")?;
-    let owner: i64 = required("ORBITE_TELEGRAM_OWNER")?
-        .parse()
-        .map_err(|_| "ORBITE_TELEGRAM_OWNER must be a numeric Telegram account id.")?;
+    let home = home()?;
+    let token = match setting("ORBITE_TELEGRAM_TOKEN") {
+        Some(token) => token,
+        None => Secrets::kept_in(&home)
+            .get(TELEGRAM_TOKEN)?
+            .ok_or("No Telegram bot is set up yet. Run `orbite setup`.")?,
+    };
+    let owner: i64 = match setting("ORBITE_TELEGRAM_OWNER") {
+        Some(owner) => owner
+            .parse()
+            .map_err(|_| "ORBITE_TELEGRAM_OWNER must be a numeric Telegram account id.")?,
+        None => Config::load(&home)?
+            .telegram_owner
+            .ok_or("No Telegram account is linked yet. Run `orbite setup`.")?,
+    };
     let mut agent = agent()?;
-    let telegram = Telegram::new(token, owner).saving_files_in(home()?.join("workspace/inbox"));
+    let telegram = Telegram::new(token, owner).saving_files_in(home.join("workspace/inbox"));
     if env::args().any(|argument| argument == "--terminal") {
         // The same Conversation, open in this terminal as well.
         let terminal = Terminal::new(BufReader::new(stdin()), stdout());
@@ -86,10 +100,22 @@ async fn chat() -> Result<(), Failure> {
 
 /// The Agent of this installation: its Provider and the folder holding its data.
 fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
-    let name = setting("ORBITE_PROVIDER").unwrap_or("openai".into());
-    let model = required("ORBITE_MODEL")?;
-    let key = setting("ORBITE_API_KEY");
-    let address = setting("ORBITE_BASE_URL");
+    // What setup kept, unless the environment says otherwise.
+    let home = home()?;
+    let config = Config::load(&home)?;
+    let secrets = Secrets::kept_in(&home);
+    let chosen = config.provider.clone();
+    let name = setting("ORBITE_PROVIDER")
+        .or(chosen.as_ref().map(|chosen| chosen.name.clone()))
+        .ok_or("No AI is set up yet. Run `orbite setup`.")?;
+    let model = setting("ORBITE_MODEL")
+        .or(chosen.as_ref().map(|chosen| chosen.model.clone()))
+        .ok_or("No model is chosen yet. Run `orbite setup`.")?;
+    let key = match setting("ORBITE_API_KEY") {
+        Some(key) => Some(key),
+        None => secrets.get(PROVIDER_KEY)?,
+    };
+    let address = setting("ORBITE_BASE_URL").or(chosen.and_then(|chosen| chosen.address));
     let mut provider =
         Routed::through(&name, connect(&name, key.as_deref(), &model, address.as_deref())?);
     // Another Provider to fall back on when the usual one cannot answer.
@@ -104,7 +130,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
     }
     // A lighter model for summaries and wake-ups, with the usual Provider
     // unless another is named.
-    if let Some(light_model) = setting("ORBITE_LIGHT_MODEL") {
+    if let Some(light_model) = setting("ORBITE_LIGHT_MODEL").or(config.light_model.clone()) {
         let light = match setting("ORBITE_LIGHT_PROVIDER") {
             Some(other) => {
                 let key = setting("ORBITE_LIGHT_API_KEY");
@@ -117,7 +143,6 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         provider = provider.with_light(&format!("{} (light)", light.0), light.1);
     }
 
-    let home = home()?;
     fs::create_dir_all(&home)
         .map_err(|error| format!("Could not create {}: {error}", home.display()))?;
     let store = Store::open(home.join("orbite.db"))
@@ -136,8 +161,27 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .remembering_in(home.join("memory"))
         .learning_in(home.join("skills"))
         .keeping_secrets_in(&home)
+        .called(config.agent_name.clone().unwrap_or_else(|| "Orbite".into()))
         .keeping_context_under(context)
         .waking_up_every_minutes(wake_ups))
+}
+
+/// Goes through setup in this terminal: all of what is missing, or one part again.
+async fn setup() -> Result<(), Failure> {
+    let only = match env::args().nth(2).as_deref() {
+        None => None,
+        Some("language") => Some(SetupStep::Language),
+        Some("provider") => Some(SetupStep::Provider),
+        Some("telegram") => Some(SetupStep::Telegram),
+        Some("name") => Some(SetupStep::Name),
+        Some(_) => return Err("Usage: orbite setup [language|provider|telegram|name]".into()),
+    };
+    let typed = std::io::BufReader::new(std::io::stdin());
+    let mut setup = Setup::in_home(home()?, typed, std::io::stdout());
+    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        setup = setup.reading_secrets_with(|question| rpassword::prompt_password(question));
+    }
+    Ok(setup.run(only).await?)
 }
 
 /// Enters, lists or removes the secrets the Agent can use without seeing them.
