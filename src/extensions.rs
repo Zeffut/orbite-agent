@@ -627,8 +627,8 @@ async fn reach(
             .and_then(|to| url.join(to).ok());
         if let (true, Some(to)) = (status.is_redirection(), moved) {
             host = granted(&to).map_err(|other| {
-                format!(
-                    "{host} redirects to {other}, which this Extension was not granted: it can only reach {}",
+format!(
+                    "{host} redirects to {to}, and this Extension was not granted {other}: it can only reach {}",
                     listed(hosts)
                 )
             })?;

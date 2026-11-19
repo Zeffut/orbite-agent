@@ -380,3 +380,22 @@ async fn an_action_the_model_wrote_wrong_is_worth_asking_again() {
 
     assert!(matches!(reply, Err(ProviderError::Busy { retry_after: None, .. })), "{reply:?}");
 }
+
+#[tokio::test]
+async fn an_answer_the_provider_could_not_read_from_the_model_is_worth_asking_again() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({ "error": {
+            "message": "Parsing failed. The model generated output that could not be parsed.",
+            "type": "invalid_request_error",
+            "code": "output_parse_failed",
+            "failed_generation": "{\"name\": \"convert\"",
+        } })))
+        .mount(&server)
+        .await;
+    let provider = OpenAiCompatible::new(server.uri(), "sk-test", "some-model");
+
+    let reply = provider.reply(hi()).await;
+
+    assert!(matches!(reply, Err(ProviderError::Busy { retry_after: None, .. })), "{reply:?}");
+}

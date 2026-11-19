@@ -116,7 +116,9 @@ impl Provider for OpenAiCompatible {
         }
         // The model wrote an Action request that does not parse: it was not
         // asked anything wrong, and asking again usually gets a sound one.
-        if status.as_u16() == 400 && body.contains("\"tool_use_failed\"") {
+        if status.as_u16() == 400
+            && (body.contains("\"tool_use_failed\"") || body.contains("\"failed_generation\""))
+        {
             return Err(ProviderError::Busy { reason: error_message(&body), retry_after: None });
         }
         if !status.is_success() {

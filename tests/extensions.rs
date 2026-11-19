@@ -452,7 +452,8 @@ async fn a_redirection_is_followed_only_to_a_host_that_was_granted() {
     assert_eq!(outcomes[0], "200 found");
     // The model is told where it leads, so that it can ask for that host.
     assert!(
-        outcomes[1].contains("redirects to 127.0.0.1") && outcomes[1].contains("not granted"),
+        outcomes[1].contains(&format!("redirects to http://127.0.0.1:{port}/here"))
+            && outcomes[1].contains("not granted 127.0.0.1"),
         "{}",
         outcomes[1]
     );
