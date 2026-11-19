@@ -4,8 +4,6 @@ Orbite installs on a machine you control and keeps running there: a spare comput
 
 Orbite is in early development: versions before 1.0 are for trying it out, and things will change.
 
-**If the installer stops** on something it did not foresee, it prints a link to a new issue, filled in with what stopped and your system's name, processor and memory. Nothing is sent unless you open it and send it; what the terminal showed just before helps, if you paste it in.
-
 ## What you need
 
 - A machine running **Debian or Ubuntu**, with systemd, on an x86_64 or aarch64 processor, where you can run commands as root. The installer checks all of this before changing anything, and warns when the machine has little memory.
@@ -35,6 +33,8 @@ The installer:
 - creates an account called `orbite`, which the agent runs as, and its folder `/var/lib/orbite`;
 - installs a service that starts with the machine and comes back by itself after a crash, and a daily check for updates;
 - sets up the agent's own computer: a virtual screen (`xvfb`, `xdotool`), fonts, and Firefox from Mozilla's own package repository, which it adds to the machine's package sources. To install Orbite without it, put `ORBITE_WITHOUT_COMPUTER=1` before `sh`. If this part fails, Orbite is installed all the same, and running the installer again later adds it.
+
+**If the installer stops** on something it did not foresee, it prints a link to a new issue, filled in with what stopped and your system's name, processor and memory. Nothing is sent unless you open it and send it; what the terminal showed just before helps, if you paste it in.
 
 ## 3. Answer the setup's questions
 
