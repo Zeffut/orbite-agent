@@ -293,7 +293,13 @@ pub async fn try_out(provider: &impl Provider) -> Result<Verdict, ProviderError>
     };
 
     // An image: a plain red square.
-    let picture = std::env::temp_dir().join(format!("orbite-tryout-{}.png", std::process::id()));
+    // A name of its own: two tryouts at once must not share the file.
+    static PICTURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let picture = std::env::temp_dir().join(format!(
+        "orbite-tryout-{}-{}.png",
+        std::process::id(),
+        PICTURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     let sees_images = match std::fs::write(&picture, red_square()) {
         Err(_) => false,
         Ok(()) => {
