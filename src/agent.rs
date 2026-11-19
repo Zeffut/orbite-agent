@@ -1907,7 +1907,9 @@ impl<P: Provider + 'static> Agent<P> {
                 let named = provider.key.as_deref().unwrap_or(crate::PROVIDER_KEY);
                 let kept = secrets
                     .as_ref()
-                    .is_some_and(|secrets| secrets.get(named).ok().flatten().is_some());
+                    .is_some_and(|secrets| secrets.get(named).ok().flatten().is_some())
+                    // Or given where Orbite was started from, for the one asked first.
+                    || (place == 0 && std::env::var_os("ORBITE_API_KEY").is_some());
                 if kept {
                     format!("🟢 {}", say("its key is kept", "sa clé est enregistrée"))
                 } else {
