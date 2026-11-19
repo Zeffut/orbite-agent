@@ -413,12 +413,44 @@ async fn listen(bot: Arc<Bot>, sending: mpsc::UnboundedSender<Sent>) {
                         .unwrap_or_else(|| format!("{kind}-{}.{ending}", update.update_id));
                     Some((sound.file_id, name, sound.file_size.unwrap_or(0)))
                 });
-                let words = message.text.or(message.caption).unwrap_or_default();
+                let mut words = message.text.or(message.caption).unwrap_or_default();
+                // A place or a contact shared: said in words, there being no file.
+                let shared = match (&message.venue, &message.location, &message.contact) {
+                    (Some(venue), _, _) => Some(format!(
+                        "[Your Owner shared a place: {}, {} (latitude {}, longitude {})]",
+                        venue.title,
+                        venue.address,
+                        venue.location.latitude,
+                        venue.location.longitude
+                    )),
+                    (None, Some(place), _) => Some(format!(
+                        "[Your Owner shared a location: latitude {}, longitude {}]",
+                        place.latitude, place.longitude
+                    )),
+                    (None, None, Some(contact)) => {
+                        let name = [Some(&contact.first_name), contact.last_name.as_ref()]
+                            .into_iter()
+                            .flatten()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        Some(format!(
+                            "[Your Owner shared a contact: {name}, {}]",
+                            contact.phone_number
+                        ))
+                    }
+                    (None, None, None) => None,
+                };
+                if let Some(shared) = shared {
+                    words = if words.is_empty() { shared } else { format!("{words}\n{shared}") };
+                }
                 match file {
                     None if words.is_empty() => {
                         let cannot = bot.language.say(
-                            "I can only read text and files for now.",
-                            "Je ne sais lire que du texte et des fichiers pour l'instant.",
+                            "I cannot take that in: I read text, files and pictures, voice and video messages, \
+                             places and contacts.",
+                            "Je ne sais pas lire cela : je lis le texte, les fichiers et les images, les \
+                             messages vocaux et vidéo, les lieux et les contacts.",
                         );
                         let _ = bot.say(cannot).await;
                         continue;
@@ -707,6 +739,32 @@ struct Incoming {
     audio: Option<Attached>,
     video_note: Option<Attached>,
     video: Option<Attached>,
+    location: Option<Place>,
+    venue: Option<Venue>,
+    contact: Option<Contact>,
+}
+
+/// A point on the map.
+#[derive(Deserialize)]
+struct Place {
+    latitude: f64,
+    longitude: f64,
+}
+
+/// A place with a name.
+#[derive(Deserialize)]
+struct Venue {
+    location: Place,
+    title: String,
+    address: String,
+}
+
+/// Somebody's name and number.
+#[derive(Deserialize)]
+struct Contact {
+    phone_number: String,
+    first_name: String,
+    last_name: Option<String>,
 }
 
 /// A file as Telegram describes it.

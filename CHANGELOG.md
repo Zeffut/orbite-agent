@@ -2,8 +2,11 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## Unreleased
+## 0.3.10
 
+Released on 2026-11-19.
+
+- A location, a place or a contact shared in Telegram reaches the agent in words ("what is near here?", "call them tomorrow").
 - Video messages in Telegram (the round ones too) are taken in: what is said in them is written down like a voice message, and the agent is told it cannot see the picture.
 - `ORBITE_SHOW_WAKE_UPS=1` makes Orbite note, where it logs, what the agent thought at each wake-up: why it stayed silent, or spoke up. A wake-up bringing up something due was seen for real.
 

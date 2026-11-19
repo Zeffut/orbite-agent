@@ -1032,3 +1032,34 @@ async fn a_video_message_is_saved_and_handed_over_like_a_file() {
     assert_eq!(std::fs::read(&saved).unwrap(), b"video");
     assert_eq!(said, orbite::attached(&saved));
 }
+
+fn from_owner(update_id: i64, content: Value) -> Value {
+    let mut message = json!({
+        "message_id": update_id,
+        "from": { "id": OWNER, "is_bot": false, "first_name": "Owner" },
+        "chat": { "id": OWNER, "type": "private" },
+    });
+    message.as_object_mut().unwrap().extend(content.as_object().unwrap().clone());
+    json!({ "update_id": update_id, "message": message })
+}
+
+#[tokio::test]
+async fn a_place_or_a_contact_the_owner_shares_reaches_the_agent_in_words() {
+    let server = telegram_delivering(vec![
+        from_owner(100, json!({ "location": { "latitude": 48.8584, "longitude": 2.2945 } })),
+        from_owner(101, json!({ "venue": { "location": { "latitude": 48.86, "longitude": 2.33 },
+            "title": "Louvre", "address": "Rue de Rivoli, Paris" },
+            "location": { "latitude": 48.86, "longitude": 2.33 } })),
+        from_owner(102, json!({ "contact": { "phone_number": "+33 1 23 45 67 89", "first_name": "Ana", "last_name": "Diaz" } })),
+    ])
+    .await;
+    let mut channel = telegram(&server);
+
+    let place = received(&mut channel).await;
+    assert!(place.contains("48.8584") && place.contains("2.2945"), "{place}");
+    assert!(place.to_lowercase().contains("location"), "{place}");
+    let venue = received(&mut channel).await;
+    assert!(venue.contains("Louvre") && venue.contains("Rue de Rivoli"), "{venue}");
+    let contact = received(&mut channel).await;
+    assert!(contact.contains("Ana Diaz") && contact.contains("+33 1 23 45 67 89"), "{contact}");
+}
