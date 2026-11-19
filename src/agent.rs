@@ -196,6 +196,7 @@ pub struct Agent<P> {
 impl<P: Provider + 'static> Agent<P> {
     pub fn new(provider: P, store: Store) -> Self {
         let host = Host {
+            spent: std::sync::Mutex::default(),
             workspace: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             command_timeout: Duration::from_secs(120),
             memory: None,
@@ -418,6 +419,7 @@ impl<P: Provider + 'static> Agent<P> {
                 _ = time_check.tick() => {
                     let _ = self.run_due_routines();
                     self.take_notices();
+                    self.count_what_others_spent();
                     if std::mem::take(&mut self.owed) && !self.respond_on(channel, true).await {
                         return;
                     }
@@ -1181,6 +1183,7 @@ impl<P: Provider + 'static> Agent<P> {
         let reply = showing_work(channel, patiently(&*self.provider, request, self.host.busy_wait))
             .await
             .ok()?;
+        self.count(reply.usage.as_ref());
         Some(clip(reply.text.trim(), summary_limit).to_owned())
     }
 
@@ -1506,6 +1509,7 @@ impl<P: Provider + 'static> Agent<P> {
         let Ok(reply) = patiently(&*self.provider, request, self.host.busy_wait).await else {
             return;
         };
+        self.count(reply.usage.as_ref());
         let thought = reply.text.trim();
         if thought.is_empty() || thought.contains(SILENT) {
             return;
@@ -1915,7 +1919,24 @@ impl<P: Provider + 'static> Agent<P> {
     }
 
     /// What was used today and over the last seven days, by Provider and model.
+    /// Counts what an answer cost that is not part of a turn: a summary, a Wake-up.
+    fn count(&self, usage: Option<&Usage>) {
+        if let Some(usage) = usage {
+            let day = (self.clock)().format("%Y-%m-%d").to_string();
+            let _ = self.store.record_usage(&day, usage);
+        }
+    }
+
+    /// Counts what Sub-agents and Routines used since this was last done.
+    fn count_what_others_spent(&self) {
+        let spent = std::mem::take(&mut *self.host.spent.lock().expect("not poisoned"));
+        for usage in &spent {
+            self.count(Some(usage));
+        }
+    }
+
     fn usage(&self) -> String {
+        self.count_what_others_spent();
         let today = (self.clock)().date_naive();
         let since = today - chrono::Days::new(6);
         let Ok(used) = self.store.usage_since(&since.format("%Y-%m-%d").to_string()) else {

@@ -67,6 +67,9 @@ pub(crate) enum Review {
 
 /// The Agent's hands on the machine it runs on.
 pub(crate) struct Host {
+    /// What was used by those who answer to the Agent and keep no account
+    /// themselves: Sub-agents and Routines. The Agent takes it from there.
+    pub(crate) spent: std::sync::Mutex<Vec<crate::Usage>>,
     /// Where commands run and relative paths start.
     pub(crate) workspace: PathBuf,
     /// A command still running after this long is stopped.

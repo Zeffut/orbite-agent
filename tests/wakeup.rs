@@ -242,3 +242,30 @@ async fn a_wake_up_that_fails_troubles_nobody() {
     owner.says("Still there?");
     assert_eq!(owner.hears().await, "Noted.");
 }
+
+#[tokio::test]
+async fn what_a_wake_up_costs_is_counted_with_the_rest() {
+    let clock = Clock::at("2026-11-19 08:00");
+    let provider = waking("[silent]");
+    provider.costing(orbite::Usage {
+        by: "groq".into(),
+        model: "m-1".into(),
+        input: 1000,
+        cached: 0,
+        output: 10,
+    });
+    let mut owner = agent_with(&provider, &clock);
+    owner.says("Hello");
+    owner.hears().await;
+
+    // Four hours on, it wakes up, and stays silent.
+    clock.set("2026-11-19 12:01");
+    while !provider.every_call().iter().any(|(instructions, _)| is_wakeup(instructions)) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    owner.says("/usage");
+    let shown = owner.hears().await;
+    assert!(shown.contains("2 answers") && shown.contains("2,000"), "{shown}");
+}

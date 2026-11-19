@@ -240,6 +240,7 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
             Ok(reply) => reply,
             Err(error) => return format!("failed: {}", explain(&error, crate::Language::English)),
         };
+        host.spent.lock().expect("not poisoned").extend(reply.usage.clone());
         conversation.push(Message::Agent {
             text: reply.text.clone(),
             actions: reply.actions.clone(),
@@ -276,7 +277,10 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
         light: false,
     };
     match patiently(provider, request, host.busy_wait).await {
-        Ok(reply) => format!("ran out of steps. Its report so far:\n{}", reply.text),
+        Ok(reply) => {
+            host.spent.lock().expect("not poisoned").extend(reply.usage.clone());
+            format!("ran out of steps. Its report so far:\n{}", reply.text)
+        }
         Err(error) => {
             format!("ran out of steps, then failed: {}", explain(&error, crate::Language::English))
         }

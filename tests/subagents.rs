@@ -261,3 +261,28 @@ async fn two_subagents_cannot_share_a_name() {
 
     assert!(owner.hears().await.contains("already"));
 }
+
+#[tokio::test]
+async fn what_a_subagent_costs_is_counted_with_the_rest() {
+    let workspace = tempfile::tempdir().unwrap();
+    let provider = delegating(|_| Ok(saying("There are 3 files.")));
+    provider.costing(orbite::Usage {
+        by: "groq".into(),
+        model: "m-1".into(),
+        input: 1000,
+        cached: 0,
+        output: 10,
+    });
+    let mut owner = agent_in(workspace.path(), &provider);
+    owner.says("Count my files.");
+    owner.hears().await;
+    owner.hears().await;
+
+    owner.says("/usage");
+    let shown = owner.hears().await;
+
+    // Every answer the model gave, the sub-agent's among them.
+    let asked = provider.times_asked();
+    assert!(asked >= 3, "the test expects the sub-agent to have asked: {asked}");
+    assert!(shown.contains(&format!("{asked} answers")), "{asked} asked, shown:\n{shown}");
+}
