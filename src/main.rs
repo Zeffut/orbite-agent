@@ -268,7 +268,10 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
     // Providers that offers it and has a key.
     for listening in config.providers() {
         let Some(model) = orbite::transcription_model(&listening.name) else { continue };
-        let Some(key) = key_of(Some(&listening))? else { continue };
+        // The first one's key may have been given in the environment.
+        let is_first = chosen.as_ref().is_some_and(|first| first.name == listening.name);
+        let own = if is_first { key.clone() } else { key_of(Some(&listening))? };
+        let Some(key) = own else { continue };
         let root = listening.address.clone().or_else(|| {
             let known = known_providers().iter().find(|known| known.name == listening.name)?;
             Some(known.api_root.to_owned())
