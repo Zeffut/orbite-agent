@@ -2,6 +2,10 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## Not released yet
+
+- The catalogue of models gains Claude Haiku 5.5 and Claude Sonnet 5.5, from real tryouts.
+
 ## 0.2.0
 
 Released on 2026-11-19. Installations of 0.1.0 do not update by themselves: run the installer again on them once, and they keep themselves up to date from then on.
