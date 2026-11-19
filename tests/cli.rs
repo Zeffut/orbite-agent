@@ -125,3 +125,18 @@ fn the_command_says_which_version_it_is() {
         format!("orbite {}", env!("CARGO_PKG_VERSION"))
     );
 }
+
+#[test]
+fn an_owner_turns_automatic_updates_off_and_on_again() {
+    let home = tempfile::tempdir().unwrap();
+
+    let off = orbite(home.path(), &["update", "off"], "");
+    assert!(off.status.success(), "{}", shown(&off));
+    assert_eq!(orbite::Config::load(home.path()).unwrap().automatic_updates, Some(false));
+    let left_alone = orbite(home.path(), &["update"], "");
+    assert!(shown(&left_alone).contains("off"), "{}", shown(&left_alone));
+
+    let on = orbite(home.path(), &["update", "on"], "");
+    assert!(on.status.success(), "{}", shown(&on));
+    assert_ne!(orbite::Config::load(home.path()).unwrap().automatic_updates, Some(false));
+}

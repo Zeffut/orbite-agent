@@ -4,8 +4,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use orbite::{
-    Agent, Both, Config, Connected, Language, PROVIDER_KEY, Routed, Secrets, Setup, SetupStep,
-    Store, TELEGRAM_TOKEN, Telegram, Terminal, connect, known_providers,
+    Agent, Both, Config, Connected, Language, PROVIDER_KEY, RELEASE_KEY, Routed, Secrets, Setup,
+    SetupStep, Store, Systemd, TELEGRAM_TOKEN, Telegram, Terminal, Updater, connect,
+    known_providers,
 };
 use tokio::io::{BufReader, stdin, stdout};
 
@@ -18,6 +19,7 @@ Commands:
   providers  list the Providers known by name
   version    say which version this is
   setup      set Orbite up, or one part again (language, provider, telegram, name)
+  update     install the latest release now (on or off: let Orbite do it by itself, or not)
   secret     enter (set NAME), list or remove the secrets the Agent uses without seeing them
 
 Read from the environment:
@@ -46,6 +48,7 @@ async fn main() -> ExitCode {
         }
         Some("chat") => chat().await,
         Some("secret") => secret(),
+        Some("update") => update().await,
         Some("setup") => setup().await,
         Some("providers") => {
             for provider in known_providers() {
@@ -168,6 +171,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .working_in(home.join("workspace"))
         .remembering_in(home.join("memory"))
         .learning_in(home.join("skills"))
+        .hearing_notices_in(home.join("notices"))
         .keeping_secrets_in(&home)
         .called(config.agent_name.clone().unwrap_or_else(|| "Orbite".into()))
         .speaking(Language::of(config.language.as_deref()))
@@ -233,6 +237,49 @@ fn secret() -> Result<(), Failure> {
         _ => return Err(HOW.into()),
     }
     Ok(())
+}
+
+/// Installs the latest release, or says whether Orbite may do so by itself.
+async fn update() -> Result<(), Failure> {
+    let home = home()?;
+    match env::args().nth(2).as_deref() {
+        None => {}
+        Some(choice @ ("on" | "off")) => {
+            let mut config = Config::load(&home)?;
+            config.automatic_updates = (choice == "off").then_some(false);
+            config.save(&home)?;
+            println!("Automatic updates are {choice}.");
+            return Ok(());
+        }
+        Some(_) => return Err("Usage: orbite update | orbite update on | orbite update off".into()),
+    }
+    // As for the installer: another place to take releases from, another
+    // key to trust and another root folder are for trying this out.
+    let release = setting("ORBITE_RELEASE_URL").unwrap_or_else(|| {
+        "https://github.com/Zeffut/orbite-agent/releases/latest/download".into()
+    });
+    let key = match setting("ORBITE_SIGNING_KEY") {
+        Some(written) => {
+            public_key(&written).ok_or("ORBITE_SIGNING_KEY is not an ed25519 public key.")?
+        }
+        None => RELEASE_KEY,
+    };
+    let program = format!("{}/usr/local/bin/orbite", setting("ORBITE_ROOT").unwrap_or_default());
+    let done = Updater::new(env!("CARGO_PKG_VERSION"), release, key)
+        .installed_at(program)
+        .telling_the_owner_in(home)
+        .run(&Systemd)
+        .await?;
+    println!("{done}");
+    Ok(())
+}
+
+/// The key in a public key file as openssl writes one.
+fn public_key(written: &str) -> Option<[u8; 32]> {
+    use base64::Engine;
+    let inside: String = written.lines().filter(|line| !line.starts_with("-----")).collect();
+    let bytes = base64::engine::general_purpose::STANDARD.decode(inside.trim()).ok()?;
+    bytes.get(bytes.len().checked_sub(32)?..)?.try_into().ok()
 }
 
 /// The folder that holds everything of this installation.

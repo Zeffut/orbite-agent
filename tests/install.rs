@@ -142,6 +142,14 @@ fn a_supported_machine_gets_the_program_an_account_and_a_service_that_restarts()
     assert!(calls.contains("useradd") && calls.contains("orbite"), "{calls}");
     assert!(calls.contains("systemctl daemon-reload"), "{calls}");
     assert!(calls.contains("systemctl enable orbite"), "{calls}");
+    // It keeps itself up to date: a timer runs the update, as root.
+    let update =
+        fs::read_to_string(machine.path("etc/systemd/system/orbite-update.service")).unwrap();
+    assert!(update.contains("ExecStart=/usr/local/bin/orbite update"), "{update}");
+    assert!(!update.contains("User=orbite"), "{update}");
+    let timer = fs::read_to_string(machine.path("etc/systemd/system/orbite-update.timer")).unwrap();
+    assert!(timer.contains("OnCalendar=daily") && timer.contains("Persistent=true"), "{timer}");
+    assert!(calls.contains("systemctl enable --now orbite-update.timer"), "{calls}");
 }
 
 #[test]
@@ -242,4 +250,22 @@ fn a_machine_with_little_memory_is_warned_and_still_installed() {
 
     assert!(installed.status.success(), "{}", shown(&installed));
     assert!(shown(&installed).contains("memory"), "{}", shown(&installed));
+}
+
+#[test]
+fn the_program_trusts_the_same_key_as_the_installer() {
+    use base64::Engine;
+    let installer = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/install.sh")).unwrap();
+    // An ed25519 public key as the installer writes it: a fixed prefix, then the key.
+    let mut written = hex("302a300506032b6570032100");
+    written.extend_from_slice(&orbite::RELEASE_KEY);
+    let written = base64::engine::general_purpose::STANDARD.encode(written);
+    assert!(installer.contains(&written), "install.sh does not hold {written}");
+}
+
+fn hex(written: &str) -> Vec<u8> {
+    (0..written.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&written[at..at + 2], 16).unwrap())
+        .collect()
 }

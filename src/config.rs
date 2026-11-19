@@ -23,6 +23,9 @@ pub struct Config {
     /// The Telegram account the Agent obeys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telegram_owner: Option<i64>,
+    /// False when the Owner does not want Orbite to update itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_updates: Option<bool>,
     /// What the Owner called their Agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,

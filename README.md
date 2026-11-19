@@ -14,6 +14,8 @@ curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/insta
 
 The installer checks the machine before changing anything, verifies that what it downloads is signed by Orbite's key, gives Orbite an account of its own and a service that restarts by itself, then asks a few questions: which AI to think with, your Telegram bot, your agent's name. Running it again updates Orbite and keeps everything else.
 
+An installed Orbite keeps itself up to date: once a day it installs the latest release, only if Orbite's key signed it, and goes back to the previous one if the new one does not start. `orbite update off` turns that off, and `sudo orbite update` updates now.
+
 ## What 1.0 will be
 
 - One command installs Orbite on a Debian or Ubuntu machine: a spare computer, a mini PC, a VPS.

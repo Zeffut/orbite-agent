@@ -158,6 +158,8 @@ pub struct Agent<P> {
     clock: Arc<dyn Fn() -> DateTime<FixedOffset> + Send + Sync>,
     /// How often the Agent looks at the time for Routines that are due.
     time_check: Duration,
+    /// Where Orbite leaves word of what it did by itself, such as updating.
+    notices: Option<PathBuf>,
     /// True when a notice was added that the Agent has yet to respond to.
     owed: bool,
     /// How often the Agent wakes up when its Owner has set no pace, in
@@ -197,6 +199,7 @@ impl<P: Provider + 'static> Agent<P> {
             reports,
             clock: Arc::new(|| Local::now().fixed_offset()),
             time_check: Duration::from_secs(20),
+            notices: None,
             owed: false,
             wake_up_pace: 0,
             last_active: 0,
@@ -231,6 +234,13 @@ impl<P: Provider + 'static> Agent<P> {
     /// How often the Agent looks at the time for Routines that are due.
     pub fn checking_time_every(mut self, pace: Duration) -> Self {
         self.time_check = pace;
+        self
+    }
+
+    /// The folder where Orbite leaves word for the Owner of what it did by
+    /// itself, such as updating: the Agent passes each on, once.
+    pub fn hearing_notices_in(mut self, folder: impl Into<PathBuf>) -> Self {
+        self.notices = Some(folder.into());
         self
     }
 
@@ -327,6 +337,7 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 _ = time_check.tick() => {
                     let _ = self.run_due_routines();
+                    self.take_notices();
                     if std::mem::take(&mut self.owed) && !self.respond_on(channel, true).await {
                         return;
                     }
@@ -1214,6 +1225,27 @@ impl<P: Provider + 'static> Agent<P> {
             }
         }
         self.store.append(&Message::Notice(format!("{} {}", report.who, report.ended)))
+    }
+
+    /// Takes what Orbite left for the Owner, oldest first.
+    fn take_notices(&mut self) {
+        let Some(folder) = &self.notices else { return };
+        let Ok(found) = std::fs::read_dir(folder) else { return };
+        let mut files: Vec<PathBuf> = found.flatten().map(|entry| entry.path()).collect();
+        files.sort();
+        for file in files {
+            let Ok(text) = std::fs::read_to_string(&file) else { continue };
+            // A notice that cannot be removed would be told again and again.
+            if std::fs::remove_file(&file).is_err() || text.trim().is_empty() {
+                continue;
+            }
+            let noted = self.store.append(&Message::Notice(format!(
+                "Orbite, the program you run on, reports this, which your Owner has not seen. \
+                 Tell them in a sentence: {}",
+                text.trim()
+            )));
+            self.owed |= noted.is_ok();
+        }
     }
 
     /// Starts every Routine whose time has come, and moves each to its next.

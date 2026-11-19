@@ -41,10 +41,37 @@ grep -q '"telegram_owner":1' /var/lib/orbite/config.json
 sleep 3
 [ "$(systemctl is-active orbite)" = "active" ]
 
+# It keeps itself up to date.
+[ "$(systemctl is-enabled orbite-update.timer)" = "enabled" ]
+[ "$(systemctl is-active orbite-update.timer)" = "active" ]
+(cd "$RELEASE" && exec python3 -m http.server 28931 --bind 127.0.0.1 >/dev/null 2>&1) &
+SERVER=$!
+sleep 1
+update_from() {
+    ORBITE_HOME=/var/lib/orbite ORBITE_RELEASE_URL="http://127.0.0.1:28931/$1" /usr/local/bin/orbite update
+}
+# A release that does not start is undone, and the one before runs again.
+if update_from broken; then
+    echo "an update that does not start was kept" >&2
+    exit 1
+fi
+sleep 5
+[ "$(systemctl is-active orbite)" = "active" ]
+/usr/local/bin/orbite version >/dev/null
+# A release that works is installed, and the service runs it.
+BEFORE=$(systemctl show -p MainPID --value orbite)
+update_from next | grep -q "Updated to 99.0.0"
+[ "$(systemctl is-active orbite)" = "active" ]
+[ "$BEFORE" != "$(systemctl show -p MainPID --value orbite)" ]
+[ -f /usr/local/bin/orbite.previous ]
+# The Agent, which is not root, can take what was left for the Owner.
+[ "$(stat -c '%U' /var/lib/orbite/notices)" = "orbite" ]
+kill "$SERVER"
+
 # What was tampered with is refused.
 echo tampered >> "$RELEASE/orbite-x86_64-linux"
 if sh "$RELEASE/install.sh" 2>/dev/null; then
     echo "a tampered program was installed" >&2
     exit 1
 fi
-echo "Installed, restarted after a crash, updated in place, and refused a tampered program."
+echo "Installed, restarted after a crash, updated in place and by itself, undid a bad update, and refused a tampered program."

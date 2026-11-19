@@ -24,6 +24,7 @@ mod store;
 mod subagents;
 mod telegram;
 mod terminal;
+mod updater;
 mod web;
 
 pub use agent::Agent;
@@ -45,3 +46,4 @@ pub use steps::Step;
 pub use store::{Entry, Store, StoreError};
 pub use telegram::Telegram;
 pub use terminal::Terminal;
+pub use updater::{RELEASE_KEY, Service, Systemd, UpdateError, Updater};

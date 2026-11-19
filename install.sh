@@ -124,8 +124,36 @@ RestartSec=3
 WantedBy=multi-user.target
 UNIT
 
+# Orbite keeps itself up to date: once a day it installs the latest release
+# signed by its key, and goes back to the one before if that does not start.
+# The Owner turns it off with: orbite update off
+cat >"$ROOT/etc/systemd/system/orbite-update.service" <<UNIT
+[Unit]
+Description=Update Orbite to the latest signed release
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=ORBITE_HOME=$HOME_DIR
+ExecStart=$PROGRAM update
+UNIT
+cat >"$ROOT/etc/systemd/system/orbite-update.timer" <<UNIT
+[Unit]
+Description=Update Orbite once a day
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl daemon-reload
 systemctl enable orbite >/dev/null 2>&1 || systemctl enable orbite
+systemctl enable --now orbite-update.timer >/dev/null 2>&1 || systemctl enable --now orbite-update.timer
 
 if [ "$UPDATING" = yes ]; then
     systemctl restart orbite
