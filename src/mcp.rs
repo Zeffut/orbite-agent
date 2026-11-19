@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 
 use crate::secrets::Secrets;
@@ -30,6 +30,14 @@ const START_LIMIT: Duration = Duration::from_secs(60);
 
 /// How long a server is given to carry out one call.
 const CALL_LIMIT: Duration = Duration::from_secs(120);
+
+/// The longest message taken from a server, on one line or in one answer.
+const LINE_LIMIT: usize = 8_000_000;
+
+/// How many pages of its list of tools a server is asked for, and how many
+/// tools are taken from it.
+const PAGES_LIMIT: usize = 50;
+const TOOLS_LIMIT: usize = 500;
 
 /// The longest description of a tool passed on to the model.
 const DESCRIPTION_LIMIT: usize = 1_000;
@@ -152,6 +160,7 @@ impl Mcp {
         }
         let mut tools = Vec::new();
         let mut cursor: Option<String> = None;
+        let mut pages = 0;
         loop {
             let page = link
                 .ask("tools/list", cursor.map_or(json!({}), |cursor| json!({ "cursor": cursor })))
@@ -180,7 +189,9 @@ impl Mcp {
                 });
             }
             cursor = page["nextCursor"].as_str().map(str::to_owned);
-            if cursor.is_none() {
+            pages += 1;
+            // A server that never runs out of pages is not listened to for ever.
+            if cursor.is_none() || pages >= PAGES_LIMIT || tools.len() >= TOOLS_LIMIT {
                 break;
             }
         }
@@ -212,6 +223,9 @@ impl Mcp {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            // A group of its own, so that what it starts in turn (as npx
+            // and uvx do) is stopped with it.
+            .process_group(0)
             .kill_on_drop(true);
         // What is Orbite's own stays with Orbite.
         for (name, _) in std::env::vars_os() {
@@ -228,9 +242,10 @@ impl Mcp {
             return Err(format!("{command} could not be talked to"));
         };
         Ok(Link::Local {
-            _child: child,
+            group: child.id(),
+            child,
             stdin,
-            stdout: BufReader::new(stdout).lines(),
+            stdout: BufReader::new(stdout),
             next: 0,
             modern: false,
         })
@@ -393,9 +408,11 @@ pub(crate) type ServerState = (String, Result<usize, String>);
 #[allow(clippy::large_enum_variant)]
 enum Link {
     Local {
-        _child: Child,
+        child: Child,
+        /// The group of programs the server leads, to stop them all.
+        group: Option<u32>,
         stdin: ChildStdin,
-        stdout: Lines<BufReader<ChildStdout>>,
+        stdout: BufReader<ChildStdout>,
         next: u64,
         /// True when the server speaks today's protocol.
         modern: bool,
@@ -408,6 +425,16 @@ enum Link {
         next: u64,
         modern: bool,
     },
+}
+
+impl Drop for Link {
+    fn drop(&mut self) {
+        // Everything the server started goes with it.
+        if let Link::Local { group: Some(group), .. } = self {
+            // SAFETY: a signal sent to the group of a program this one started.
+            unsafe { libc::kill(-(*group as libc::pid_t), libc::SIGKILL) };
+        }
+    }
 }
 
 /// What a server answered: its result, or its error with the error's code.
@@ -465,18 +492,34 @@ impl Link {
             });
         }
         match self {
-            Link::Local { stdin, stdout, next, .. } => {
+            Link::Local { stdin, stdout, next, child, .. } => {
                 *next += 1;
                 let id = *next;
                 let asked =
                     json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
                 send(stdin, &asked).await?;
                 loop {
-                    let line = stdout
-                        .next_line()
-                        .await
-                        .map_err(|error| error.to_string())?
-                        .ok_or("it stopped before answering")?;
+                    // One message a line, and no line longer than a
+                    // server has any reason to write.
+                    let mut line = Vec::new();
+                    let mut limited = (&mut *stdout).take(LINE_LIMIT as u64 + 1);
+                    let reading = limited.read_until(b'\n', &mut line);
+                    // A server that ended may have left a program of its own
+                    // holding its output open: its own end is what counts.
+                    let read = tokio::select! {
+                        read = reading => read.map_err(|error| error.to_string())?,
+                        _ = child.wait() => 0,
+                    };
+                    if read == 0 {
+                        return Err("it stopped before answering".into());
+                    }
+                    if line.len() > LINE_LIMIT {
+                        return Err(format!(
+                            "it wrote a message of more than {} MB",
+                            LINE_LIMIT / 1_000_000
+                        ));
+                    }
+                    let line = String::from_utf8_lossy(&line);
                     let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
                     if message["id"] == json!(id) && message["method"].is_null() {
                         return Ok(answered(&message));
@@ -565,10 +608,25 @@ impl Link {
                 status.as_u16()
             ));
         }
-        let body = answer
-            .text()
-            .await
-            .map_err(|error| format!("its answer did not arrive whole: {}", error.without_url()))?;
+        // Read as it comes, and no further than a server has reason to send.
+        let mut answer = answer;
+        let mut read: Vec<u8> = Vec::new();
+        loop {
+            match answer.chunk().await {
+                Ok(Some(part)) => read.extend_from_slice(&part),
+                Ok(None) => break,
+                Err(error) => {
+                    return Err(format!(
+                        "its answer did not arrive whole: {}",
+                        error.without_url()
+                    ));
+                }
+            }
+            if read.len() > LINE_LIMIT {
+                return Err(format!("it answered with more than {} MB", LINE_LIMIT / 1_000_000));
+            }
+        }
+        let body = String::from_utf8_lossy(&read).into_owned();
         // An error told in the protocol's own words is an answer.
         if !status.is_success() && !body.contains("\"jsonrpc\"") {
             return Err(format!("it answered HTTP {}", status.as_u16()));

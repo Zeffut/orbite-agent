@@ -372,3 +372,61 @@ async fn a_remote_server_that_speaks_todays_protocol_is_told_what_each_request_i
         .any(|request| String::from_utf8_lossy(&request.body).contains("initialize"));
     assert!(!greeted, "a server of today was greeted as an earlier one");
 }
+
+#[tokio::test]
+async fn a_server_that_writes_without_end_is_cut_off_and_the_agent_carries_on() {
+    let home = home_with_notes();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("notes_read_note", json!({ "name": "flood" }))])
+        .then_acts([("notes_read_note", json!({ "name": "shopping" }))])
+        .then(Ok("Read.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Read my notes.");
+    tokio::time::timeout(std::time::Duration::from_secs(60), owner.hears_whenever()).await.unwrap();
+
+    let told: Vec<String> = provider
+        .last_asked()
+        .into_iter()
+        .filter_map(|message| match message {
+            Message::Outcome { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        told[0].contains("more than") && told[0].len() < 1_000,
+        "{}",
+        &told[0][..told[0].len().min(300)]
+    );
+    assert_eq!(told[1], "read-note shopping: token none\nsecond part");
+}
+
+#[tokio::test]
+async fn what_a_server_started_is_stopped_with_it() {
+    let home = home_with_notes();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("notes_read_note", json!({ "name": "spawn" }))])
+        .then_acts([("notes_read_note", json!({ "name": "crash" }))])
+        .then(Ok("Done.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Go.");
+    owner.hears().await;
+
+    let started = provider
+        .last_asked()
+        .into_iter()
+        .find_map(|message| match message {
+            Message::Outcome { text, .. } => {
+                text.lines().next().and_then(|pid| pid.parse::<u32>().ok())
+            }
+            _ => None,
+        })
+        .expect("the server did not say what it started");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let alive =
+        std::fs::read(format!("/proc/{started}/cmdline")).is_ok_and(|command| !command.is_empty());
+    assert!(!alive, "the program the server started is still running");
+}

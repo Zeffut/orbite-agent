@@ -48,6 +48,16 @@ def answer(message):
         name = params["arguments"].get("name")
         if name == "crash":
             sys.exit(1)
+        if name == "flood":
+            # One endless line, as a server gone wrong would write.
+            while True:
+                sys.stdout.write("x" * 1_000_000)
+                sys.stdout.flush()
+        if name == "spawn":
+            # A program of its own, which outlives it unless stopped with it.
+            import subprocess
+            child = subprocess.Popen(["sleep", "300"])
+            return {"content": [{"type": "text", "text": str(child.pid)}]}
         if name == "missing":
             return {"content": [{"type": "text", "text": "There is no such note."}], "isError": True}
         text = f"{params['name']} {name}: token {os.environ.get('NOTES_TOKEN', 'none')}"
