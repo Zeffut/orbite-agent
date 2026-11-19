@@ -475,3 +475,25 @@ fn an_older_release_is_not_put_over_a_newer_orbite_unless_asked() {
     assert!(insisted.status.success(), "{}", shown(&insisted));
     assert_eq!(fs::read_to_string(&installed).unwrap(), "the orbite program");
 }
+
+#[test]
+fn a_system_made_from_debian_or_ubuntu_is_installed_as_they_are_and_told_so() {
+    for about in [
+        "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\nPRETTY_NAME=\"Linux Mint 22\"\n",
+        "ID=kali\nID_LIKE=debian\nPRETTY_NAME=\"Kali GNU/Linux Rolling\"\n",
+        "ID=raspbian\nID_LIKE=debian\nPRETTY_NAME=\"Raspbian GNU/Linux 12\"\n",
+    ] {
+        let machine = Machine::debian();
+        machine.write("etc/os-release", about);
+
+        let installed = machine.install();
+
+        assert!(installed.status.success(), "{about}: {}", shown(&installed));
+        assert!(shown(&installed).contains("made from Debian or Ubuntu"), "{}", shown(&installed));
+        assert!(machine.path("usr/local/bin/orbite").exists());
+    }
+    // What only resembles them by name is not.
+    let other = Machine::debian();
+    other.write("etc/os-release", "ID=fedora\nID_LIKE=\"rhel centos\"\nPRETTY_NAME=\"Fedora\"\n");
+    assert!(!other.install().status.success());
+}

@@ -6,6 +6,7 @@ set -eu
 # When something below fails, what the service was doing is shown.
 trap 'code=$?; [ $code -eq 0 ] || { systemctl status orbite --no-pager -l || true; journalctl -u orbite -n 30 --no-pager || true; }; exit $code' EXIT
 RELEASE="$1"
+case "$(uname -m)" in aarch64 | arm64) FILE=orbite-aarch64-linux ;; *) FILE=orbite-x86_64-linux ;; esac
 export ORBITE_RELEASE_URL="file://$RELEASE"
 ORBITE_SIGNING_KEY="$(cat "$RELEASE/try.pub")"
 export ORBITE_SIGNING_KEY
@@ -41,7 +42,8 @@ SECOND=$(systemctl show -p MainPID --value orbite)
 [ "$FIRST" != "$SECOND" ]
 
 # Installing again keeps the Owner's data and leaves the service running.
-sh "$RELEASE/install.sh"
+# This time as the guide says to: the script read by sh from its input.
+sh < "$RELEASE/install.sh"
 grep -q '"telegram_owner":1' /var/lib/orbite/config.json
 sleep 3
 [ "$(systemctl is-active orbite)" = "active" ]
@@ -54,10 +56,18 @@ printf '%s\n' "a-value-for-the-install-trial" | /usr/local/bin/orbite secret set
 as_orbite /usr/local/bin/orbite secret list | grep -q TRIAL_KEY
 as_orbite /usr/local/bin/orbite settings | grep -q "quiet = 22:00-07:00"
 
-# The Agent's Computer was set up, and works under the Agent's own account.
-command -v Xvfb >/dev/null && command -v xdotool >/dev/null && command -v firefox >/dev/null
-/usr/local/bin/orbite computer check
-[ "$(stat -c '%U' /var/lib/orbite/computer/check.png)" = "orbite" ]
+if [ "${ORBITE_WITHOUT_COMPUTER:-}" = 1 ]; then
+    # Asked to leave the Computer out: nothing of it was brought.
+    if command -v firefox >/dev/null || command -v Xvfb >/dev/null; then
+        echo "the Computer was installed though it was left out" >&2
+        exit 1
+    fi
+else
+    # The Agent's Computer was set up, and works under the Agent's own account.
+    command -v Xvfb >/dev/null && command -v xdotool >/dev/null && command -v firefox >/dev/null
+    /usr/local/bin/orbite computer check
+    [ "$(stat -c '%U' /var/lib/orbite/computer/check.png)" = "orbite" ]
+fi
 
 # It keeps itself up to date.
 [ "$(systemctl is-enabled orbite-update.timer)" = "enabled" ]
@@ -112,7 +122,7 @@ sleep 3
 kill "$TELEGRAM"
 
 # What was tampered with is refused.
-echo tampered >> "$RELEASE/orbite-x86_64-linux"
+echo tampered >> "$RELEASE/$FILE"
 if sh "$RELEASE/install.sh" 2>/dev/null; then
     echo "a tampered program was installed" >&2
     exit 1

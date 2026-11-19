@@ -40,9 +40,18 @@ ID=unknown
 PRETTY_NAME="This system"
 # shellcheck disable=SC1091
 [ -r "$ROOT/etc/os-release" ] && . "$ROOT/etc/os-release"
+ID_LIKE="${ID_LIKE:-}"
 case "$ID" in
     debian | ubuntu) ;;
-    *) refuse "$PRETTY_NAME is not supported yet (Debian and Ubuntu are)." ;;
+    *)
+        # A system made from Debian or Ubuntu is installed as they are.
+        case " $ID_LIKE " in
+            *" debian "* | *" ubuntu "*)
+                say "Note: $PRETTY_NAME is made from Debian or Ubuntu, and Orbite is installed as on them."
+                ;;
+            *) refuse "$PRETTY_NAME is not supported yet (Debian, Ubuntu and systems made from them are)." ;;
+        esac
+        ;;
 esac
 
 [ -d "$ROOT/run/systemd/system" ] || refuse "systemd is not running here, and Orbite runs as a systemd service."

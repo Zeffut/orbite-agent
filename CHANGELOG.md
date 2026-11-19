@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## Unreleased
+
+- The installer takes systems made from Debian or Ubuntu (Linux Mint, Kali, Raspberry Pi OS and the like) as it takes those two, and says so.
+- Each release is now installed, before it is published, on Debian 12 and 13 and Ubuntu 22.04, 24.04 and 26.04, on both x86_64 and aarch64, and the installer is checked to refuse cleanly where Orbite cannot run.
+- A contributor agreement and a guide to contributing.
+
 ## 0.3.13
 
 Released on 2026-11-19. From the same independent read as 0.3.12.
