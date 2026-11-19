@@ -264,6 +264,7 @@ async fn stopping_orbite_closes_its_browser_and_its_screen() {
         running = std::fs::read_to_string(&noted)
             .unwrap_or_default()
             .lines()
+            .filter(|line| line.parse::<u32>().is_ok())
             .map(str::to_owned)
             .collect();
         if running.len() >= 2 {
@@ -294,4 +295,37 @@ async fn stopping_orbite_closes_its_browser_and_its_screen() {
     }
     assert!(left.is_empty(), "left running after Orbite stopped: {left:?}");
     drop(typed);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_screen_that_died_is_started_again_for_the_next_action() {
+    if !has_a_computer() {
+        return;
+    }
+    let (_site, address) = site().await;
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("computer", json!({ "do": "open", "url": address, "purpose": "look" }))])
+        .then_acts([("computer", json!({ "do": "open", "url": address, "purpose": "look again" }))])
+        .then(Ok("There.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Open the site, twice.");
+    asked(&mut owner).await;
+    owner.allows();
+    // While the second opening waits for an answer, the screen dies.
+    asked(&mut owner).await;
+    let noted = std::fs::read_to_string(home.path().join("computer/profile.running")).unwrap();
+    for pid in noted.lines().filter_map(|line| line.parse::<i32>().ok()) {
+        // SAFETY: a signal sent to programs this test's Agent started.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    owner.allows();
+    assert_eq!(heard(&mut owner).await, "There.");
+
+    // The model was shown the page again, on a new screen.
+    let (_, picture) = provider.last_images().pop().expect("the model was shown no picture");
+    assert_eq!(point(&picture, 900, 600), (255, 0, 0));
 }

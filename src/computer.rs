@@ -88,6 +88,11 @@ impl Screen {
         &self.display
     }
 
+    /// False once the program serving a screen Orbite started has ended.
+    fn is_served(&mut self) -> bool {
+        self.serving.as_mut().is_none_or(|serving| matches!(serving.try_wait(), Ok(None)))
+    }
+
     /// A connection to the screen, as Orbite itself has: with its key.
     pub fn connect(&self) -> io::Result<(x11rb::rust_connection::RustConnection, usize)> {
         let Some((key, _)) = &self.key else {
@@ -282,10 +287,15 @@ impl Computer {
         // An Orbite that was killed leaves its screen and browser running:
         // the browser would take every address asked of this one, and show
         // it on a screen nobody looks at.
-        stop_what_was_left(profile.as_ref());
+        stop_what_was_left(profile.as_ref())?;
         let screen = Screen::start(width, height)?;
+        let me = std::process::id();
+        note(profile.as_ref(), &format!("owner {me} {}", started_at(me)));
+        if let Some(key) = screen.key_file() {
+            note(profile.as_ref(), &format!("key {}", key.display()));
+        }
         if let Some(serving) = &screen.serving {
-            note_running(profile.as_ref(), serving.id());
+            note(profile.as_ref(), &serving.id().to_string());
         }
         Ok(Self {
             screen,
@@ -356,7 +366,7 @@ impl Computer {
         // Asked of a browser already running, the address opens in it.
         let started = starting.arg(address).spawn()?;
         if !running {
-            note_running(&self.profile, started.id());
+            note(&self.profile, &started.id().to_string());
         }
         if running {
             // That second program hands the address over and ends.
@@ -432,6 +442,10 @@ impl Desk {
         something: impl FnOnce(&mut Computer) -> io::Result<T>,
     ) -> io::Result<T> {
         let mut computer = self.computer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A screen that died is not one to act on: a new Computer is started.
+        if computer.as_mut().is_some_and(|computer| !computer.screen.is_served()) {
+            drop(computer.take());
+        }
         if computer.is_none() {
             *computer = Some(Computer::start(self.folder.join("profile"), SCREEN.0, SCREEN.1)?);
         }
@@ -496,26 +510,66 @@ fn running_file(profile: &Path) -> PathBuf {
     profile.with_extension("running")
 }
 
-/// Notes that the program `pid` runs for the Computer of `profile`.
-fn note_running(profile: &Path, pid: u32) {
+/// Notes a line about what runs for the Computer of `profile`: who uses it,
+/// where its screen's key is, and each program it started.
+fn note(profile: &Path, line: &str) {
     use std::io::Write;
     if let Ok(mut noted) =
         std::fs::OpenOptions::new().create(true).append(true).open(running_file(profile))
     {
-        let _ = writeln!(noted, "{pid}");
+        let _ = writeln!(noted, "{line}");
     }
 }
 
+/// When the program `pid` started, as the system counts it: with its
+/// number, what tells it from any later program given the same number.
+fn started_at(pid: u32) -> String {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rsplit(')')
+                .next()
+                .and_then(|after| after.split_whitespace().nth(19).map(str::to_owned))
+        })
+        .unwrap_or_default()
+}
+
 /// Stops the screen and browser an earlier Computer of `profile` left
-/// running. A number noted then may be another program's by now: only a
-/// screen server, or a program started on this very profile, is stopped.
-fn stop_what_was_left(profile: &Path) {
+/// running, and removes its screen's key. Fails when the Orbite that noted
+/// them is still running: its Computer is in use, not left behind. A number
+/// noted then may be another program's by now: only a screen server, or a
+/// program started on this very profile, is stopped.
+fn stop_what_was_left(profile: &Path) -> io::Result<()> {
     let noted = running_file(profile);
-    let Ok(pids) = std::fs::read_to_string(&noted) else { return };
+    let Ok(lines) = std::fs::read_to_string(&noted) else { return Ok(()) };
+    for line in lines.lines() {
+        if let Some(owner) = line.strip_prefix("owner ")
+            && let Some((pid, started)) = owner.split_once(' ')
+            && let Ok(pid) = pid.parse::<u32>()
+            && pid != std::process::id()
+            && !started.is_empty()
+            && started_at(pid) == started
+        {
+            return Err(io::Error::other(
+                "the agent's computer is in use by another Orbite running on this machine: stop that one first",
+            ));
+        }
+    }
     let _ = std::fs::remove_file(&noted);
     let mine = profile.display().to_string();
     let mut stopped = false;
-    for pid in pids.lines().filter_map(|line| line.trim().parse::<i32>().ok()) {
+    for line in lines.lines() {
+        if let Some(key) = line.strip_prefix("key ") {
+            // Only what Orbite itself names that way is removed.
+            if Path::new(key)
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("orbite-screen-"))
+            {
+                let _ = std::fs::remove_file(key);
+            }
+            continue;
+        }
+        let Ok(pid) = line.trim().parse::<i32>() else { continue };
         let Ok(command) = std::fs::read(format!("/proc/{pid}/cmdline")) else { continue };
         let command = String::from_utf8_lossy(&command).replace('\0', " ");
         if command.starts_with("Xvfb -displayfd") || command.contains(&mine) {
@@ -528,4 +582,5 @@ fn stop_what_was_left(profile: &Path) {
         // Time for the browser to let go of its profile.
         std::thread::sleep(Duration::from_secs(2));
     }
+    Ok(())
 }

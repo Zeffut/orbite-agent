@@ -27,6 +27,19 @@ Everything below is on `main` and tried on fresh machines by the release workflo
 - When the model itself keeps failing or declining, the Agent says so and how to change it.
 - A Provider's answer that its model wrote a broken Action is asked for again instead of reported as a failure.
 
+### Safer
+
+Two independent reads of the code found defects that are fixed here; none was in 0.1.0's own features except the first two.
+
+- A command with a pattern the shell fills in (`cat ../s*.key`), or reading a process's environment, was run without asking as one that "only looks". It is asked about.
+- Writing with the ordinary file Actions into the Agent's Extensions, MCP servers, settings or secrets is asked about at every Permission Level.
+- Updates, run as root, no longer follow anything the Agent's own account could have put in its folder.
+- An Extension cannot learn a secret from an error message, and a script not yet approved cannot touch what an Extension keeps.
+- The Agent's Computer: its screen has a key of its own, so no other account of the machine can look at it or act on it; a Computer in use by a running Orbite is left alone; one left behind by an Orbite that was killed is cleaned up.
+- Restoring an export hands links over as links, and changes nothing unless it can restore everything.
+
+What is still open from those reads is listed in the issue tracker.
+
 ### To know before releasing
 
 - The installer now adds Mozilla's package repository to the machine, for Firefox.

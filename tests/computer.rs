@@ -226,6 +226,7 @@ mod browser {
         let left_behind: Vec<String> = std::fs::read_to_string(home.path().join("profile.running"))
             .unwrap()
             .lines()
+            .filter(|line| line.parse::<u32>().is_ok())
             .map(str::to_owned)
             .collect();
         assert_eq!(left_behind.len(), 2, "{left_behind:?}");
@@ -247,6 +248,45 @@ mod browser {
         };
         let still: Vec<&String> = left_behind.iter().filter(|pid| running(pid)).collect();
         assert!(still.is_empty(), "left running: {still:?}");
+    }
+
+    #[test]
+    fn a_computer_in_use_by_another_orbite_is_left_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = home.path().join("profile");
+        // Another program, alive, noted as the one using this Computer.
+        let mut other = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", other.id())).unwrap();
+        let started =
+            stat.rsplit(')').next().unwrap().split_whitespace().nth(19).unwrap().to_owned();
+        std::fs::write(
+            home.path().join("profile.running"),
+            format!("owner {} {started}\n{}\n", other.id(), other.id()),
+        )
+        .unwrap();
+
+        let refused = Computer::start(&profile, 800, 600);
+
+        let alive = matches!(other.try_wait(), Ok(None));
+        let _ = other.kill();
+        let _ = other.wait();
+        let Err(why) = refused else { panic!("a Computer in use was taken over") };
+        assert!(why.to_string().contains("in use"), "{why}");
+        assert!(alive, "what the other Orbite was running was stopped");
+    }
+
+    #[test]
+    fn nothing_is_left_of_a_computer_that_ended() {
+        let home = tempfile::tempdir().unwrap();
+        let Some(computer) = started(&home.path().join("profile")) else { return };
+        let key = computer.screen().key_file().unwrap().to_owned();
+        assert!(key.exists());
+        // Killed: nothing of it tidies up. The next one does.
+        std::mem::forget(computer);
+        let Some(next) = started(&home.path().join("profile")) else { return };
+        assert!(!key.exists(), "the key of the screen left behind is still there");
+        drop(next);
+        assert!(!home.path().join("profile.running").exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]
