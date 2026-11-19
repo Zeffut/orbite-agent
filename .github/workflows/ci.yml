@@ -26,10 +26,9 @@ jobs:
           ORBITE_BROWSER: google-chrome
 
   # The Computer with Firefox from Mozilla's own packages, the browser the
-  # installer would put on a Host. Being tried: it does not hold the build up yet.
+  # installer would put on a Host.
   computer-with-firefox:
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal
