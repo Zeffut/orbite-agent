@@ -103,7 +103,7 @@ async fn the_agent_goes_to_a_site_once_allowed_acts_there_and_the_model_sees_the
     provider
         .then_acts([("computer_open", json!({ "url": address, "purpose": "fill in the form" }))])
         // As the model is offered it: one Action, done in several ways.
-        .then_acts([("computer", json!({ "do": "click", "x": 190, "y": 147 }))])
+        .then_acts([("computer", json!({ "do": "click", "x": 127, "y": 98 }))])
         .then_acts([("computer", json!({ "do": "type", "text": "tulip-42" }))])
         .then(Ok("The form is filled in.".into()));
     let mut owner = agent_in(home.path(), &provider);
@@ -127,7 +127,15 @@ async fn the_agent_goes_to_a_site_once_allowed_acts_there_and_the_model_sees_the
     // The model was shown the screen as it was after typing: the page turned green.
     let shown = provider.last_images();
     let (_, picture) = shown.last().expect("the model was shown no picture");
-    assert_eq!(point(picture, 900, 600), (0, 128, 0));
+    assert_eq!(point(picture, 600, 400), (0, 128, 0));
+    // What the model is shown is smaller than the screen, to cost less;
+    // where it aimed on that picture is where the click landed on the screen.
+    let shown_png = std::fs::read(picture).unwrap();
+    let size = (
+        u32::from_be_bytes(shown_png[16..20].try_into().unwrap()),
+        u32::from_be_bytes(shown_png[20..24].try_into().unwrap()),
+    );
+    assert_eq!(size, (853, 533));
     // Only the latest pictures are sent again, however many steps there were.
     assert!(shown.len() <= 3, "{} pictures were sent at once", shown.len());
 }
@@ -143,7 +151,7 @@ async fn a_secret_is_typed_by_name_after_asking_and_its_value_never_reaches_the_
     let provider = ScriptedProvider::default();
     provider
         .then_acts([("computer_open", json!({ "url": address, "purpose": "enter the code" }))])
-        .then_acts([("computer_click", json!({ "x": 190, "y": 147 }))])
+        .then_acts([("computer_click", json!({ "x": 127, "y": 98 }))])
         .then_acts([("computer_type", json!({ "text": "{{FORM_CODE}}" }))])
         .then(Ok("Entered.".into()));
     let mut owner = agent_in(home.path(), &provider);
@@ -157,7 +165,7 @@ async fn a_secret_is_typed_by_name_after_asking_and_its_value_never_reaches_the_
     assert_eq!(heard(&mut owner).await, "Entered.");
 
     let (_, picture) = provider.last_images().pop().expect("the model was shown no picture");
-    assert_eq!(point(&picture, 900, 600), (0, 128, 0), "the secret was not typed");
+    assert_eq!(point(&picture, 600, 400), (0, 128, 0), "the secret was not typed");
     let told = provider.last_asked();
     let leaked = told.iter().any(|message| match message {
         Message::Outcome { text, .. } | Message::Notice(text) => text.contains("tulip-42"),
@@ -327,5 +335,5 @@ async fn a_screen_that_died_is_started_again_for_the_next_action() {
 
     // The model was shown the page again, on a new screen.
     let (_, picture) = provider.last_images().pop().expect("the model was shown no picture");
-    assert_eq!(point(&picture, 900, 600), (255, 0, 0));
+    assert_eq!(point(&picture, 600, 400), (255, 0, 0));
 }

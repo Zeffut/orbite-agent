@@ -321,7 +321,7 @@ impl Host {
                 |description: &str| json!({ "type": "integer", "description": description });
             specs.push(spec(
                 "computer_open",
-                "Opens an address in the browser of your own Computer: a real screen, 1280 by 800, that \
+                "Opens an address in the browser of your own Computer: a real screen that \
                  you see through pictures and act on with mouse and keyboard, for sites that need \
                  signing in or a person's gestures. Your Owner is asked first. Before anything that \
                  pays, sends or deletes, and when a site asks for a code or a person, ask your Owner.",
@@ -340,7 +340,7 @@ impl Host {
                 description: "Clicks at a point of the Computer's screen, counted in pixels from its top left corner, as in the last picture.".into(),
                 input: json!({
                     "type": "object",
-                    "properties": { "x": whole("Across, from 0 to 1279."), "y": whole("Down, from 0 to 799."), "double": { "type": "boolean", "description": "True to click twice." } },
+                    "properties": { "x": whole("Across, from 0 to 852."), "y": whole("Down, from 0 to 532."), "double": { "type": "boolean", "description": "True to click twice." } },
                     "required": ["x", "y"],
                 }),
             });
@@ -417,6 +417,8 @@ impl Host {
             ),
             Gesture::Click { x, y, double } => (
                 desk.with(|computer| {
+                    // Aimed at on the picture the model was shown.
+                    let (x, y) = crate::computer::on_the_screen(x, y);
                     if double {
                         computer.screen().double_click(x, y)
                     } else {

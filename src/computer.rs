@@ -424,6 +424,23 @@ const SCREEN: (u16, u16) = (1280, 800);
 /// still: about a text cursor that blinks, in colour values.
 const CURSOR_SIZED: usize = 600;
 
+/// The size of the picture of the screen a model is shown: two thirds of it.
+pub(crate) const SHOWN: (u16, u16) = (853, 533);
+
+/// The point of the screen that a point of the picture shown to a model stands for.
+pub(crate) fn on_the_screen(x: u16, y: u16) -> (u16, u16) {
+    let scaled = |at: u16, shown: u16, whole: u16| {
+        ((u32::from(at) * u32::from(whole) + u32::from(shown) / 2) / u32::from(shown))
+            .min(u32::from(whole) - 1) as u16
+    };
+    (scaled(x, SHOWN.0, SCREEN.0), scaled(y, SHOWN.1, SCREEN.1))
+}
+
+/// Where the smaller picture a model is shown is kept, beside the whole one.
+pub(crate) fn shown_to_the_model(whole: &Path) -> PathBuf {
+    whole.with_extension("shown.png")
+}
+
 /// How many pictures of the screen are kept on disk.
 const PICTURES_KEPT: u32 = 6;
 
@@ -492,14 +509,21 @@ impl Desk {
             still = if moved || unchanged_since_before { 0 } else { still + 1 };
             seen = now;
         }
+        // Whole for the Owner, and smaller for the model: a picture costs a
+        // model about as many tokens as it has points.
+        let small = crate::png::reduced(seen.0, seen.1, &seen.2, SHOWN.0.into(), SHOWN.1.into());
+        let small = crate::png::encode(SHOWN.0.into(), SHOWN.1.into(), &small);
         let seen = crate::png::encode(seen.0, seen.1, &seen.2);
         let number = self.taken.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let pictures = self.folder.join("pictures");
         std::fs::create_dir_all(&pictures)?;
         let file = pictures.join(format!("screen-{number}.png"));
         std::fs::write(&file, seen)?;
+        std::fs::write(shown_to_the_model(&file), small)?;
         if let Some(old) = number.checked_sub(PICTURES_KEPT) {
-            let _ = std::fs::remove_file(pictures.join(format!("screen-{old}.png")));
+            let old = pictures.join(format!("screen-{old}.png"));
+            let _ = std::fs::remove_file(shown_to_the_model(&old));
+            let _ = std::fs::remove_file(old);
         }
         Ok(file)
     }

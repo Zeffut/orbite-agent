@@ -883,7 +883,9 @@ impl<P: Provider + 'static> Agent<P> {
                 if action.name.starts_with("computer_")
                     && let Some(picture) = attachments(&text).last()
                 {
-                    screen = Some(picture);
+                    // The model is shown the smaller picture made beside it.
+                    let shown = crate::computer::shown_to_the_model(&picture);
+                    screen = Some(if shown.is_file() { shown } else { picture });
                 }
                 self.store.append(&outcome(self.sized(text)))?;
                 if !said.is_empty() && left_out.is_none() {
@@ -2207,8 +2209,8 @@ fn folded(actions: Vec<ActionSpec>) -> Vec<ActionSpec> {
                 offered.push(ActionSpec {
                     name: "computer".into(),
                     description: "Your own Computer, with a web browser: use it whenever you are asked to \
-                        go to a site, click, type, search on a site or sign in. It is a real screen, 1280 \
-                        by 800, that you see through pictures and act on with mouse and keyboard. `do` is \
+                        go to a site, click, type, search on a site or sign in. It is a real screen that \
+                        you see through pictures, 853 by 533, and act on with mouse and keyboard. `do` is \
                         open (an address; your Owner is asked first), look, click (at x, y of the last \
                         picture), type (a text where the cursor is; {{NAME}} types a secret you never \
                         see, once your Owner agrees), key (such as Return, Tab, ctrl+l) or scroll \
