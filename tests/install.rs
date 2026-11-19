@@ -559,3 +559,31 @@ fn a_refusal_the_installer_explains_offers_no_report() {
 
     assert!(report_offered(&shown(&refused)).is_none(), "{}", shown(&refused));
 }
+
+#[test]
+fn a_system_too_old_is_refused_before_anything_is_fetched_or_installed() {
+    for about in [
+        "ID=debian\nVERSION_ID=\"11\"\nPRETTY_NAME=\"Debian GNU/Linux 11 (bullseye)\"\n",
+        "ID=ubuntu\nVERSION_ID=\"20.04\"\nPRETTY_NAME=\"Ubuntu 20.04.6 LTS\"\n",
+    ] {
+        let machine = Machine::debian();
+        machine.write("etc/os-release", about);
+
+        let refused = machine.install();
+
+        assert!(!refused.status.success(), "{about}");
+        assert!(shown(&refused).contains("is too old"), "{}", shown(&refused));
+        assert!(!machine.calls().contains("apt-get"), "{}", machine.calls());
+        assert!(report_offered(&shown(&refused)).is_none());
+    }
+    // The oldest ones taken, and one with no version at all (a rolling system).
+    for about in [
+        "ID=debian\nVERSION_ID=\"12\"\nPRETTY_NAME=\"Debian GNU/Linux 12\"\n",
+        "ID=ubuntu\nVERSION_ID=\"22.04\"\nPRETTY_NAME=\"Ubuntu 22.04\"\n",
+        "ID=debian\nPRETTY_NAME=\"Debian GNU/Linux forky/sid\"\n",
+    ] {
+        let machine = Machine::debian();
+        machine.write("etc/os-release", about);
+        assert!(machine.install().status.success(), "{about}");
+    }
+}

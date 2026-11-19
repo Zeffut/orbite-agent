@@ -93,6 +93,17 @@ case "$ID" in
         ;;
 esac
 
+# Too old to check a release's signature (it takes OpenSSL 3): said now,
+# before anything is fetched or installed.
+VERSION_ID="${VERSION_ID:-}"
+OLDEST=""
+[ "$ID" = debian ] && OLDEST=12
+[ "$ID" = ubuntu ] && OLDEST=22.04
+if [ -n "$OLDEST" ] && [ -n "$VERSION_ID" ] &&
+    [ "$(printf '%s\n%s\n' "$VERSION_ID" "$OLDEST" | sort -V | head -1)" != "$OLDEST" ]; then
+    refuse "$PRETTY_NAME is too old: Orbite needs Debian 12 or Ubuntu 22.04, or later."
+fi
+
 [ -d "$ROOT/run/systemd/system" ] || refuse "systemd is not running here, and Orbite runs as a systemd service."
 
 [ "$(id -u)" = "0" ] || refuse "it must be run as root, for example: curl ... | sudo sh"

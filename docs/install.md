@@ -6,7 +6,7 @@ Orbite is in early development: versions before 1.0 are for trying it out, and t
 
 ## What you need
 
-- A machine running **Debian or Ubuntu**, with systemd, on an x86_64 or aarch64 processor, where you can run commands as root. The installer checks all of this before changing anything, and warns when the machine has little memory.
+- A machine running **Debian 12 or later, Ubuntu 22.04 or later**, or a system made from them (Linux Mint, Kali, Raspberry Pi OS), with systemd, on an x86_64 or aarch64 processor, where you can run commands as root. The installer checks all of this before changing anything, and warns when the machine has little memory.
 - **An AI to think with**: an API key from a provider, a ChatGPT Plus or Pro plan, or a model running on the machine itself with Ollama or LM Studio (see [Providers](providers.md)).
 - **A Telegram account.** Telegram is where you talk to your agent.
 

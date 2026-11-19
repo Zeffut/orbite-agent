@@ -133,13 +133,12 @@ jobs:
           # A supported system that is no machine: nothing runs services.
           - system: debian:13
             says: systemd is not running
-          # Too old to check the release's signature.
-          - system: debian:11
-            systemd: "1"
-            says: cannot check Orbite's signature
+          # Too old to check the release's signature: said before anything
+          # is fetched. (Debian 11's own packages are no longer served, so
+          # no machine can be made of it here; Ubuntu 20.04 stands for both.)
           - system: ubuntu:20.04
             systemd: "1"
-            says: cannot check Orbite's signature
+            says: is too old
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
