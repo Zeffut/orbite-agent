@@ -22,3 +22,5 @@ jobs:
       - run: cargo test --locked
         env:
           ORBITE_TESTS_NEED_A_SCREEN: "1"
+          # The browser the Computer was tried with so far.
+          ORBITE_BROWSER: google-chrome

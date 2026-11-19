@@ -40,7 +40,7 @@ pub use attachments::attached;
 pub use both::Both;
 pub use catalogue::{Connected, KnownProvider, Speaks, connect, known_providers};
 pub use channel::{Answer, Approval, Channel};
-pub use computer::Screen;
+pub use computer::{Computer, Screen};
 pub use config::{Config, ProviderChoice};
 pub use language::Language;
 pub use moving::{export, restore};

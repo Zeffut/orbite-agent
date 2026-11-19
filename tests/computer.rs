@@ -147,3 +147,81 @@ fn two_screens_do_not_see_each_other() {
     assert_eq!(point(&first.picture().unwrap(), 100, 200), (255, 0, 0));
     assert_ne!(point(&second.picture().unwrap(), 100, 200), (255, 0, 0));
 }
+
+mod browser {
+    use std::time::{Duration, Instant};
+
+    use orbite::Computer;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    use super::point;
+
+    /// A page that is red, turns green once "hello" was typed in its field,
+    /// and is blue from the start when that was typed on an earlier visit.
+    const PAGE: &str = r#"<!doctype html><html><body style="margin:0;background:rgb(255,0,0)">
+<input id="field" autofocus style="position:absolute;left:40px;top:40px;width:300px;height:40px;font-size:24px">
+<script>
+  if (localStorage.getItem("typed") === "hello") document.body.style.background = "rgb(0,0,255)";
+  document.getElementById("field").addEventListener("input", event => {
+    if (event.target.value === "hello") {
+      localStorage.setItem("typed", "hello");
+      document.body.style.background = "rgb(0,128,0)";
+    }
+  });
+</script></body></html>"#;
+
+    /// A Computer for one test, or None where no screen or browser is to be had.
+    fn started(profile: &std::path::Path) -> Option<Computer> {
+        match Computer::start(profile, 800, 600) {
+            Ok(computer) => Some(computer),
+            Err(error) if std::env::var_os("ORBITE_TESTS_NEED_A_SCREEN").is_some() => {
+                panic!("no Computer can be started here: {error}")
+            }
+            Err(error) => {
+                eprintln!("skipped: no Computer can be started here ({error})");
+                None
+            }
+        }
+    }
+
+    /// Waits until the page, well inside the window, is of `colour`.
+    fn becomes(computer: &Computer, colour: (u8, u8, u8)) -> bool {
+        let until = Instant::now() + Duration::from_secs(40);
+        while Instant::now() < until {
+            if computer.screen().picture().is_ok_and(|picture| point(&picture, 600, 450) == colour)
+            {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        false
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_page_is_opened_typed_in_and_remembered_by_the_browser() {
+        let site = MockServer::start().await;
+        Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(PAGE, "text/html"))
+            .mount(&site)
+            .await;
+        let address = format!("http://127.0.0.1:{}/", site.address().port());
+        let home = tempfile::tempdir().unwrap();
+        let profile = home.path().join("profile");
+
+        let Some(mut computer) = started(&profile) else { return };
+        computer.open(&address).unwrap();
+        assert!(becomes(&computer, (255, 0, 0)), "the page did not show");
+
+        // The field is clicked and typed in, as a person would.
+        computer.screen().click(190, 60 + computer.page_top()).unwrap();
+        computer.screen().type_text("hello").unwrap();
+        assert!(becomes(&computer, (0, 128, 0)), "what was typed did not reach the page");
+
+        // The browser is closed, and another day it still knows.
+        computer.close_browser();
+        drop(computer);
+        let Some(mut computer) = started(&profile) else { return };
+        computer.open(&address).unwrap();
+        assert!(becomes(&computer, (0, 0, 255)), "the browser forgot what the site kept");
+    }
+}

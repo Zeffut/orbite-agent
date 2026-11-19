@@ -2,7 +2,9 @@
 //! pictures and acted on with a mouse and a keyboard, as a person would.
 
 use std::io::{self, BufRead, BufReader};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
@@ -103,6 +105,7 @@ impl Screen {
         let done = Command::new("xdotool")
             .args(gesture)
             .env("DISPLAY", &self.display)
+            .env_remove("XAUTHORITY")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -121,5 +124,136 @@ impl Drop for Screen {
             let _ = serving.kill();
             let _ = serving.wait();
         }
+    }
+}
+
+/// The browsers Orbite knows how to start, by command, in order of
+/// preference, and whether each is of Chrome's family.
+const BROWSERS: [(&str, bool); 5] = [
+    ("firefox", false),
+    ("firefox-esr", false),
+    ("google-chrome", true),
+    ("chromium", true),
+    ("chromium-browser", true),
+];
+
+/// The Agent's Computer: its screen, and a browser that keeps what sites
+/// leave in it from one day to the next.
+pub struct Computer {
+    screen: Screen,
+    /// Where the browser keeps its sign-ins, history and settings.
+    profile: PathBuf,
+    /// The browser's command, and whether it is of Chrome's family.
+    browser: (String, bool),
+    running: Option<Child>,
+    size: (u16, u16),
+}
+
+impl Computer {
+    /// Starts a screen of its own for a browser that keeps its data in `profile`.
+    pub fn start(profile: impl AsRef<Path>, width: u16, height: u16) -> io::Result<Self> {
+        // ORBITE_BROWSER names one of them, when the first found is not the one wanted.
+        let wanted = std::env::var("ORBITE_BROWSER").ok().filter(|wanted| !wanted.is_empty());
+        let found = BROWSERS
+            .iter()
+            .filter(|(command, _)| wanted.as_deref().is_none_or(|wanted| wanted == *command))
+            .find(|(command, _)| {
+                Command::new(command)
+                    .arg("--version")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success())
+            });
+        let Some((command, chrome)) = found else {
+            return Err(io::Error::other("no browser Orbite knows is installed"));
+        };
+        std::fs::create_dir_all(&profile)?;
+        Ok(Self {
+            screen: Screen::start(width, height)?,
+            profile: profile.as_ref().to_owned(),
+            browser: ((*command).to_owned(), *chrome),
+            running: None,
+            size: (width, height),
+        })
+    }
+
+    pub fn screen(&self) -> &Screen {
+        &self.screen
+    }
+
+    /// How far down the screen a page starts, below the browser's own bars.
+    pub fn page_top(&self) -> u16 {
+        if self.browser.1 { 87 } else { 85 }
+    }
+
+    /// Shows `address` in the browser, starting the browser when it is not running.
+    pub fn open(&mut self, address: &str) -> io::Result<()> {
+        let running =
+            self.running.as_mut().is_some_and(|browser| matches!(browser.try_wait(), Ok(None)));
+        let (command, chrome) = &self.browser;
+        let mut starting = Command::new(command);
+        // On this screen and no other: a browser that finds a desktop
+        // session in its environment would open there instead.
+        starting
+            .env("DISPLAY", self.screen.display())
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("XDG_SESSION_TYPE")
+            .env_remove("XAUTHORITY")
+            .env("MOZ_ENABLE_WAYLAND", "0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if *chrome {
+            starting
+                .arg(format!("--user-data-dir={}", self.profile.display()))
+                .args([
+                    "--ozone-platform=x11",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--password-store=basic",
+                ])
+                .arg("--window-position=0,0")
+                .arg(format!("--window-size={},{}", self.size.0, self.size.1));
+        } else {
+            starting.arg("--profile").arg(&self.profile).args([
+                "--width",
+                &self.size.0.to_string(),
+                "--height",
+                &self.size.1.to_string(),
+            ]);
+        }
+        // Asked of a browser already running, the address opens in it.
+        let started = starting.arg(address).spawn()?;
+        if running {
+            // That second program hands the address over and ends.
+            std::thread::spawn(move || {
+                let mut handing_over = started;
+                let _ = handing_over.wait();
+            });
+        } else {
+            self.running = Some(started);
+        }
+        Ok(())
+    }
+
+    /// Asks the browser to close, giving it time to keep what it has to.
+    pub fn close_browser(&mut self) {
+        let Some(mut browser) = self.running.take() else { return };
+        // SAFETY: a signal sent to a program this one started.
+        unsafe { libc::kill(browser.id() as libc::pid_t, libc::SIGTERM) };
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until && matches!(browser.try_wait(), Ok(None)) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let _ = browser.kill();
+        let _ = browser.wait();
+    }
+}
+
+impl Drop for Computer {
+    fn drop(&mut self) {
+        self.close_browser();
     }
 }
