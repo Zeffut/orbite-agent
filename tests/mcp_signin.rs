@@ -756,3 +756,28 @@ async fn asked_in_plain_words_the_agent_adds_a_connector_once_its_owner_agrees()
             .unwrap();
     assert_eq!(written["mcpServers"]["far"]["url"], json!(address));
 }
+
+#[tokio::test]
+async fn what_the_agent_does_for_its_owner_is_all_done_though_one_of_them_restarts_orbite() {
+    let server = server_taking_only("old-access").await;
+    let home = home_signed_in_to(&server).await;
+    let provider = ScriptedProvider::default();
+    // Turning the connector off restarts Orbite: asked first, done last.
+    provider
+        .then_acts([
+            ("command", json!({ "command": "/connections off far" })),
+            ("command", json!({ "command": "/usage" })),
+        ])
+        .then(Ok("Both are on their way.".into()));
+    let (mut owner, running) = installed_agent(home.path(), &provider);
+
+    owner.says("Turn far off and tell me what I used today.");
+    owner.is_asked().await;
+    owner.allows();
+    assert_eq!(owner.hears().await, "Both are on their way.");
+    let first = owner.hears().await;
+    assert!(first.contains("Today") || first.contains("used"), "the use came first: {first}");
+    let second = owner.hears().await;
+    assert!(second.contains("far") && second.contains("turned off"), "{second}");
+    let _ = running.await;
+}

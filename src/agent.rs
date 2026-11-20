@@ -3000,7 +3000,24 @@ impl<P: Provider + 'static> Agent<P> {
                     Ok(_) => {
                         // Carried out once this turn is over, as if the
                         // Owner had written it: Orbite answers it itself.
-                        self.set_aside.push_back(command.to_owned());
+                        // What makes Orbite start again goes last: the
+                        // others would be lost with it.
+                        let restarts = |command: &String| {
+                            let words: Vec<&str> = command.split_whitespace().collect();
+                            match words[..] {
+                                ["/connect", ..] | ["/connections", _, _] => true,
+                                ["/settings", name, _, ..] => {
+                                    crate::TAKES_A_RESTART.contains(&name)
+                                }
+                                _ => false,
+                            }
+                        };
+                        let before = if restarts(&command.to_owned()) {
+                            self.set_aside.len()
+                        } else {
+                            self.set_aside.iter().position(restarts).unwrap_or(self.set_aside.len())
+                        };
+                        self.set_aside.insert(before, command.to_owned());
                         "It is carried out right after your reply, and Orbite itself tells your \
                          Owner what comes of it. Reply with a few words at most, or nothing: do \
                          not describe, promise or repeat it."
