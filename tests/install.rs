@@ -699,10 +699,10 @@ impl Machine {
     }
 }
 
-/// What a fresh system has whatever it is, curl aside.
+/// What a fresh system has whatever it is, curl aside. Neither awk nor
+/// cmp: the smallest openSUSE has neither.
 const BARE: &[&str] = &[
     "sh",
-    "awk",
     "sed",
     "grep",
     "od",
@@ -718,7 +718,6 @@ const BARE: &[&str] = &[
     "chmod",
     "mkdir",
     "cat",
-    "cmp",
     "dirname",
     "sha256sum",
     "openssl",

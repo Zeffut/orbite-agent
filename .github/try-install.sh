@@ -8,13 +8,13 @@ trap 'code=$?; [ $code -eq 0 ] || { systemctl status orbite --no-pager -l || tru
 RELEASE="$1"
 case "$(uname -m)" in aarch64 | arm64) FILE=orbite-aarch64-linux ;; *) FILE=orbite-x86_64-linux ;; esac
 export ORBITE_RELEASE_URL="file://$RELEASE"
-if [ "${TRY_WITH_WGET_ONLY:-}" = 1 ]; then
-    # As on a fresh Debian: wget and no curl, so the release is fetched
-    # over the network, which is all wget does.
-    if command -v curl >/dev/null; then
-        echo "this machine has curl: nothing would be shown" >&2
-        exit 1
-    fi
+if [ "${TRY_WITH_WGET_ONLY:-}" = 1 ] && command -v curl >/dev/null; then
+    echo "this machine has curl: nothing would be shown" >&2
+    exit 1
+fi
+if ! command -v curl >/dev/null && command -v wget >/dev/null; then
+    # A machine with wget and no curl, as a fresh Debian or Mint: the
+    # release is fetched over the network, which is all wget does.
     (cd "$RELEASE" && exec python3 -m http.server 28930 --bind 127.0.0.1 >/dev/null 2>&1) &
     sleep 1
     export ORBITE_RELEASE_URL="http://127.0.0.1:28930"

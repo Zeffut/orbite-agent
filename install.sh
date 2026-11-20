@@ -43,19 +43,16 @@ refuse() {
     exit 1
 }
 
-# `$1` as it is written in an address: letters and digits as they are,
-# everything else by its number.
+# `$1` as it is written in an address: every byte by its number, then
+# letters and digits put back as they are. With nothing but what the
+# smallest system has: no awk there, on some.
 in_an_address() {
-    printf '%s' "$1" | LC_ALL=C awk '
-        BEGIN { for (i = 1; i < 256; i++) written[sprintf("%c", i)] = sprintf("%%%02X", i) }
-        {
-            line = ""
-            for (i = 1; i <= length($0); i++) {
-                letter = substr($0, i, 1)
-                line = line (letter ~ /[A-Za-z0-9._~-]/ ? letter : written[letter])
-            }
-            printf "%s%s", (NR > 1 ? "%0A" : ""), line
-        }'
+    UNWRITE=""
+    for letter in a b c d e f g h i j k l m n o p q r s t u v w x y z \
+        A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9; do
+        UNWRITE="$UNWRITE;s/%$(printf '%x' "'$letter")/$letter/g"
+    done
+    printf '%s' "$1" | od -An -v -tx1 | tr -d ' \n' | sed 's/../%&/g' | sed "$UNWRITE"
 }
 
 # When the installer stops on something it did not foresee, it offers a
@@ -162,7 +159,7 @@ fi
 
 [ "$(id -u)" = "0" ] || refuse "it must be run as root: with sudo in front of sh, or from a root shell."
 
-MEMORY_KB=$(awk '/^MemTotal:/ { print $2 }' "$ROOT/proc/meminfo" 2>/dev/null || true)
+MEMORY_KB=$(sed -n 's/^MemTotal:[^0-9]*\([0-9][0-9]*\).*/\1/p' "$ROOT/proc/meminfo" 2>/dev/null || true)
 if [ -n "${MEMORY_KB:-}" ] && [ "$MEMORY_KB" -lt 1900000 ]; then
     say "Note: this machine has little memory ($((MEMORY_KB / 1024)) MB). Orbite will run, but the"
     say "agent's own computer (its desktop and browser) needs about 2 GB to be comfortable."
@@ -197,7 +194,7 @@ done
 STEP="checking what was downloaded"
 # The list of checksums is signed; the program must match its checksum.
 # Checking the signature takes OpenSSL 3: an older one fails on a sound release.
-HAS="$(openssl version 2>/dev/null | awk '{print $2}')"
+HAS="$(openssl version 2>/dev/null | cut -d' ' -f2)"
 case "$HAS" in
     [3-9].* | [1-9][0-9].*) ;;
     *) refuse "this machine has OpenSSL ${HAS:-of an unknown version}, which cannot check Orbite's signature. It takes OpenSSL 3 or later, as on Debian 12 and Ubuntu 22.04." ;;
@@ -215,7 +212,7 @@ if [ -x "$ROOT$PROGRAM" ] && [ "${ORBITE_ALLOW_OLDER:-}" != 1 ] &&
     fetch "$RELEASE/VERSION" "$WORK/VERSION" 2>/dev/null &&
     (cd "$WORK" && grep ' VERSION$' SHA256SUMS | sha256sum -c - >/dev/null 2>&1); then
     OFFERED="$(tr -d ' \n' <"$WORK/VERSION")"
-    INSTALLED="$("$ROOT$PROGRAM" version 2>/dev/null | awk '{print $2}')"
+    INSTALLED="$("$ROOT$PROGRAM" version 2>/dev/null | cut -d' ' -f2)"
     if [ -n "$INSTALLED" ] && [ "$INSTALLED" != "$OFFERED" ] &&
         [ "$(printf '%s\n%s\n' "$INSTALLED" "$OFFERED" | sort -V | tail -1)" = "$INSTALLED" ]; then
         refuse "this machine runs Orbite $INSTALLED, and what was downloaded is the older $OFFERED. To install it all the same, set ORBITE_ALLOW_OLDER=1."
@@ -229,6 +226,14 @@ UPDATING=no
 
 STEP="creating the agent's account"
 if ! id orbite >/dev/null 2>&1; then
+    # What makes accounts is not on the smallest systems.
+    if ! command -v useradd >/dev/null 2>&1; then
+        case "$PM" in
+            apt-get) install_packages passwd ;;
+            dnf) install_packages shadow-utils ;;
+            *) install_packages shadow ;;
+        esac
+    fi
     # Where the shell that lets nobody in is differs from one system to the next.
     NOLOGIN=$(command -v nologin 2>/dev/null || echo /usr/sbin/nologin)
     useradd --system --home-dir "$HOME_DIR" --shell "$NOLOGIN" orbite
@@ -271,7 +276,7 @@ UNIT
 # A service file its Owner changed is not lost without a word.
 grep -v '^#' "$WORK/orbite.service" >"$WORK/service.new"
 [ -f "$ROOT$SERVICE" ] && grep -v '^#' "$ROOT$SERVICE" >"$WORK/service.old"
-if [ -f "$ROOT$SERVICE" ] && ! cmp -s "$WORK/service.new" "$WORK/service.old"; then
+if [ -f "$ROOT$SERVICE" ] && [ "$(cat "$WORK/service.new")" != "$(cat "$WORK/service.old")" ]; then
     cp "$ROOT$SERVICE" "$ROOT$SERVICE.replaced"
     say "The service file had been changed: it is written anew, and the one before is kept as $SERVICE.replaced. Put changes of your own in a drop-in, which is kept: systemctl edit orbite"
 fi
