@@ -10,11 +10,19 @@ pub struct Terminal<R, W> {
     shown: W,
     /// True while a prompt is on screen with nothing typed after it yet.
     prompted: bool,
+    /// What was typed while the Agent worked and was not the order to
+    /// stop: read in its turn, once the Agent listens again.
+    typed_ahead: std::collections::VecDeque<String>,
 }
 
 impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Terminal<R, W> {
     pub fn new(typed: R, shown: W) -> Self {
-        Self { typed: typed.lines(), shown, prompted: false }
+        Self {
+            typed: typed.lines(),
+            shown,
+            prompted: false,
+            typed_ahead: std::collections::VecDeque::new(),
+        }
     }
 
     async fn show(&mut self, text: &str) -> io::Result<()> {
@@ -29,11 +37,30 @@ impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Channel for T
             self.show("> ").await.ok()?;
             self.prompted = true;
         }
+        if let Some(line) = self.typed_ahead.pop_front() {
+            self.prompted = false;
+            return Some(line);
+        }
         loop {
             let line = self.typed.next_line().await.ok()??;
             if !line.trim().is_empty() {
                 self.prompted = false;
                 return Some(line);
+            }
+        }
+    }
+
+    /// The order to stop, typed while the Agent works. Anything else typed
+    /// meanwhile is not taken as a change of mind, as a terminal is typed
+    /// ahead in: it waits for its turn.
+    async fn interruption(&mut self) -> Option<String> {
+        loop {
+            let line = self.typed.next_line().await.ok()??;
+            if crate::agent::means_stop(&line) {
+                return Some(line);
+            }
+            if !line.trim().is_empty() {
+                self.typed_ahead.push_back(line);
             }
         }
     }
@@ -62,7 +89,10 @@ impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Channel for T
             approval.summary, approval.detail
         ))
         .await?;
-        let typed = self.typed.next_line().await?.unwrap_or_default();
+        let typed = match self.typed_ahead.pop_front() {
+            Some(ahead) => ahead,
+            None => self.typed.next_line().await?.unwrap_or_default(),
+        };
         Ok(match typed.trim() {
             "y" | "Y" | "yes" => Answer::Allowed,
             "a" | "A" | "always" if !approval.critical => Answer::AlwaysAllowed,

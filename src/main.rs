@@ -91,13 +91,22 @@ async fn main() -> ExitCode {
         }
         _ => Err(USAGE.into()),
     };
-    match outcome {
-        Ok(()) => ExitCode::SUCCESS,
+    let code = match outcome {
+        Ok(()) => 0,
         Err(failure) => {
             eprintln!("{failure}");
-            ExitCode::from(2)
+            2
         }
+    };
+    // Ended here rather than by returning: a line still being waited for
+    // from a terminal would hold the program open until someone typed it.
+    // Everything that was running has been stopped and put away by now.
+    {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
     }
+    std::process::exit(code)
 }
 
 async fn run() -> Result<(), Failure> {
@@ -335,16 +344,39 @@ fn connections() -> Result<(), Failure> {
         [] => {
             let language = Language::of(Config::load(&home)?.language.as_deref());
             println!(
-                "AIs, in the order they are asked:\n{}\n",
+                "{}\n{}\n",
+                language.say(
+                    "AIs, in the order they are asked:",
+                    "IA, dans l'ordre où elles sont sollicitées :"
+                ),
                 orbite::providers_shown(&home, language, &[])
             );
-            let connectors = orbite::connectors(&home);
+            let off = orbite::connectors_turned_off(&home);
+            let connectors: Vec<String> = orbite::connectors(&home)
+                .into_iter()
+                .map(|name| {
+                    if off.contains(&name) {
+                        format!("{name} ({})", language.say("turned off", "désactivé"))
+                    } else {
+                        name
+                    }
+                })
+                .collect();
             println!(
-                "Connectors: {}",
-                if connectors.is_empty() { "none".into() } else { connectors.join(", ") }
+                "{} {}",
+                language.say("Connectors:", "Connecteurs :"),
+                if connectors.is_empty() {
+                    language.say("none", "aucun").to_owned()
+                } else {
+                    connectors.join(", ")
+                }
             );
             println!(
-                "\nIn the conversation, /connections shows how each stands and signs in to those that want it.\nAdd a connector: orbite connections add NAME ADDRESS | remove NAME\nAdd an AI: orbite providers add"
+                "{}",
+                language.say(
+                    "\nIn the conversation, /connections shows how each stands and signs in to those that want it.\nAdd a connector: orbite connections add NAME ADDRESS | remove NAME\nAdd an AI: orbite providers add",
+                    "\nDans la discussion, /connections montre l'état de chacun et connecte ceux qui le demandent.\nAjouter un connecteur : orbite connections add NOM ADRESSE | remove NOM\nAjouter une IA : orbite providers add",
+                )
             );
             return Ok(());
         }

@@ -53,6 +53,7 @@ pub use hearing::{Advice, MODELS, Machine, Model, chosen as chosen_transcriber, 
 pub use language::Language;
 pub use mcp::{
     add_server as add_connector, listed as connectors, remove_server as remove_connector,
+    turned_off as connectors_turned_off,
 };
 pub use moving::{export, restore};
 pub use openai_compatible::OpenAiCompatible;

@@ -262,3 +262,33 @@ async fn a_secret_or_a_sign_in_address_sent_while_the_agent_thinks_is_not_shown_
     assert!(!told.contains("only-once") && !told.contains("of-the-link"), "{told}");
     assert!(told.contains("was not kept"), "{told}");
 }
+
+#[tokio::test]
+async fn a_command_written_instead_of_answering_an_approval_is_carried_out_as_a_command() {
+    let workspace = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("run_command", json!({ "command": "touch made.txt" }))])
+        .then(Ok("Left out, then.".into()));
+    let mut owner = agent_in(workspace.path(), &provider);
+    owner.says("Make it.");
+    owner.is_asked().await;
+
+    owner.says("/usage");
+
+    // The model finishes its turn without having been shown the command...
+    assert_eq!(owner.hears().await, "Left out, then.");
+    assert!(!workspace.path().join("made.txt").exists());
+    let seen = provider.last_asked();
+    assert!(
+        !seen
+            .iter()
+            .any(|message| matches!(message, Message::Owner(text) if text.contains("/usage"))),
+        "the command was handed to the model: {seen:?}"
+    );
+    // ...and the command is then answered as a command, by Orbite itself.
+    let asked_before = provider.times_asked();
+    let answered = owner.hears().await;
+    assert!(answered.contains("used in the last seven days"), "{answered}");
+    assert_eq!(provider.times_asked(), asked_before, "a command is not for the model");
+}

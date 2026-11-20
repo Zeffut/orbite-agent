@@ -2,6 +2,14 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.4.9
+
+Released on 2026-11-21.
+
+- **A command written while your agent works is carried out as a command.** Written instead of answering an approval, or while it was thinking, `/connections`, `/usage` and the others were handed to the model as something you had said, which answered in its own words. They now wait for the end of what it is doing, then are carried out.
+- `orbite chat`, the conversation in a terminal, hears `stop` while a command runs, as Telegram always did; what else is typed meanwhile waits for its turn.
+- `orbite connections` speaks one language throughout, yours, and shows the connectors turned off.
+
 ## 0.4.8
 
 Released on 2026-11-20.

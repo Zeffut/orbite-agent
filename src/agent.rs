@@ -178,6 +178,9 @@ pub struct Agent<P> {
     model_at_fault: u8,
     /// True when a notice was added that the Agent has yet to respond to.
     owed: bool,
+    /// Commands the Owner wrote while the Agent worked: carried out as
+    /// commands once it is done, not handed to the model as something said.
+    set_aside: std::collections::VecDeque<String>,
     /// How often the Agent wakes up when its Owner has set no pace, in
     /// minutes; zero for never.
     wake_up_pace: u32,
@@ -226,6 +229,7 @@ impl<P: Provider + 'static> Agent<P> {
             restarted: false,
             model_at_fault: 0,
             owed: false,
+            set_aside: std::collections::VecDeque::new(),
             wake_up_pace: 0,
             last_active: 0,
             sees_images: true,
@@ -417,6 +421,8 @@ impl<P: Provider + 'static> Agent<P> {
         time_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             let text = tokio::select! {
+                biased;
+                Some(text) = std::future::ready(self.set_aside.pop_front()) => text,
                 written = channel.receive() => match written {
                     Some(text) => text,
                     None => return,
@@ -900,6 +906,10 @@ impl<P: Provider + 'static> Agent<P> {
                 Attended::Interrupted => {
                     // The Owner added something: think again with it.
                     for text in said {
+                        if text.trim_start().starts_with('/') {
+                            self.set_aside.push_back(text);
+                            continue;
+                        }
                         let text = self.heard(self.fit_to_keep(text)).await;
                         self.store.append(&Message::from_owner(text))?;
                     }
@@ -1122,6 +1132,10 @@ impl<P: Provider + 'static> Agent<P> {
                 return self.stopped(channel, &said).await;
             }
             for text in said {
+                if text.trim_start().starts_with('/') {
+                    self.set_aside.push_back(text);
+                    continue;
+                }
                 let text = self.heard(self.fit_to_keep(text)).await;
                 self.store.append(&Message::from_owner(text))?;
             }
@@ -3113,7 +3127,7 @@ async fn attending<T>(
 }
 
 /// True when what the Owner wrote is the order to stop.
-fn means_stop(text: &str) -> bool {
+pub(crate) fn means_stop(text: &str) -> bool {
     let word = text.trim().trim_end_matches(['!', '.']).to_lowercase();
     word == "stop" || word == "/stop" || word == "/reset"
 }
