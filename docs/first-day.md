@@ -47,9 +47,11 @@ How much it does without asking is the **permission level**:
 |---|---|
 | careful (at first) | only what looks at things: reading files, searching the web |
 | balanced | also changes inside the agent's own folders |
-| free | everything, except critical actions |
+| free | everything: the agent keeps its own machine, its updates and restarts included |
 
-**Critical actions** are asked about at every level and cannot be allowed once and for all: anything that could show a secret to the AI provider, creating an extension, and writing straight into Orbite's own files (its extensions, `mcp.json`, its settings, its secrets).
+**Critical actions** are asked about at the careful and balanced levels, each time, and cannot be allowed once and for all: taking administrator rights, restarting or stopping the machine, anything that could show a secret to the AI provider, creating an extension, and writing straight into Orbite's own files (its extensions, `mcp.json`, its settings, its secrets).
+
+At the **free** level nothing is asked, critical or not. Choose it knowing what that means: your agent may update itself, restart its machine, change its own settings and read any file its account can read, on its own judgement; and what it reads on the web or in a file could talk it into something you would have refused. Raising the level is always yours to allow; your agent cannot do it by itself.
 
 A command runs without asking only when it plainly does nothing but look: `ls`, `cat notes.txt`, `grep`. One the shell would complete by itself (`cat *.txt`, anything with `~`) is asked about, because what it ends up reading cannot be known beforehand.
 

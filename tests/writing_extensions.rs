@@ -289,12 +289,12 @@ async fn a_script_the_owner_has_not_approved_changes_nothing_that_is_kept() {
 }
 
 #[tokio::test]
-async fn writing_straight_into_orbites_own_folders_is_asked_about_at_every_level() {
+async fn writing_straight_into_orbites_own_folders_is_asked_about_below_the_free_level() {
     let home = tempfile::tempdir().unwrap();
     let (mut channel, mut owner) = memory_channel();
     let provider = ScriptedProvider::default();
     provider
-        .then_acts([("set_permission_level", json!({ "level": "free" }))])
+        .then_acts([("set_permission_level", json!({ "level": "balanced" }))])
         .then_acts([("write_file", json!({ "path": "../extensions/sneaky/main.js", "content": "function describe() { return []; }" }))])
         .then_acts([("write_file", json!({ "path": "../mcp.json", "content": "{}" }))])
         .then_acts([("write_file", json!({ "path": "notes.txt", "content": "fine" }))])
@@ -309,10 +309,11 @@ async fn writing_straight_into_orbites_own_folders_is_asked_about_at_every_level
             .await
     });
 
-    owner.says("Be free, then write these.");
+    owner.says("Be freer, then write these.");
     owner.is_asked().await; // loosening the level
     owner.allows();
-    // Free, and still asked: these files decide what the Agent can reach.
+    // Free within its own folders, and still asked: these files decide
+    // what the Agent can reach.
     let first = owner.is_asked().await;
     assert!(first.critical && first.detail.contains("extensions/sneaky"), "{first:?}");
     owner.denies();
@@ -321,7 +322,7 @@ async fn writing_straight_into_orbites_own_folders_is_asked_about_at_every_level
     owner.denies();
     owner.hears().await;
 
-    assert!(owner.was_asked_nothing(), "an ordinary file asked at the free level");
+    assert!(owner.was_asked_nothing(), "an ordinary file of its own asked at the balanced level");
     assert!(
         !home.path().join("extensions/sneaky").exists() && !home.path().join("mcp.json").exists()
     );

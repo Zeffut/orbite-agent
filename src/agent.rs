@@ -2464,8 +2464,13 @@ impl<P: Provider + 'static> Agent<P> {
 
     /// True when an Action that would otherwise be asked about needs no
     /// Approval: the Permission Level lets it through, or the Owner allowed
-    /// it once and for all. Never true of a Critical Action.
+    /// it once and for all. A Critical Action is let through at the most
+    /// permissive level only, where the Agent keeps its own machine, its
+    /// updates and restarts included; it is never allowed once and for all.
     fn already_allowed(&self, approval: &Approval, action: &ActionRequest) -> bool {
+        if self.level() == Level::Free {
+            return true;
+        }
         if approval.critical {
             return false;
         }
@@ -2767,8 +2772,9 @@ impl Level {
                  that changes something."
             }
             Self::Free => {
-                "the Agent acts without asking, except for critical actions (administrator \
-                 rights, wiping, secrets, spending money), which it always asks about."
+                "the Agent acts without asking and keeps its own machine: `sudo orbite update` \
+                 updates it, `sudo systemctl restart orbite` restarts it, `sudo systemctl reboot` \
+                 restarts the machine. It still asks before spending its Owner's money."
             }
         }
     }

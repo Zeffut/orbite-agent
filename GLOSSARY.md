@@ -45,7 +45,7 @@ The Owner's setting, from most restrictive to most permissive, that decides whic
 _Avoid_: mode, autonomy level, trust level
 
 **Critical Action**:
-An Action that needs an Approval at every Permission Level, such as spending money.
+An Action that needs an Approval at every Permission Level but the most permissive, and that is never allowed once and for all: taking administrator rights, restarting the Host, changing Orbite's own files, reading what looks like a secret.
 _Avoid_: dangerous action, sensitive action
 
 ### What the Agent thinks with

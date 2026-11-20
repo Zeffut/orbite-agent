@@ -521,6 +521,7 @@ fn uninstall() -> Result<(), Failure> {
         "/etc/systemd/system/orbite.service",
         "/etc/systemd/system/orbite-update.service",
         "/etc/systemd/system/orbite-update.timer",
+        "/etc/sudoers.d/orbite",
         "/usr/local/bin/orbite.previous",
         "/usr/local/bin/orbite",
     ] {

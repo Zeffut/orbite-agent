@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.4.0
+
+Released on 2026-11-20.
+
+- **At the free permission level nothing is asked any more, critical actions included.** Your agent keeps its own machine: it may update itself, restart its service, restart the machine, change its own settings and read any file its account can read, without asking. At the careful and balanced levels critical actions are asked about each time, as before. Choose `free` knowing that what your agent reads on the web or in a file could then talk it into something you would have refused. Raising the level is still yours alone to allow.
+- The installer lets the agent's account do exactly this as root, and nothing else: update Orbite, restart Orbite's service, restart or stop the machine.
+
 ## 0.3.15
 
 Released on 2026-11-20.

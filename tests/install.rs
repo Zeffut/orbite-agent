@@ -23,7 +23,8 @@ impl Machine {
         fs::create_dir_all(machine.path("etc/systemd/system")).unwrap();
         fs::create_dir_all(machine.path("var/lib")).unwrap();
         // Stand-ins for what changes the system: each records its arguments.
-        for command in ["useradd", "systemctl", "chown", "apt-get", "runuser"] {
+        fs::create_dir_all(machine.path("etc/sudoers.d")).unwrap();
+        for command in ["useradd", "systemctl", "chown", "apt-get", "runuser", "sudo", "visudo"] {
             machine.stand_in(command, "exit 0");
         }
         // What gpg says of Mozilla's own key.
@@ -628,4 +629,40 @@ fn what_is_installed_for_the_machine_is_readable_by_it_however_strict_the_accoun
         fs::metadata(machine.path("usr/local/bin/orbite")).unwrap().permissions().mode() & 0o777,
         0o755
     );
+}
+
+#[test]
+fn the_agents_account_may_keep_its_machine_as_root_and_do_nothing_else_as_root() {
+    use std::os::unix::fs::PermissionsExt;
+    let machine = Machine::debian();
+
+    assert!(machine.install().status.success());
+
+    let rules = fs::read_to_string(machine.path("etc/sudoers.d/orbite")).unwrap();
+    for allowed in [
+        "/usr/local/bin/orbite update",
+        "/usr/bin/systemctl restart orbite",
+        "/usr/bin/systemctl reboot",
+    ] {
+        assert!(rules.contains(allowed), "{allowed} in:\n{rules}");
+    }
+    // Nothing open-ended: no ALL as a command, no wildcard.
+    for line in rules.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
+        assert!(line.starts_with("orbite ALL=(root) NOPASSWD: /"), "{line}");
+        assert!(!line.contains('*') && !line.contains("NOPASSWD: ALL"), "{line}");
+    }
+    let mode = fs::metadata(machine.path("etc/sudoers.d/orbite")).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o440);
+    // The rule was checked before it was put in place.
+    assert!(machine.calls().contains("visudo -cf"), "{}", machine.calls());
+}
+
+#[test]
+fn a_rule_sudo_would_not_read_is_not_put_in_place() {
+    let machine = Machine::debian();
+    machine.stand_in("visudo", "exit 1");
+
+    assert!(machine.install().status.success());
+
+    assert!(!machine.path("etc/sudoers.d/orbite").exists());
 }

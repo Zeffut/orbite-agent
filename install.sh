@@ -237,6 +237,34 @@ fi
 cp "$WORK/orbite.service" "$ROOT$SERVICE"
 chmod 644 "$ROOT$SERVICE"
 
+# The Agent keeps its own machine: its account, which is not root, may do
+# exactly these as root and nothing else. Whether it does them without
+# asking its Owner is the Permission Level's to say, in Orbite.
+STEP="letting the agent keep its machine"
+# sudo is what lets an account that is not root do a named few things as root.
+if ! command -v sudo >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends sudo \
+        </dev/null >/dev/null 2>&1 || true
+fi
+if command -v sudo >/dev/null 2>&1 && [ -d "$ROOT/etc/sudoers.d" ]; then
+    cat >"$WORK/sudoers" <<RULES
+# Written by Orbite's installer: what the agent's account may do as root.
+orbite ALL=(root) NOPASSWD: $PROGRAM update, $PROGRAM update on, $PROGRAM update off
+orbite ALL=(root) NOPASSWD: /usr/bin/systemctl restart orbite, /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff
+RULES
+    # A rule sudo cannot read would lock sudo for everybody: checked first.
+    if ! command -v visudo >/dev/null 2>&1 || visudo -cf "$WORK/sudoers" >/dev/null 2>&1; then
+        # In one move, over the one of an earlier install: sudo never
+        # reads half a rule.
+        cp "$WORK/sudoers" "$ROOT/etc/sudoers.d/.orbite.new"
+        chmod 440 "$ROOT/etc/sudoers.d/.orbite.new"
+        mv -f "$ROOT/etc/sudoers.d/.orbite.new" "$ROOT/etc/sudoers.d/orbite"
+    fi
+else
+    say "Note: sudo is not on this machine, so the agent cannot update itself or restart the machine"
+    say "when you ask it to. Install sudo and run this installer again to let it."
+fi
+
 # Orbite keeps itself up to date: once a day it installs the latest release
 # signed by its key, and goes back to the one before if that does not start.
 # The Owner turns it off with: orbite update off

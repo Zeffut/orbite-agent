@@ -69,6 +69,20 @@ else
     [ "$(stat -c '%U' /var/lib/orbite/computer/check.png)" = "orbite" ]
 fi
 
+# The Agent's account may keep its machine, and do nothing else as root.
+if command -v sudo >/dev/null; then
+    as_orbite sudo -n -l | grep -q "/usr/local/bin/orbite update"
+    BEFORE=$(systemctl show -p MainPID --value orbite)
+    as_orbite sudo -n /usr/bin/systemctl restart orbite
+    sleep 3
+    [ "$(systemctl is-active orbite)" = "active" ]
+    [ "$BEFORE" != "$(systemctl show -p MainPID --value orbite)" ]
+    if as_orbite sudo -n /usr/bin/id >/dev/null 2>&1; then
+        echo "the agent's account may run anything as root" >&2
+        exit 1
+    fi
+fi
+
 # It keeps itself up to date.
 [ "$(systemctl is-enabled orbite-update.timer)" = "enabled" ]
 [ "$(systemctl is-active orbite-update.timer)" = "active" ]
