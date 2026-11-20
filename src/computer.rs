@@ -579,12 +579,21 @@ impl Computer {
         // The programs a browser starts outlive it for a moment, and go on
         // writing: all of them are stopped, and waited for.
         let group = -(browser.id() as libc::pid_t);
-        // SAFETY: signals sent to the group of a program this one started.
-        unsafe { libc::kill(group, libc::SIGKILL) };
+        // SAFETY: signals sent to the group of a program this one started;
+        // signal 0 only asks whether any of them is left.
+        let any_left = || unsafe { libc::kill(group, 0) } == 0;
+        // Given the time to finish what they were writing, then made to stop.
         let until = Instant::now() + Duration::from_secs(3);
-        // SAFETY: as above; signal 0 only asks whether any of them is left.
-        while Instant::now() < until && unsafe { libc::kill(group, 0) } == 0 {
+        while Instant::now() < until && any_left() {
             std::thread::sleep(Duration::from_millis(20));
+        }
+        if any_left() {
+            // SAFETY: as above.
+            unsafe { libc::kill(group, libc::SIGKILL) };
+            let until = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < until && any_left() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
         }
         let _ = std::fs::remove_dir_all(scratch_of(&self.profile));
         for left in written_beside_everyone() {
