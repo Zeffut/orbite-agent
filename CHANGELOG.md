@@ -2,6 +2,14 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.4.2
+
+Released on 2026-11-20.
+
+- **Installing on a machine that was just started no longer fails while the system is updating itself**: on Debian and Ubuntu the installer waits for its turn to install packages.
+- The installer needs neither `awk` nor `cmp`, which the smallest openSUSE does not have, and installs what creates accounts where it is missing.
+- Every version is now installed on real machines before it is published: the image each system publishes (Debian 12 and 13, Ubuntu 24.04 and 26.04, Fedora, AlmaLinux 9, Arch, openSUSE Tumbleweed), started untouched in a virtual machine, then restarted to check that Orbite comes back by itself.
+
 ## 0.4.1
 
 Released on 2026-11-20.
