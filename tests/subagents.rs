@@ -167,6 +167,71 @@ async fn a_subagent_can_look_but_cannot_do_what_needs_the_owners_approval() {
     assert!(owner.was_asked_nothing());
 }
 
+/// An Agent that raises its permission level to `level` when told to, and
+/// otherwise delegates; its Sub-agent writes a file in the Agent's folder,
+/// then runs a command that changes something, and reports both outcomes.
+fn delegating_at(level: &'static str) -> ScriptedProvider {
+    let provider = ScriptedProvider::default();
+    provider.replying_otherwise(move |instructions, conversation| {
+        if is_subagent(instructions) {
+            return Ok(match conversation.len() {
+                1 => acting("write_file", json!({ "path": "made.txt", "content": "x" })),
+                3 => acting("run_command", json!({ "command": "touch by-command.txt" })),
+                _ => saying("Done."),
+            });
+        }
+        Ok(match conversation.last() {
+            Some(Message::Owner(text)) if text.contains("level") => {
+                acting("set_permission_level", json!({ "level": level }))
+            }
+            Some(Message::Owner(_)) => {
+                acting("delegate", json!({ "name": "maker", "task": "Make the files." }))
+            }
+            Some(Message::Notice(report)) => saying(&format!("Relayed: {report}")),
+            _ => saying("Understood."),
+        })
+    });
+    provider
+}
+
+#[tokio::test]
+async fn at_the_free_level_a_subagent_does_what_the_agent_would_do_without_asking() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut owner = agent_in(workspace.path(), &delegating_at("free"));
+    owner.says("Raise your level.");
+    owner.is_asked().await;
+    owner.allows();
+    owner.hears().await;
+
+    owner.says("Make my files.");
+    owner.hears().await;
+    let relayed = owner.hears().await;
+
+    assert!(workspace.path().join("made.txt").exists(), "{relayed}");
+    assert!(workspace.path().join("by-command.txt").exists(), "{relayed}");
+    assert!(!relayed.contains("approval"), "{relayed}");
+}
+
+#[tokio::test]
+async fn at_the_balanced_level_a_subagent_does_what_stays_in_the_agents_folder_and_no_more() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut owner = agent_in(workspace.path(), &delegating_at("balanced"));
+    owner.says("Raise your level.");
+    owner.is_asked().await;
+    owner.allows();
+    owner.hears().await;
+
+    owner.says("Make my files.");
+    owner.hears().await;
+    owner.hears().await;
+
+    // Writing a file of its folder is not asked about at this level; a
+    // command that changes something is, and nobody is there to ask.
+    assert!(workspace.path().join("made.txt").exists());
+    assert!(!workspace.path().join("by-command.txt").exists());
+    assert!(owner.was_asked_nothing());
+}
+
 #[tokio::test]
 async fn a_subagent_that_uses_up_its_steps_stops_and_still_reports() {
     let workspace = tempfile::tempdir().unwrap();

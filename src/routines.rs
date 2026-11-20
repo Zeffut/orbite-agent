@@ -93,7 +93,7 @@ pub(crate) fn specs() -> Vec<ActionSpec> {
             "Schedules something for later. Once, with `in_minutes` (a delay, such as \"in ten \
              minutes\") or `at` (a moment): the instruction then comes back to you as a notice \
              and you carry it out. Recurring, with `cron`: each run is done in a fresh context \
-             that knows nothing of your conversation and only looks at things; its report \
+             that knows nothing of your conversation and can ask nobody; its report \
              reaches you as a notice. An existing name is replaced.",
             json!({
                 "name": text("A few words naming it."),

@@ -384,6 +384,8 @@ pub struct Computer {
     /// What was in the machine's shared folder under the names this
     /// browser writes there, before it was started: not its own to clear.
     there_before: Vec<PathBuf>,
+    /// Whether the browser was given a folder of its own to write in.
+    scratch: bool,
 }
 
 impl Computer {
@@ -444,6 +446,7 @@ impl Computer {
             running: None,
             size: (width, height),
             there_before: Vec::new(),
+            scratch: false,
         })
     }
 
@@ -467,16 +470,13 @@ impl Computer {
         let scratch = scratch_of(&self.profile);
         if !running {
             self.there_before = written_beside_everyone();
-            let _ = std::fs::remove_dir_all(&scratch);
-            std::fs::create_dir_all(&scratch)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700))?;
-            }
+            self.scratch = made_anew(&scratch);
         }
         let mut starting = Command::new(command);
-        starting.env("TMPDIR", &scratch);
+        // Without a folder of its own, a browser writes where all do.
+        if self.scratch {
+            starting.env("TMPDIR", &scratch);
+        }
         // On this screen and no other: a browser that finds a desktop
         // session in its environment would open there instead.
         starting
@@ -752,9 +752,38 @@ fn written_beside_everyone() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// Where the browser of `profile` writes what it needs only while it runs.
+/// Where the browser of `profile` writes what it needs only while it runs:
+/// beside the profile, or, when that is too far down for the sockets a
+/// browser makes there (their address holds some hundred letters, no
+/// more), in a folder of the machine's shared one named after the profile.
 fn scratch_of(profile: &Path) -> PathBuf {
-    profile.with_extension("tmp")
+    let beside = profile.with_extension("tmp");
+    if beside.as_os_str().len() <= 56 {
+        return beside;
+    }
+    // Always the same for one profile, so that what an Orbite that was
+    // killed left there is cleared by the next.
+    let mut named: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in profile.as_os_str().as_encoded_bytes() {
+        named = (named ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    // SAFETY: asks who this program runs as, and nothing else.
+    let account = unsafe { libc::geteuid() };
+    PathBuf::from(format!("/tmp/orbite-{account}-{named:016x}"))
+}
+
+/// Makes `scratch` anew, empty and for this account alone. False when it
+/// cannot be: somebody else holds a folder of that name.
+fn made_anew(scratch: &Path) -> bool {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    let _ = std::fs::remove_dir_all(scratch);
+    if std::fs::DirBuilder::new().mode(0o700).create(scratch).is_err() {
+        return false;
+    }
+    // SAFETY: as above.
+    let account = unsafe { libc::geteuid() };
+    std::fs::symlink_metadata(scratch)
+        .is_ok_and(|made| made.is_dir() && made.uid() == account && made.mode() & 0o077 == 0)
 }
 
 fn running_file(profile: &Path) -> PathBuf {

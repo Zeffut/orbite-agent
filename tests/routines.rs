@@ -353,14 +353,17 @@ async fn a_routine_missed_while_orbite_was_stopped_runs_once_at_the_next_start_a
 }
 
 #[tokio::test]
-async fn a_routine_can_be_tried_out_now_and_the_agent_says_it_only_looks() {
+async fn a_routine_can_be_tried_out_now_and_the_agent_says_what_a_run_may_do() {
     let clock = Clock::at("2026-11-19 08:00");
     let provider = obedient(|_| Ok(saying("Sunny.")));
     let mut owner = agent_with(&provider, Store::in_memory(), &clock);
     schedule_briefing(&mut owner).await;
 
     let started = dictate(&mut owner, "run_routine", json!({ "name": "briefing" })).await;
-    assert!(started.contains("look"), "what a run can and cannot do is stated: {started}");
+    assert!(
+        started.contains("without asking") && started.contains("can ask nobody"),
+        "what a run can and cannot do is stated: {started}"
+    );
 
     assert!(owner.hears().await.contains("Sunny."));
     let listed = dictate(&mut owner, "list_routines", json!({})).await;

@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.4.8
+
+Released on 2026-11-20.
+
+- **Routines and sub-agents can act, within the permission level you chose.** Until now a routine's run or a sub-agent could only look at things, whatever the level: anything that would have asked you was refused, since they cannot ask. They now do what your agent itself would do without asking: everything at the `free` level, what stays in its own folder at `balanced`, what you always allowed at any level, and they report the rest as left to do. At `careful`, nothing changes.
+- **The agent's computer works wherever Orbite keeps its folder.** Since 0.4.4, with a folder far down the disk (a path of some fifty letters or more) the browser showed nothing: its sockets had no room for their address. Found by using it for real; an install in the usual place was not affected.
+
 ## 0.4.7
 
 Released on 2026-11-20.

@@ -994,12 +994,15 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 let named = |field: &str| action.input[field].as_str().unwrap_or_default();
                 let own = match action.name.as_str() {
-                    "delegate" => Some(self.subagents.start(
-                        named("name"),
-                        named("task"),
-                        self.provider.clone(),
-                        self.host.clone(),
-                    )),
+                    "delegate" => Some({
+                        self.subagents.allowed = self.allowance();
+                        self.subagents.start(
+                            named("name"),
+                            named("task"),
+                            self.provider.clone(),
+                            self.host.clone(),
+                        )
+                    }),
                     "list_subagents" => Some(self.subagents.list()),
                     "stop_subagent" => Some(self.subagents.stop(named("name"))),
                     "set_quiet_hours" => Some(self.set_quiet_hours(named("from"), named("until"))),
@@ -2193,6 +2196,7 @@ impl<P: Provider + 'static> Agent<P> {
                 routine.name,
                 now.format(routines::MOMENT)
             );
+            self.subagents.allowed = self.allowance();
             let started = self.subagents.run_routine(
                 &routine.name,
                 who,
@@ -2550,6 +2554,16 @@ impl<P: Provider + 'static> Agent<P> {
     /// it once and for all. A Critical Action is let through at the most
     /// permissive level only, where the Agent keeps its own machine, its
     /// updates and restarts included; it is never allowed once and for all.
+    /// What is done without asking, for those the Agent starts to be held
+    /// to the same as it is.
+    fn allowance(&self) -> crate::subagents::Allowance {
+        crate::subagents::Allowance {
+            everything: self.level() == Level::Free,
+            contained: self.level() >= Level::Balanced,
+            always: self.always_allowed().unwrap_or_default(),
+        }
+    }
+
     fn already_allowed(&self, approval: &Approval, action: &ActionRequest) -> bool {
         if self.level() == Level::Free {
             return true;
@@ -2795,6 +2809,7 @@ impl<P: Provider + 'static> Agent<P> {
                             routine.name,
                             now.format(routines::MOMENT)
                         );
+                        self.subagents.allowed = self.allowance();
                         let started = self.subagents.run_routine(
                             &routine.name,
                             who,
@@ -2804,9 +2819,9 @@ impl<P: Provider + 'static> Agent<P> {
                         );
                         Ok(if started {
                             format!(
-                                "Started a run of \"{}\" now. Like every run, it can look at \
-                                 things but changes nothing by itself; its report will reach \
-                                 you as a notice. Its schedule is unchanged.",
+                                "Started a run of \"{}\" now. Like every run, it does without \
+                                 asking only what you would, and can ask nobody; its report \
+                                 will reach you as a notice. Its schedule is unchanged.",
                                 routine.name
                             )
                         } else {
@@ -3003,7 +3018,7 @@ fn unfolded(action: &ActionRequest) -> ActionRequest {
     }
 }
 
-fn covered_by_always(action: &ActionRequest) -> String {
+pub(crate) fn covered_by_always(action: &ActionRequest) -> String {
     // On the Computer, what is allowed once and for all is a site.
     if action.name == "computer_open" {
         let site = action.input["url"].as_str().and_then(|url| url::Url::parse(url).ok());

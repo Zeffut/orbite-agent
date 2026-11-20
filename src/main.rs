@@ -26,7 +26,7 @@ Commands:
   settings   list the settings, or change one (settings NAME VALUE)
   export     write everything of the Agent to a file (export FILE), to move it to another Host
   restore    put an export back on a Host where Orbite is not set up yet (restore FILE)
-  uninstall  remove Orbite from this machine (--keep-data keeps the Agent's data)
+  uninstall  remove Orbite from this machine (--keep-data keeps the Agent's data, --keep-computer what was installed for its computer)
   update     install the latest release now (on or off: let Orbite do it by itself, or not)
   secret     enter (set NAME), list or remove the secrets the Agent uses without seeing them
 

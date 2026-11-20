@@ -9,7 +9,7 @@ You talk to your agent in Telegram, in one continuous conversation. There is not
 - **Remember.** What it learns about you is kept as plain files in `/var/lib/orbite/memory`, one per subject. You can read, change or delete any of them, and ask it to forget something.
 - **Learn skills.** A way of doing something that worked can be kept as a skill (`/var/lib/orbite/skills`), in the Agent Skills format other agents use; skills written for other agents work unchanged.
 - **Work in the background.** It can hand a long piece of work to a sub-agent and carry on talking with you.
-- **Act on a schedule.** "Every morning at 8, tell me the weather" becomes a routine; "remind me at 5 to call Ada" a reminder.
+- **Act on a schedule.** "Every morning at 8, tell me the weather" becomes a routine; "remind me at 5 to call Ada" a reminder. A routine's run, like a sub-agent, can ask you nothing: it does what your agent would do without asking at the permission level you chose, and reports the rest as left to do.
 - **Wake up by itself** now and then to review what is pending, and tell you only when something deserves it.
 - **Use a computer of its own**, where the machine has one: a screen nobody else looks at, with a real browser, that it sees through pictures and acts on with mouse and keyboard. It is for sites that need signing in or a person's gestures. See below.
 - **Keep a task list**, and whatever [extensions](extensions.md) add.

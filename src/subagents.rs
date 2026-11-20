@@ -37,8 +37,8 @@ const INSTRUCTIONS: &str = "\
 You are a sub-agent of a personal AI agent, started for one task. You cannot \
 talk to anyone: your only output is the report you end with, which the agent \
 that started you will read. Work on the task with the actions you are given. \
-You can look at things but not change them: an action that needs the Owner's \
-approval will not be carried out, so say in your report what would need doing. \
+You cannot ask the Owner for anything: an action that would need their \
+approval is not carried out, so say in your report what would need doing. \
 When you are done, reply with the report alone: what you found or did, what \
 you could not do and why. Be precise and brief.";
 
@@ -57,6 +57,34 @@ pub(crate) struct Subagents {
     reports: mpsc::UnboundedSender<Report>,
     /// How many turns a Sub-agent gets before it must report.
     pub(crate) steps: usize,
+    /// What the Owner lets be done without asking, as it stood when the
+    /// Agent last looked: those it starts are held to the same.
+    pub(crate) allowed: Allowance,
+}
+
+/// What the Owner lets be done without asking them.
+#[derive(Clone, Default)]
+pub(crate) struct Allowance {
+    /// At the most permissive level, nothing is asked.
+    pub(crate) everything: bool,
+    /// What stays inside the Agent's own folder is not asked about.
+    pub(crate) contained: bool,
+    /// What the Owner allowed once and for all.
+    pub(crate) always: Vec<String>,
+}
+
+impl Allowance {
+    /// True when the Agent itself would do this without asking.
+    fn lets(&self, approval: &crate::Approval, action: &crate::ActionRequest) -> bool {
+        if self.everything {
+            return true;
+        }
+        if approval.critical {
+            return false;
+        }
+        (self.contained && approval.contained)
+            || self.always.contains(&crate::agent::covered_by_always(action))
+    }
 }
 
 /// Why a Sub-agent could not start.
@@ -75,7 +103,10 @@ impl Subagents {
     /// The Sub-agents, and where their reports arrive.
     pub(crate) fn new() -> (Self, mpsc::UnboundedReceiver<Report>) {
         let (reports, arriving) = mpsc::unbounded_channel();
-        (Self { running: HashMap::new(), reports, steps: 25 }, arriving)
+        (
+            Self { running: HashMap::new(), reports, steps: 25, allowed: Allowance::default() },
+            arriving,
+        )
     }
 
     pub(crate) fn specs() -> Vec<ActionSpec> {
@@ -167,8 +198,9 @@ impl Subagents {
             return Err(Busy::Full);
         }
         let (reports, steps, given) = (self.reports.clone(), self.steps, task.to_owned());
+        let allowed = self.allowed.clone();
         let work = tokio::spawn(async move {
-            let working = work(&*provider, &host, &given, steps);
+            let working = work(&*provider, &host, &given, steps, &allowed);
             let ended = match tokio::time::timeout(TIME_LIMIT, working).await {
                 Ok(ended) => ended,
                 Err(_) => "ran out of time and was stopped. It reported nothing.".into(),
@@ -221,7 +253,13 @@ impl Drop for Subagents {
 }
 
 /// Works on `task` to its end; the text says how it ended and carries the report.
-async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -> String {
+async fn work(
+    provider: &impl Provider,
+    host: &Host,
+    task: &str,
+    steps: usize,
+    allowed: &Allowance,
+) -> String {
     let actions: Vec<ActionSpec> = host
         .specs()
         .into_iter()
@@ -256,6 +294,10 @@ async fn work(provider: &impl Provider, host: &Host, task: &str, steps: usize) -
                 match host.review(action) {
                     Review::Free => host.carry_out(action).await,
                     Review::Refuse(problem) => problem,
+                    // What the Agent would do without asking, so does it.
+                    Review::Ask(approval) if allowed.lets(&approval, action) => {
+                        host.carry_out(action).await
+                    }
                     Review::Ask(_) => "This needs the Owner's approval, which a sub-agent cannot \
                                        ask for. It was not carried out: say in your report what \
                                        would need doing."

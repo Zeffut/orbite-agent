@@ -288,6 +288,50 @@ mod browser {
         assert!(!scratch.exists(), "what the browser wrote while running was left behind");
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_page_shows_however_far_down_orbite_keeps_its_folder() {
+        let site = MockServer::start().await;
+        Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(PAGE, "text/html"))
+            .mount(&site)
+            .await;
+        // A browser's sockets have an address of some hundred letters at
+        // most: a folder this far down leaves no room for them beside it.
+        let home = tempfile::tempdir().unwrap();
+        let far = home.path().join("a-folder-with-a-long-name".repeat(5)).join("computer");
+        std::fs::create_dir_all(&far).unwrap();
+        let before: Vec<_> = orbites_own_in_tmp();
+
+        let Some(mut computer) = started(&far.join("profile")) else { return };
+        computer.open(&format!("http://127.0.0.1:{}/", site.address().port())).unwrap();
+        assert!(becomes(&computer, (255, 0, 0)), "the page did not show");
+
+        computer.close_browser();
+        assert_eq!(orbites_own_in_tmp(), before, "what the browser wrote in was left behind");
+    }
+
+    /// The folders Orbite makes for itself in the machine's shared one.
+    fn orbites_own_in_tmp() -> Vec<std::ffi::OsString> {
+        let mut found: Vec<_> = std::fs::read_dir("/tmp")
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name())
+            // Named after the account and the profile: orbite-1000-0123456789abcdef.
+            .filter(|name| {
+                let name = name.to_string_lossy();
+                name.strip_prefix("orbite-").and_then(|rest| rest.split_once('-')).is_some_and(
+                    |(account, profile)| {
+                        account.bytes().all(|digit| digit.is_ascii_digit())
+                            && profile.len() == 16
+                            && profile.bytes().all(|digit| digit.is_ascii_hexdigit())
+                    },
+                )
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
     #[test]
     fn a_computer_in_use_by_another_orbite_is_left_alone() {
         let home = tempfile::tempdir().unwrap();
