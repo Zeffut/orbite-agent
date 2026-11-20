@@ -4,7 +4,7 @@ Version 1. Adapted from the Apache Software Foundation's Individual Contributor 
 
 Thank you for contributing to Orbite. This agreement says what you allow the project to do with what you contribute. You keep every right to your own work and may use it for anything else.
 
-"You" means the person who agrees to this. "The Maintainer" means **[the Maintainer's legal name, to be filled in before this agreement is put into force]**, who publishes Orbite at https://github.com/Zeffut/orbite-agent, and whoever the Maintainer hands the project over to. "Contribution" means any work of authorship, and any change or addition to an existing one, that you intentionally submit to the project: in a pull request, an issue, a comment, or any other way the project takes submissions.
+"You" means the person who agrees to this. "The Maintainer" means **Zeffut Dev**, who publishes Orbite at https://github.com/Zeffut/orbite-agent, and whoever the Maintainer hands the project over to. "Contribution" means any work of authorship, and any change or addition to an existing one, that you intentionally submit to the project: in a pull request, an issue, a comment, or any other way the project takes submissions.
 
 ## 1. Copyright licence
 
