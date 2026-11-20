@@ -147,7 +147,7 @@ impl Machine {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, "x").unwrap();
         }
-        for command in ["systemctl", "userdel", "chown"] {
+        for command in ["systemctl", "userdel", "chown", "apt-get"] {
             let script = format!(
                 "#!/bin/sh\necho \"{command} $*\" >> '{}'\n",
                 machine.root.path().join("calls.log").display()
@@ -210,6 +210,80 @@ fn uninstalling_removes_the_service_the_account_the_program_and_the_data() {
     ] {
         assert!(calls.contains(expected), "{expected} is missing from:\n{calls}");
     }
+}
+
+/// What the installer writes down of what it brought for the Computer.
+const BROUGHT: &str = "manager apt-get\npackage xvfb\npackage firefox\nfile /etc/apt/sources.list.d/mozilla.list\nfile /etc/apt/preferences.d/mozilla\n";
+
+fn with_a_computer_brought() -> Machine {
+    let machine = Machine::installed();
+    for (file, holding) in [
+        ("usr/local/share/orbite/brought", BROUGHT),
+        ("etc/apt/sources.list.d/mozilla.list", "deb"),
+        ("etc/apt/preferences.d/mozilla", "pin"),
+        ("etc/apt/sources.list.d/the-owners.list", "deb"),
+    ] {
+        let file = machine.root.path().join(file);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, holding).unwrap();
+    }
+    machine
+}
+
+#[test]
+fn uninstalling_takes_away_what_was_brought_for_the_computer_and_nothing_else() {
+    let machine = with_a_computer_brought();
+
+    let removed = machine.uninstall(&["--yes"]);
+
+    assert!(removed.status.success(), "{}", shown(&removed));
+    let calls = machine.calls();
+    let purge = calls
+        .lines()
+        .find(|call| call.starts_with("apt-get ") && call.contains(" purge "))
+        .unwrap_or_else(|| panic!("nothing was removed:\n{calls}"));
+    assert!(purge.ends_with("xvfb firefox"), "{purge}");
+    for gone in [
+        "etc/apt/sources.list.d/mozilla.list",
+        "etc/apt/preferences.d/mozilla",
+        "usr/local/share/orbite",
+    ] {
+        assert!(!machine.has(gone), "{gone} was left behind");
+    }
+    assert!(machine.has("etc/apt/sources.list.d/the-owners.list"));
+    assert!(shown(&removed).contains("xvfb firefox"), "{}", shown(&removed));
+}
+
+#[test]
+fn what_was_brought_for_the_computer_is_kept_when_asked() {
+    let machine = with_a_computer_brought();
+
+    let removed = machine.uninstall(&["--yes", "--keep-computer"]);
+
+    assert!(removed.status.success(), "{}", shown(&removed));
+    assert!(!machine.calls().contains("apt-get"), "{}", machine.calls());
+    assert!(machine.has("etc/apt/sources.list.d/mozilla.list"));
+    assert!(!machine.has("usr/local/bin/orbite") && !machine.has("usr/local/share/orbite"));
+    assert!(shown(&removed).contains("Kept"), "{}", shown(&removed));
+}
+
+#[test]
+fn what_is_written_down_cannot_make_uninstalling_remove_anything_else() {
+    let machine = Machine::installed();
+    let written = machine.root.path().join("usr/local/share/orbite/brought");
+    fs::create_dir_all(written.parent().unwrap()).unwrap();
+    fs::write(
+        &written,
+        "manager apt-get\npackage --allow-remove-essential\npackage xvfb\nfile ../../etc/passwd\nfile relative\n",
+    )
+    .unwrap();
+
+    let removed = machine.uninstall(&["--yes"]);
+
+    assert!(removed.status.success(), "{}", shown(&removed));
+    let calls = machine.calls();
+    let purge = calls.lines().find(|call| call.contains(" purge ")).unwrap();
+    assert!(purge.ends_with(" xvfb") && !purge.contains("essential"), "{purge}");
 }
 
 #[test]

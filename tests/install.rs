@@ -279,6 +279,8 @@ fn hex(written: &str) -> Vec<u8> {
 #[test]
 fn the_agents_computer_is_set_up_with_a_screen_a_browser_and_fonts() {
     let machine = Machine::debian();
+    // A machine with none of it yet, whatever the one running this has.
+    machine.stand_in("dpkg", "exit 1");
 
     let installed = machine.install();
 
@@ -290,6 +292,25 @@ fn the_agents_computer_is_set_up_with_a_screen_a_browser_and_fonts() {
             call.starts_with("apt-get ") && call.contains(" install ") && call.contains("firefox")
         })
         .unwrap_or_else(|| panic!("the Computer's packages were not installed:\n{calls}"));
+    // What was brought and was not there before is written down, for
+    // uninstalling to take it away again.
+    let brought = fs::read_to_string(machine.path("usr/local/share/orbite/brought")).unwrap();
+    for line in [
+        "manager apt-get",
+        "package xvfb",
+        "package firefox",
+        "file /etc/apt/sources.list.d/mozilla.list",
+        "file /etc/apt/preferences.d/mozilla",
+    ] {
+        assert!(
+            brought.lines().any(|written| written == line),
+            "{line} is missing from:\n{brought}"
+        );
+    }
+    // Installing again writes nothing twice.
+    assert!(machine.install().status.success());
+    let again = fs::read_to_string(machine.path("usr/local/share/orbite/brought")).unwrap();
+    assert_eq!(again.lines().filter(|line| *line == "package xvfb").count(), 1, "{again}");
     // A machine just started is updating itself: apt waits for its turn.
     assert!(computer.contains("DPkg::Lock::Timeout="), "{computer}");
     for package in ["xvfb", "xdotool", "fonts-liberation", "fonts-noto-color-emoji"] {

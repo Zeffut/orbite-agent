@@ -353,6 +353,41 @@ systemctl enable --now orbite-update.timer >/dev/null 2>&1 || systemctl enable -
 
 MOZILLA_KEY=35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
 
+# What is brought for the Computer and was not on the machine before is
+# written down, for `orbite uninstall` to take away again and leave the
+# machine as it was.
+BROUGHT=/usr/local/share/orbite/brought
+is_there() {
+    case "$PM" in
+        apt-get) dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed' ;;
+        dnf | zypper) rpm -q "$1" >/dev/null 2>&1 ;;
+        pacman) pacman -Q "$1" >/dev/null 2>&1 ;;
+        *) return 0 ;;
+    esac
+}
+# `brought package xvfb`, `brought file /etc/...`: written down once.
+brought() {
+    mkdir -p "$ROOT${BROUGHT%/*}"
+    grep -qx "manager $PM" "$ROOT$BROUGHT" 2>/dev/null || echo "manager $PM" >>"$ROOT$BROUGHT"
+    grep -qx "$1 $2" "$ROOT$BROUGHT" 2>/dev/null || echo "$1 $2" >>"$ROOT$BROUGHT"
+}
+# Those of the packages named that the machine does not have yet.
+lacking() {
+    LACKING=""
+    for package in "$@"; do
+        is_there "$package" || LACKING="$LACKING $package"
+    done
+}
+# Installs the packages named, and writes down those that are new here.
+bring() {
+    lacking "$@"
+    NEW=$LACKING
+    install_packages "$@" || return 1
+    for package in $NEW; do
+        brought package "$package"
+    done
+}
+
 # The screen, what moves the pointer and types, and the browser, as each
 # system names them; then fonts, each for itself: a page still shows
 # without one of them.
@@ -361,22 +396,22 @@ computer() {
         apt-get) computer_with_mozillas_firefox ;;
         dnf)
             # Outside Fedora, what moves the pointer is in the extra packages.
-            case " $ID " in *" fedora "*) ;; *) install_packages epel-release 2>/dev/null || true ;; esac
-            install_packages xorg-x11-server-Xvfb xdotool firefox || return 1
+            case " $ID " in *" fedora "*) ;; *) bring epel-release 2>/dev/null || true ;; esac
+            bring xorg-x11-server-Xvfb xdotool firefox || return 1
             for font in liberation-fonts google-noto-sans-fonts google-noto-sans-cjk-fonts google-noto-color-emoji-fonts; do
-                install_packages "$font" 2>/dev/null || true
+                bring "$font" 2>/dev/null || true
             done
             ;;
         pacman)
-            install_packages xorg-server-xvfb xdotool firefox || return 1
+            bring xorg-server-xvfb xdotool firefox || return 1
             for font in ttf-liberation noto-fonts noto-fonts-cjk noto-fonts-emoji; do
-                install_packages "$font" 2>/dev/null || true
+                bring "$font" 2>/dev/null || true
             done
             ;;
         zypper)
-            install_packages xorg-x11-server-Xvfb xdotool MozillaFirefox || return 1
+            bring xorg-x11-server-Xvfb xdotool MozillaFirefox || return 1
             for font in liberation-fonts google-noto-sans-fonts google-noto-sans-cjk-fonts google-noto-coloremoji-fonts; do
-                install_packages "$font" 2>/dev/null || true
+                bring "$font" 2>/dev/null || true
             done
             ;;
         # A system whose packages this installer does not know.
@@ -387,6 +422,9 @@ computer() {
 computer_with_mozillas_firefox() {
     mkdir -p "$ROOT/etc/apt/keyrings" "$ROOT/etc/apt/sources.list.d" "$ROOT/etc/apt/preferences.d"
     KEYRING=/etc/apt/keyrings/packages.mozilla.org.asc
+    for written in "$KEYRING" /etc/apt/sources.list.d/mozilla.list /etc/apt/preferences.d/mozilla; do
+        [ -e "$ROOT$written" ] || brought file "$written"
+    done
     if [ ! -s "$ROOT$KEYRING" ]; then
         fetch "${ORBITE_MOZILLA_KEY_URL:-https://packages.mozilla.org/apt/repo-signing-key.gpg}" \
             "$ROOT$KEYRING.new" || return 1
@@ -410,9 +448,13 @@ computer_with_mozillas_firefox() {
     printf 'Package: firefox*\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n\nPackage: *\nPin: origin packages.mozilla.org\nPin-Priority: 1\n' \
         >"$ROOT/etc/apt/preferences.d/mozilla"
     apt-get $APT_WAITS update -qq </dev/null || return 1
+    set -- xvfb xdotool firefox fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
+    lacking "$@"
     DEBIAN_FRONTEND=noninteractive apt-get $APT_WAITS install -y -qq --no-install-recommends --allow-downgrades \
-        xvfb xdotool firefox fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
-        </dev/null >/dev/null || return 1
+        "$@" </dev/null >/dev/null || return 1
+    for package in $LACKING; do
+        brought package "$package"
+    done
 }
 
 if [ "${ORBITE_WITHOUT_COMPUTER:-}" = "1" ]; then

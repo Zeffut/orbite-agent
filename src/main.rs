@@ -487,8 +487,10 @@ fn moving(out: bool) -> Result<(), Failure> {
 fn uninstall() -> Result<(), Failure> {
     let arguments: Vec<String> = env::args().skip(2).collect();
     let keep = arguments.iter().any(|argument| argument == "--keep-data");
+    let keep_computer = arguments.iter().any(|argument| argument == "--keep-computer");
     let root = setting("ORBITE_ROOT").unwrap_or_default();
     let data = PathBuf::from(format!("{root}/var/lib/orbite"));
+    let brought = Brought::written_in(&root);
     if !arguments.iter().any(|argument| argument == "--yes") {
         let losing = if keep {
             "The Agent's data is kept."
@@ -501,7 +503,15 @@ fn uninstall() -> Result<(), Failure> {
                 "Nothing was removed. To remove Orbite without being asked, add --yes.".into()
             );
         }
-        println!("This removes Orbite from this machine. {losing}\nType yes to go on:");
+        println!("This removes Orbite from this machine. {losing}");
+        if !brought.packages.is_empty() && !keep_computer {
+            println!(
+                "What the installer brought for the agent's computer is removed too ({}); add \
+                 --keep-computer to keep it.",
+                brought.packages.join(", ")
+            );
+        }
+        println!("Type yes to go on:");
         let mut typed = String::new();
         std::io::stdin().read_line(&mut typed)?;
         if typed.trim() != "yes" {
@@ -519,6 +529,8 @@ fn uninstall() -> Result<(), Failure> {
     }
     for file in [
         "/etc/systemd/system/orbite.service",
+        "/etc/systemd/system/orbite.service.replaced",
+        "/var/lib/systemd/timers/stamp-orbite-update.timer",
         "/etc/systemd/system/orbite-update.service",
         "/etc/systemd/system/orbite-update.timer",
         "/etc/sudoers.d/orbite",
@@ -536,21 +548,115 @@ fn uninstall() -> Result<(), Failure> {
     }
     systemctl(&["daemon-reload"]);
     if keep {
-        println!("Orbite is removed. The Agent's data is kept in {}.", data.display());
-        // The account goes and the data stays, given to root first: left to
+        // The data stays, given to root before the account goes: left to
         // the account's number, a later account given that number would
         // read the Agent's secrets.
         let _ = std::process::Command::new("chown").args(["-R", "root:root"]).arg(&data).status();
-        let _ = std::process::Command::new("userdel").arg("orbite").status();
-        return Ok(());
     }
     let _ = std::process::Command::new("userdel").arg("orbite").status();
-    println!("Orbite is removed, with the Agent's data.");
-    println!(
-        "The packages installed for the agent's computer (Firefox, xvfb, xdotool, fonts) were left: remove \
-         them with apt if nothing else uses them."
-    );
+    // Some systems give every account a mailbox, which the account leaves behind.
+    for mailbox in ["/var/spool/mail/orbite", "/var/mail/orbite"] {
+        let _ = fs::remove_file(format!("{root}{mailbox}"));
+    }
+    if keep {
+        println!("Orbite is removed. The Agent's data is kept in {}.", data.display());
+    } else {
+        println!("Orbite is removed, with the Agent's data.");
+    }
+    brought.taken_away(&root, keep_computer);
     Ok(())
+}
+
+/// What the installer brought for the Agent's Computer that the machine did
+/// not have before, as the installer wrote it down.
+#[derive(Default)]
+struct Brought {
+    manager: String,
+    packages: Vec<String>,
+    files: Vec<String>,
+    written: bool,
+}
+
+impl Brought {
+    const WRITTEN: &str = "/usr/local/share/orbite/brought";
+
+    fn written_in(root: &str) -> Self {
+        let Ok(text) = fs::read_to_string(format!("{root}{}", Self::WRITTEN)) else {
+            return Self::default();
+        };
+        let mut brought = Self { written: true, ..Self::default() };
+        for line in text.lines() {
+            match line.split_once(' ') {
+                Some(("manager", name)) => brought.manager = name.to_owned(),
+                // A name is a package's or a file's own, never an option.
+                Some(("package", name)) if !name.starts_with('-') && !name.contains(' ') => {
+                    brought.packages.push(name.to_owned())
+                }
+                Some(("file", path)) if path.starts_with('/') && !path.contains("..") => {
+                    brought.files.push(path.to_owned())
+                }
+                _ => {}
+            }
+        }
+        brought
+    }
+
+    /// Removes what was brought, or says what is left when it is to be kept
+    /// or cannot be removed. The machine is then as it was before Orbite.
+    fn taken_away(&self, root: &str, keep: bool) {
+        if !self.written {
+            println!(
+                "The packages installed for the agent's computer (Firefox, Xvfb, xdotool, fonts) were \
+                 left: remove them with your system's own tools if nothing else uses them."
+            );
+            return;
+        }
+        let written = PathBuf::from(format!("{root}{}", Self::WRITTEN));
+        let _ = fs::remove_file(&written);
+        if let Some(folder) = written.parent() {
+            let _ = fs::remove_dir(folder);
+        }
+        if self.packages.is_empty() && self.files.is_empty() {
+            return;
+        }
+        let named = self.packages.join(" ");
+        if keep {
+            println!("Kept, as asked, what was brought for the agent's computer: {named}.");
+            return;
+        }
+        let removing: Option<(&str, &[&str])> = match self.manager.as_str() {
+            "apt-get" => Some((
+                "apt-get",
+                &["-o", "DPkg::Lock::Timeout=600", "purge", "-y", "-qq", "--auto-remove"],
+            )),
+            "dnf" => Some(("dnf", &["remove", "-y", "-q"])),
+            "pacman" => Some(("pacman", &["-Rns", "--noconfirm"])),
+            "zypper" => Some(("zypper", &["--non-interactive", "remove", "--clean-deps"])),
+            _ => None,
+        };
+        let removed = self.packages.is_empty()
+            || removing.is_some_and(|(program, arguments)| {
+                std::process::Command::new(program)
+                    .args(arguments)
+                    .args(&self.packages)
+                    .env("DEBIAN_FRONTEND", "noninteractive")
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success())
+            });
+        for file in &self.files {
+            let _ = fs::remove_file(format!("{root}{file}"));
+        }
+        if removed {
+            println!("What was brought for the agent's computer is removed too: {named}.");
+        } else {
+            println!(
+                "What was brought for the agent's computer could not be removed: {named}. Remove it \
+                 with your system's own tools if nothing else uses it."
+            );
+        }
+    }
 }
 
 /// Starts the Agent's Computer, opens an empty page in its browser, pictures

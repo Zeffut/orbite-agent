@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.4.3
+
+Released on 2026-11-20.
+
+- **Removing Orbite leaves the machine as it was.** The installer writes down what it brings for the agent's computer that the machine did not have (Firefox, Xvfb, `xdotool`, fonts, Mozilla's package source), and `orbite uninstall` takes it away again, with the account's mailbox and the last traces of the service. What the machine already had is never removed; `--keep-computer` keeps what was brought. This is checked on every real machine before a version is published, by comparing the whole machine before installing and after removing.
+
 ## 0.4.2
 
 Released on 2026-11-20.

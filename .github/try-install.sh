@@ -23,6 +23,20 @@ ORBITE_SIGNING_KEY="$(cat "$RELEASE/try.pub")"
 export ORBITE_SIGNING_KEY
 export ORBITE_SKIP_SETUP=1
 
+# The machine as it is before Orbite: every path on it, what the system
+# keeps of its own packages and logs aside.
+everything() {
+    find / \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path "$RELEASE" \
+        -o -path /var/log -o -path /var/cache -o -path /var/lib -o -path /root/trial \) -prune \
+        -o -print 2>/dev/null | sort
+}
+mkdir -p /root/trial
+HAD=""
+for program in Xvfb xdotool firefox; do
+    command -v "$program" >/dev/null && HAD="$HAD $program"
+done
+everything > /root/trial/before
+
 sh "$RELEASE/install.sh"
 if [ "${TRY_WITH_WGET_ONLY:-}" = 1 ] && command -v curl >/dev/null; then
     echo "curl was installed though wget was there" >&2
@@ -140,6 +154,30 @@ if systemctl is-active --quiet orbite; then
     echo "the service was left running" >&2
     exit 1
 fi
+# Nothing of Orbite is left on the machine: no file of its own anywhere,
+# nothing where an Owner keeps their own things, and what it brought for
+# the Agent's Computer is gone with it.
+everything > /root/trial/after
+comm -13 /root/trial/before /root/trial/after > /root/trial/new
+echo "Paths on the machine that were not there before Orbite: $(wc -l < /root/trial/new), of which outside /usr:"
+grep -v '^/usr/' /root/trial/new | head -40 || true
+LEFT=$(grep -i -e orbite -e mozilla -e '^/tmp/' -e '^/usr/local/' -e '^/home/' -e '^/var/spool/' -e '^/var/mail/' \
+    -e '^/etc/sudoers.d/' -e '^/etc/systemd/' -e '^/etc/apt/' /root/trial/new |
+    grep -v -e '^/root/orbite-export.tar.gz$' -e '^/root/orbite-to-uninstall$' || true)
+[ -e /var/lib/orbite ] && LEFT="$LEFT /var/lib/orbite"
+LEFT="$LEFT$(find /var/lib/systemd -iname '*orbite*' 2>/dev/null)"
+if [ -n "$LEFT" ]; then
+    echo "left behind after uninstalling:" >&2
+    echo "$LEFT" >&2
+    exit 1
+fi
+for program in Xvfb xdotool firefox; do
+    case " $HAD " in *" $program "*) continue ;; esac
+    if command -v "$program" >/dev/null; then
+        echo "$program was brought for the Computer and left behind" >&2
+        exit 1
+    fi
+done
 # As from a script with no terminal to ask in: installed, setup left for later.
 env -u ORBITE_SKIP_SETUP setsid sh "$RELEASE/install.sh" </dev/null | tee /root/install.out
 grep -q "no terminal here" /root/install.out
