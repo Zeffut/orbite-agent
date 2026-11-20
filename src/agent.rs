@@ -2428,7 +2428,8 @@ impl<P: Provider + 'static> Agent<P> {
         }
         let told = self.store.append(&Message::Notice(format!(
             "Your Owner just gave you the secret named {name}. You do not see its value: use it by \
-             its name, as {{{{{name}}}}}. If you were waiting for it, carry on; otherwise say nothing more."
+             its name, as {{{{{name}}}}}. If you were waiting for it to go on with something, go on now; \
+             otherwise tell them in one short sentence that you can now use it."
         )));
         if told.is_err() {
             return true;
@@ -2856,15 +2857,61 @@ impl<P: Provider + 'static> Agent<P> {
                 match command_for_the_agent(command) {
                     // Refused when carried out, with what may be asked.
                     Err(_) | Ok(Changes::Nothing) => Review::Free,
-                    Ok(changes) => Review::Ask(Approval {
-                        summary: self
-                            .language
-                            .say("Carry out a command", "Exécuter une commande")
-                            .into(),
-                        detail: command.to_owned(),
-                        irreversible: changes == Changes::ForGood,
-                        ..Approval::default()
-                    }),
+                    Ok(changes) => {
+                        // Said as an Owner would say it, not as it is typed.
+                        let say = |english: &'static str, french: &'static str| -> &'static str {
+                            self.language.say(english, french)
+                        };
+                        let words: Vec<&str> = command.split_whitespace().collect();
+                        let (summary, detail) = match words[..] {
+                            ["/connect", name, address] => (
+                                format!(
+                                    "{} {name}",
+                                    say("Add the connector", "Ajouter le connecteur")
+                                ),
+                                format!(
+                                    "{address}\n\n{}",
+                                    say(
+                                        "Its tools become actions of your agent.",
+                                        "Ses outils deviennent des actions de votre agent."
+                                    )
+                                ),
+                            ),
+                            ["/connections", what, name] => (
+                                format!(
+                                    "{} {name}",
+                                    match what {
+                                        "off" => say(
+                                            "Turn off the connector",
+                                            "Désactiver le connecteur"
+                                        ),
+                                        "on" =>
+                                            say("Turn on the connector", "Activer le connecteur"),
+                                        "disconnect" => say(
+                                            "Sign out of the connector",
+                                            "Déconnecter le connecteur"
+                                        ),
+                                        _ => say("Remove the connector", "Retirer le connecteur"),
+                                    }
+                                ),
+                                String::new(),
+                            ),
+                            ["/settings", name, ..] => (
+                                say("Change a setting", "Modifier un réglage").to_owned(),
+                                format!("{name} → {}", words[2..].join(" ")),
+                            ),
+                            _ => (
+                                say("Carry out a command", "Exécuter une commande").to_owned(),
+                                command.to_owned(),
+                            ),
+                        };
+                        Review::Ask(Approval {
+                            summary,
+                            detail,
+                            irreversible: changes == Changes::ForGood,
+                            ..Approval::default()
+                        })
+                    }
                 }
             }
             "set_permission_level" => {

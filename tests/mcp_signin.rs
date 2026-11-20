@@ -743,7 +743,8 @@ async fn asked_in_plain_words_the_agent_adds_a_connector_once_its_owner_agrees()
     owner.says("Add the far connector for me.");
     // A new source of tools is the Owner's to agree to.
     let asked = owner.is_asked().await;
-    assert!(asked.detail.contains("/connect far"), "{}", asked.detail);
+    assert!(asked.summary.contains("Add the connector far"), "{}", asked.summary);
+    assert!(asked.detail.contains(&address), "{}", asked.detail);
     owner.allows();
     assert_eq!(owner.hears().await, "On it.");
     // Orbite then does it and says so itself, and starts again to take it.
