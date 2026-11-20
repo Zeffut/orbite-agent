@@ -173,7 +173,7 @@ async fn what_the_model_needs_back_as_it_was_is_kept_and_given_back_untouched() 
         { "type": "text", "text": "Let me check." },
         { "type": "tool_use", "id": "toolu_1", "name": "run_command", "input": { "command": "date" } },
     ]);
-    let (_, provider) = provider_answering(content.clone()).await;
+    let (_first, provider) = provider_answering(content.clone()).await;
     let reply =
         provider.reply(request(&[Message::from_owner("What time is it?")], &[])).await.unwrap();
     assert!(reply.kept.is_some(), "the Provider asks for its blocks to be kept");

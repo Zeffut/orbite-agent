@@ -131,7 +131,10 @@ install_packages() {
                 DEBIAN_FRONTEND=noninteractive apt-get $APT_WAITS install -y -qq --no-install-recommends "$@" \
                     </dev/null >/dev/null
             ;;
-        dnf) dnf install -y -q "$@" </dev/null >/dev/null ;;
+        # dnf leaves in the machine's shared folder the keyring it checks a
+        # new source's key with: it is given the installer's own folder,
+        # which goes when the installer ends.
+        dnf) TMPDIR="${WORK:-/tmp}" dnf install -y -q "$@" </dev/null >/dev/null ;;
         pacman) pacman -Syu --noconfirm --needed "$@" </dev/null >/dev/null ;;
         zypper) zypper --non-interactive install --no-recommends "$@" </dev/null >/dev/null ;;
         *) return 1 ;;
