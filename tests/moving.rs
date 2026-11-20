@@ -281,6 +281,52 @@ fn what_the_owner_installed_since_and_needs_a_package_brought_keeps_that_package
     assert!(said.contains("Left on the machine") && said.contains("firefox"), "{said}");
 }
 
+/// A machine of the rpm family where the browser was brought, and where a
+/// package that needs it was installed in the installation numbered `when`
+/// (the browser's own is 100).
+fn with_a_browser_needed_by_a_package_installed_in(when: u32) -> Machine {
+    let machine = Machine::installed();
+    let written = machine.root.path().join("usr/local/share/orbite/brought");
+    fs::create_dir_all(written.parent().unwrap()).unwrap();
+    fs::write(&written, "manager dnf\npackage firefox\n").unwrap();
+    let log = machine.root.path().join("calls.log");
+    let stand_in = |name: &str, does: String| {
+        let file = machine.root.path().join("stand-ins").join(name);
+        fs::write(&file, format!("#!/bin/sh\n{does}\n")).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    stand_in("dnf", format!("echo \"dnf $*\" >> '{}'", log.display()));
+    stand_in(
+        "rpm",
+        format!(
+            "case \"$*\" in\n'-e --test firefox') printf '\\tfirefox is needed by (installed) its-languages-1-1.x86_64\\n' >&2; exit 1;;\n*its-languages*) echo {when};;\n*firefox) echo 100;;\nesac"
+        ),
+    );
+    machine
+}
+
+#[test]
+fn a_package_brought_goes_with_what_came_along_with_it() {
+    let machine = with_a_browser_needed_by_a_package_installed_in(100);
+
+    let removed = machine.uninstall(&["--yes"]);
+
+    assert!(removed.status.success(), "{}", shown(&removed));
+    assert!(machine.calls().contains("dnf remove -y -q firefox"), "{}", machine.calls());
+}
+
+#[test]
+fn a_package_brought_stays_when_something_installed_later_needs_it() {
+    let machine = with_a_browser_needed_by_a_package_installed_in(250);
+
+    let removed = machine.uninstall(&["--yes"]);
+
+    assert!(removed.status.success(), "{}", shown(&removed));
+    assert!(!machine.calls().contains("dnf"), "{}", machine.calls());
+    let said = shown(&removed);
+    assert!(said.contains("Left on the machine") && said.contains("firefox"), "{said}");
+}
+
 #[test]
 fn the_everyday_tools_the_installer_installed_are_left_and_said_so() {
     let machine = Machine::installed();

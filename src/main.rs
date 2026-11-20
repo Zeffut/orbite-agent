@@ -700,7 +700,36 @@ impl Brought {
                         .all(|going| self.packages.iter().any(|brought| brought == going))
             }),
             "dnf" | "zypper" => {
-                quietly("rpm", &["-e", "--test", package]).is_ok_and(|tried| tried.status.success())
+                // What needs it and came in the same installation as it came
+                // with it, and goes with it; what was installed since is
+                // the Owner's, and keeps it.
+                let came = |package: &str| {
+                    quietly("rpm", &["-q", "--qf", "%{INSTALLTID}\\n", package])
+                        .ok()
+                        .filter(|asked| asked.status.success())
+                        .map(|asked| String::from_utf8_lossy(&asked.stdout).trim().to_owned())
+                };
+                let Ok(tried) = std::process::Command::new("rpm")
+                    .args(["-e", "--test", package])
+                    .env("LC_ALL", "C")
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                else {
+                    return false;
+                };
+                if tried.status.success() {
+                    return true;
+                }
+                let said = String::from_utf8_lossy(&tried.stderr).into_owned();
+                let needing: Vec<&str> = said
+                    .lines()
+                    .filter(|line| line.contains("is needed by"))
+                    .filter_map(|line| line.split_whitespace().last())
+                    .collect();
+                let with = came(package);
+                !needing.is_empty()
+                    && with.is_some()
+                    && needing.iter().all(|needs| came(needs) == with)
             }
             "pacman" => true,
             _ => false,
