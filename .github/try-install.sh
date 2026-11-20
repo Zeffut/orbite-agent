@@ -28,7 +28,10 @@ export ORBITE_SKIP_SETUP=1
 everything() {
     find / \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path "$RELEASE" \
         -o -path /var/log -o -path /var/cache -o -path /var/lib -o -path /root/trial \) -prune \
-        -o -print 2>/dev/null | sort
+        -o -print 2>/dev/null > /root/trial/found
+    # Sorted once all is found: what sorts keeps files of its own in /tmp
+    # meanwhile, which would be found there.
+    sort /root/trial/found
 }
 mkdir -p /root/trial
 HAD=""
