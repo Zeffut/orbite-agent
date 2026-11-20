@@ -178,6 +178,8 @@ if [ -n "$LEFT" ]; then
     echo "$LEFT" >&2
     exit 1
 fi
+# (Some shells remember where a program was: made to look again.)
+hash -r 2>/dev/null || true
 for program in Xvfb xdotool firefox; do
     case " $HAD " in *" $program "*) continue ;; esac
     if command -v "$program" >/dev/null; then
