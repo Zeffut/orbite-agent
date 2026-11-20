@@ -8,11 +8,21 @@ use chrono::NaiveTime;
 use crate::{Config, Store};
 
 /// The settings, in the order they are shown.
-pub const SETTINGS: [&str; 8] =
-    ["permission", "quiet", "wakeups", "secrets", "updates", "language", "model", "voice"];
+pub const SETTINGS: [&str; 10] = [
+    "permission",
+    "quiet",
+    "wakeups",
+    "secrets",
+    "updates",
+    "language",
+    "name",
+    "model",
+    "light",
+    "voice",
+];
 
 /// The settings that are read when Orbite starts: changing one takes a restart.
-pub const TAKES_A_RESTART: [&str; 3] = ["language", "model", "voice"];
+pub const TAKES_A_RESTART: [&str; 5] = ["language", "name", "model", "light", "voice"];
 
 /// The settings of one installation.
 pub struct Settings<'a> {
@@ -59,6 +69,9 @@ impl<'a> Settings<'a> {
             "updates" => on_or_off(self.config().automatic_updates != Some(false)).into(),
             "language" => self.config().language.unwrap_or_else(|| "en".into()),
             "model" => self.config().provider.map_or_else(|| "none".into(), |chosen| chosen.model),
+            "name" => self.config().agent_name.unwrap_or_else(|| "Orbite".into()),
+            // The model that does the light work: summaries and Wake-ups.
+            "light" => self.config().light_model.unwrap_or_else(|| "off".into()),
             // What writes down what the Owner says aloud.
             "voice" => match self.config().transcription {
                 None => "provider".into(),
@@ -79,6 +92,7 @@ impl<'a> Settings<'a> {
             "wakeups" => &["off", "60", "240", "720"],
             "secrets" | "updates" => &["off", "on"],
             "language" => &["en", "fr"],
+            "light" => &["off"],
             "voice" => &["provider", "whisper.cpp", "server", "command", "off"],
             _ => &[],
         }
@@ -192,6 +206,34 @@ impl<'a> Settings<'a> {
                     );
                 }
                 chosen.model = model.to_owned();
+                config.save(home).map_err(|error| error.to_string())
+            }
+            "name" => {
+                // As written: a name has its capitals.
+                let name = written.trim();
+                let Some(home) = self.home else {
+                    return Err("name is kept in Orbite's folder, and there is none here.".into());
+                };
+                if name.is_empty() || name.chars().count() > 40 || name.contains('\n') {
+                    return Err(
+                        "name is what your agent is called: a few words on one line.".into()
+                    );
+                }
+                let mut config = Config::load(home).map_err(|error| error.to_string())?;
+                config.agent_name = Some(name.to_owned());
+                config.save(home).map_err(|error| error.to_string())
+            }
+            "light" => {
+                let model = written.trim();
+                let Some(home) = self.home else {
+                    return Err("light is kept in Orbite's folder, and there is none here.".into());
+                };
+                if model.is_empty() || model.contains(char::is_whitespace) {
+                    return Err("light is the name of a model of your Provider, or off.".into());
+                }
+                let mut config = Config::load(home).map_err(|error| error.to_string())?;
+                config.light_model =
+                    if model.eq_ignore_ascii_case("off") { None } else { Some(model.to_owned()) };
                 config.save(home).map_err(|error| error.to_string())
             }
             other => Err(unknown(other)),

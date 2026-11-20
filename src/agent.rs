@@ -1626,6 +1626,11 @@ impl<P: Provider + 'static> Agent<P> {
                 Ok(()) => Some(key),
                 Err(problem) => return (problem, Vec::new()),
             },
+            // A name may be of several words.
+            ["name", ..] if words.len() > 2 => match settings.set("name", &words[1..].join(" ")) {
+                Ok(()) => Some("name"),
+                Err(problem) => return (problem, Vec::new()),
+            },
             _ => None,
         };
         let language = match settings.get("language").as_deref() {
@@ -1643,6 +1648,10 @@ impl<P: Provider + 'static> Agent<P> {
             }
             "updates" => format!("⬆️ {}", say("Automatic updates", "Mises à jour automatiques")),
             "model" => format!("🧠 {}", say("Model", "Modèle")),
+            "name" => format!("✏️ {}", say("Name", "Nom")),
+            "light" => {
+                format!("🪶 {}", say("Model for light work", "Modèle pour le travail léger"))
+            }
             "voice" => format!("🎙 {}", say("Voice messages", "Messages vocaux")),
             _ => format!("🌐 {}", say("Language", "Langue")),
         };
@@ -1703,6 +1712,16 @@ impl<P: Provider + 'static> Agent<P> {
                 "wakeups" => text.push_str(&say(
                     "\nAnother pace: /settings wakeups 90",
                     "\nAutre rythme : /settings wakeups 90",
+                )),
+                "name" => text.push_str(&say(
+                    "\nAnother name: /settings name NEW NAME",
+                    "\nAutre nom : /settings name NOUVEAU NOM",
+                )),
+                "light" => text.push_str(&say(
+                    "\nA quicker, cheaper model of the same Provider for summaries and wake-ups: \
+                     /settings light NAME",
+                    "\nUn modèle plus rapide et moins cher du même fournisseur pour les résumés et les \
+                     réveils : /settings light NOM",
                 )),
                 "model" => text.push_str(&say(
                     "\nAnother model of the same Provider: /settings model NAME\nTo see what to expect of one \

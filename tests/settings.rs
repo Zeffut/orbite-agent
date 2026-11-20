@@ -224,3 +224,54 @@ async fn what_writes_voice_messages_down_is_seen_and_switched_from_the_conversat
     assert!(refused.contains("orbite transcription"), "{refused}");
     assert_eq!(Config::load(home.path()).unwrap().transcription.unwrap().engine, "whisper.cpp");
 }
+
+#[tokio::test]
+async fn the_agents_name_and_its_model_for_light_work_are_changed_from_the_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let chosen = orbite::ProviderChoice {
+        name: "groq".into(),
+        model: "first-model".into(),
+        ..Default::default()
+    };
+    Config { provider: Some(chosen), agent_name: Some("Ada".into()), ..Config::default() }
+        .save(home.path())
+        .unwrap();
+    let converse = |home: &std::path::Path| {
+        let (mut channel, owner) = memory_channel();
+        let store = Store::open(home.join("orbite.db")).unwrap();
+        let folder = home.to_owned();
+        let running = tokio::spawn(async move {
+            Agent::new(ScriptedProvider::default(), store)
+                .configured_in(&folder)
+                .restarted_by_its_service()
+                .converse(&mut channel)
+                .await
+        });
+        (owner, running)
+    };
+
+    let (mut owner, running) = converse(home.path());
+    owner.says("/settings");
+    let shown = owner.hears().await;
+    assert!(shown.contains("Ada") && shown.contains("Model for light work"), "{shown}");
+    // A name of several words, capitals kept.
+    owner.says("/settings name Marie Curie");
+    let said = owner.hears().await;
+    assert!(said.contains("Marie Curie") && said.to_lowercase().contains("restart"), "{said}");
+    assert_eq!(Config::load(home.path()).unwrap().agent_name.as_deref(), Some("Marie Curie"));
+    let _ = running.await;
+
+    let (mut owner, running) = converse(home.path());
+    owner.says("/settings light Quick-Model");
+    assert!(owner.hears().await.contains("Quick-Model"));
+    assert_eq!(Config::load(home.path()).unwrap().light_model.as_deref(), Some("Quick-Model"));
+    let _ = running.await;
+
+    let (mut owner, _running) = converse(home.path());
+    owner.says("/settings light off");
+    owner.hears().await;
+    assert_eq!(Config::load(home.path()).unwrap().light_model, None);
+    // The command on the machine reads the same.
+    let listed = orbite(home.path(), &["settings"]);
+    assert!(listed.contains("name = Marie Curie") && listed.contains("light = off"), "{listed}");
+}

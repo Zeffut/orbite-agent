@@ -86,7 +86,7 @@ Everything else is said in plain words, but a few commands are always there, als
 
 ## Settings
 
-`/settings` in Telegram and `sudo orbite settings` on the machine show and change the same settings; a change in one is seen in the other.
+`/settings` in Telegram and `sudo orbite settings` on the machine show and change the same settings; a change in one is seen in the other. Among them: your agent's name (`/settings name NEW NAME`), its model, and a quicker, cheaper model of the same provider for light work such as summaries and wake-ups (`/settings light NAME`, or `off`).
 
 | Setting | Values |
 |---|---|

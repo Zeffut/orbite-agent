@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.4.7
+
+Released on 2026-11-20.
+
+- **Your agent's name and its model for light work are changed from Telegram**, as every other setting: `/settings name NEW NAME`, and `/settings light NAME` (or `off`) for a quicker, cheaper model that writes summaries and does wake-ups. Before, both took the machine.
+
 ## 0.4.6
 
 Released on 2026-11-20.
