@@ -534,6 +534,12 @@ impl Computer {
                 &self.size.1.to_string(),
             ]);
         }
+        // In a group of its own with all it starts, so that closing it can
+        // reach every one of them.
+        {
+            use std::os::unix::process::CommandExt;
+            starting.process_group(0);
+        }
         // Asked of a browser already running, the address opens in it.
         let started = starting.arg(address).spawn()?;
         if !running {
@@ -570,6 +576,16 @@ impl Computer {
         }
         let _ = browser.kill();
         let _ = browser.wait();
+        // The programs a browser starts outlive it for a moment, and go on
+        // writing: all of them are stopped, and waited for.
+        let group = -(browser.id() as libc::pid_t);
+        // SAFETY: signals sent to the group of a program this one started.
+        unsafe { libc::kill(group, libc::SIGKILL) };
+        let until = Instant::now() + Duration::from_secs(3);
+        // SAFETY: as above; signal 0 only asks whether any of them is left.
+        while Instant::now() < until && unsafe { libc::kill(group, 0) } == 0 {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let _ = std::fs::remove_dir_all(scratch_of(&self.profile));
         for left in written_beside_everyone() {
             if !self.there_before.contains(&left) {
@@ -816,6 +832,11 @@ fn stop_what_was_left(profile: &Path) -> io::Result<()> {
     for pid in stopped.iter().filter(|pid| !gone(pid)) {
         // SAFETY: as above.
         unsafe { libc::kill(*pid, libc::SIGKILL) };
+    }
+    for pid in &stopped {
+        // What a browser started and left running, when it had a group of
+        // its own. SAFETY: as above.
+        unsafe { libc::kill(-*pid, libc::SIGKILL) };
     }
     if !stopped.is_empty() {
         std::thread::sleep(Duration::from_millis(300));
