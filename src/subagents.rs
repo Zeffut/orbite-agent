@@ -124,8 +124,8 @@ impl Subagents {
             spec(
                 "delegate",
                 "Starts a sub-agent on a long or parallel task and returns at once; its report \
-                 reaches you later as a notice. It knows nothing of your conversation and only \
-                 looks at things.",
+                 reaches you later as a notice. It knows nothing of your conversation and can \
+                 ask nobody.",
                 serde_json::json!({
                     "name": text("A short name for it."),
                     "task": text("Everything it needs: what to do and what to report."),
