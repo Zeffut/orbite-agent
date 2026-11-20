@@ -70,6 +70,8 @@ When a page asks something of you (a verification code, a confirmation before pa
 
 ## Commands
 
+None of these is needed: ask your agent in plain words ("add the Notion connector", "turn it off for now", "I have to give you a password", "what did I use today?") and it carries the command out for you. They are shortcuts for when you know what you want.
+
 Everything else is said in plain words, but a few commands are always there, also in Telegram's menu:
 
 | Command | What it does |
@@ -82,7 +84,8 @@ Everything else is said in plain words, but a few commands are always there, als
 | `/providers` | the AIs it thinks with, in order, with their limits; `/providers first NAME`, `limit NAME 200000`, `remove NAME`, `connect chatgpt` |
 | `/extensions` | lists the extensions; `/extensions off NAME`, `on NAME`, `remove NAME` |
 | `/mcp` | lists the MCP servers and their state |
-| `/secrets on` | lets you give a secret in the conversation (off by default; see below) |
+| `/secret NAME` | gives your agent a password or a key safely: sealed on the machine, never shown to the AI (see below) |
+| `/secrets on` | lets pasted secrets through to the AI provider (off by default; see below) |
 
 ## Settings
 
@@ -103,13 +106,21 @@ Changing the language or the model makes Orbite restart, which takes a few secon
 
 ## Secrets
 
-A key or a password your agent needs is entered **on the machine**, never in the conversation, where it would travel through Telegram and reach the AI provider:
+A key or a password your agent needs is given with `/secret`, in the conversation:
 
-```sh
-sudo orbite secret set GITHUB_TOKEN
+```
+/secret SHOP_PASSWORD
 ```
 
-The agent then uses it by name, in commands and extensions, and never sees its value: whatever comes back from an action has the value hidden before the model reads it. If you paste something that looks like a secret in the conversation, the agent refuses it and removes your message. `/secrets on` lifts that, for when you accept the risk.
+Orbite asks for its value, which you send in your next message. It is sealed on the machine, your message is removed from the conversation, and the AI provider never sees it: your agent is only told the name, and uses the secret by that name, in commands, on its computer and in extensions. Whatever comes back from an action has the value hidden before the model reads it.
+
+What you send does travel through Telegram on its way, as every message to a bot does. To avoid even that, enter it on the machine instead:
+
+```sh
+sudo orbite secret set SHOP_PASSWORD
+```
+
+If you paste something that looks like a secret in an ordinary message, the agent refuses it, removes your message and points you to `/secret`. `/secrets on` lifts that refusal, and what you paste is then shown to the AI provider: it is there for those who accept that, and `/secret` is the better way.
 
 ## MCP servers
 

@@ -50,6 +50,7 @@ async fn a_turn_with_everything_on_offer_stays_light() {
     weighed.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
     let listed: Vec<String> =
         weighed.iter().map(|(name, size)| format!("{size:>5} {name}")).collect();
-    // It was 4,009 with each Action offered on its own.
-    assert!(total <= 3_200, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
+    // It was 4,009 with each Action offered on its own, then 3,200; some 130
+    // more let the Agent do in plain words what took a command to write.
+    assert!(total <= 3_350, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
 }

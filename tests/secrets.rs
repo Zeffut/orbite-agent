@@ -126,7 +126,7 @@ async fn a_secret_pasted_in_the_conversation_is_neither_kept_nor_shown_to_the_mo
     owner.says(&format!("Here is my token: {TOKEN}"));
     let refused = owner.hears().await;
 
-    assert!(refused.contains("orbite secret set"), "the Owner is told where secrets go: {refused}");
+    assert!(refused.contains("/secret NAME"), "the Owner is told where secrets go: {refused}");
     assert!(!refused.contains(TOKEN));
     assert_eq!(provider.times_asked(), 0, "the model was shown the secret");
     assert!(
@@ -165,7 +165,7 @@ async fn the_usual_kinds_of_secrets_are_recognised_and_ordinary_words_are_not() 
         let provider = ScriptedProvider::default();
         let mut owner = agent_in(home.path(), &provider);
         owner.says(&format!("use this {secret} please"));
-        assert!(owner.hears().await.contains("orbite secret set"), "{secret} was not recognised");
+        assert!(owner.hears().await.contains("/secret NAME"), "{secret} was not recognised");
         assert_eq!(provider.times_asked(), 0);
     }
     for ordinary in [
@@ -192,9 +192,9 @@ async fn an_owner_who_says_so_may_give_secrets_in_the_conversation() {
     assert_eq!(owner.hears().await, "Got it.");
 
     owner.says("/secrets off");
-    assert!(owner.hears().await.contains("off"));
+    assert!(owner.hears().await.contains("turned away again"));
     owner.says(&format!("Again: {TOKEN}"));
-    assert!(owner.hears().await.contains("orbite secret set"));
+    assert!(owner.hears().await.contains("/secret NAME"));
     assert_eq!(provider.times_asked(), 1, "/secrets is not sent to the model");
 }
 
@@ -350,4 +350,139 @@ async fn a_large_part_of_a_secret_is_hidden_from_the_model_like_the_whole() {
         told,
         "start [part of secret SERVICE_TOKEN] end [part of secret SERVICE_TOKEN] short tok_Qm ok"
     );
+}
+
+/// Everything of the Owner's that a model was shown, in one text.
+fn shown_to_the_model(provider: &ScriptedProvider) -> String {
+    provider
+        .every_call()
+        .into_iter()
+        .flat_map(|(_, conversation)| conversation)
+        .map(|message| format!("{message:?}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[tokio::test]
+async fn a_secret_given_with_the_secret_command_is_kept_and_never_shown_to_the_model() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::answering(["Noted.", "Noted again."]);
+    let mut owner = agent_in(home.path(), &provider);
+
+    // Named first, then given in the next message, spaces and all.
+    owner.says("/secret shop_password");
+    let asked = owner.hears().await;
+    assert!(asked.contains("SHOP_PASSWORD") && asked.contains("never show"), "{asked}");
+    assert_eq!(provider.times_asked(), 0, "naming a secret is not for the model");
+    owner.says("correct horse battery staple");
+    let kept = owner.hears().await;
+    assert!(kept.contains("SHOP_PASSWORD") && kept.contains("sealed"), "{kept}");
+    assert!(!kept.contains("horse"), "{kept}");
+    assert_eq!(owner.hears().await, "Noted.");
+
+    // Name and value in one message work as well.
+    owner.says("/secret BANK_PIN 4921");
+    assert!(owner.hears().await.contains("BANK_PIN"));
+    assert_eq!(owner.hears().await, "Noted again.");
+
+    let secrets = Secrets::kept_in(home.path());
+    assert_eq!(
+        secrets.get("SHOP_PASSWORD").unwrap().as_deref(),
+        Some("correct horse battery staple")
+    );
+    assert_eq!(secrets.get("BANK_PIN").unwrap().as_deref(), Some("4921"));
+    // The model learnt the names, and nothing of the values.
+    let shown = shown_to_the_model(&provider);
+    assert!(shown.contains("SHOP_PASSWORD") && shown.contains("BANK_PIN"), "{shown}");
+    assert!(!shown.contains("horse") && !shown.contains("4921"), "{shown}");
+}
+
+#[tokio::test]
+async fn a_secret_named_wrongly_or_given_up_is_not_kept() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::answering(["Hello."]);
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("/secret 9lives");
+    assert!(owner.hears().await.contains("/secret SHOP_PASSWORD"), "how to name one is said");
+    owner.says("/secret ORBITE_TELEGRAM_TOKEN");
+    assert!(
+        owner.hears().await.contains("ORBITE_"),
+        "Orbite's own are not the Owner's to set here"
+    );
+
+    owner.says("/secret DOOR_CODE");
+    owner.hears().await;
+    owner.says("/cancel");
+    assert!(owner.hears().await.contains("Nothing was kept"));
+    // What comes after is an ordinary message again.
+    owner.says("Hello");
+    assert_eq!(owner.hears().await, "Hello.");
+    assert_eq!(Secrets::kept_in(home.path()).get("DOOR_CODE").unwrap(), None);
+}
+
+#[tokio::test]
+async fn asked_in_plain_words_the_agent_has_its_owner_send_a_secret_it_never_sees() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("command", json!({ "command": "/secret SHOP_PASSWORD" }))])
+        .then(Ok("Go ahead.".into()))
+        .then(Ok("Thanks, I have it.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("I need to give you the password of my shop account.");
+    assert_eq!(owner.hears().await, "Go ahead.");
+    // Orbite itself then asks for the value, as if the Owner had written the command.
+    let asked = owner.hears().await;
+    assert!(asked.contains("SHOP_PASSWORD") && asked.contains("never show"), "{asked}");
+    owner.says("tr0ub4dor&3");
+    assert!(owner.hears().await.contains("sealed"));
+    assert_eq!(owner.hears().await, "Thanks, I have it.");
+
+    assert_eq!(
+        Secrets::kept_in(home.path()).get("SHOP_PASSWORD").unwrap().as_deref(),
+        Some("tr0ub4dor&3")
+    );
+    assert!(!shown_to_the_model(&provider).contains("tr0ub4dor"));
+    assert!(owner.was_asked_nothing(), "asking for a secret needs no approval");
+}
+
+#[tokio::test]
+async fn the_agent_cannot_loosen_itself_nor_carry_a_secrets_value_by_giving_a_command() {
+    let home = tempfile::tempdir().unwrap();
+    for refused in ["/settings permission free", "/secrets on", "/secret DOOR 4921", "/reset"] {
+        let provider = ScriptedProvider::default();
+        provider
+            .then_acts([("command", json!({ "command": refused }))])
+            .then(Ok("I cannot do that myself.".into()))
+            .then(Ok("Hello.".into()));
+        let mut owner = agent_in(home.path(), &provider);
+
+        owner.says("Do it for me.");
+        assert_eq!(owner.hears().await, "I cannot do that myself.");
+        assert!(
+            outcome_of_last_action(&provider).contains("not a command you can give"),
+            "{refused}"
+        );
+        // Nothing followed: the next thing heard answers the next message.
+        owner.says("Hello");
+        assert_eq!(owner.hears().await, "Hello.", "{refused} was carried out");
+        assert!(owner.was_asked_nothing());
+    }
+    assert_eq!(Secrets::kept_in(home.path()).get("DOOR").unwrap(), None);
+}
+
+/// The Outcome of the last Action the model was told of.
+fn outcome_of_last_action(provider: &ScriptedProvider) -> String {
+    provider
+        .every_call()
+        .into_iter()
+        .flat_map(|(_, conversation)| conversation)
+        .filter_map(|message| match message {
+            Message::Outcome { text, .. } => Some(text),
+            _ => None,
+        })
+        .next_back()
+        .unwrap_or_default()
 }

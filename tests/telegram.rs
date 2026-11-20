@@ -827,7 +827,17 @@ async fn the_bot_offers_its_commands_in_telegrams_menu() {
         .collect();
     assert_eq!(
         commands,
-        ["stop", "reset", "usage", "connections", "providers", "settings", "mcp", "extensions"]
+        [
+            "stop",
+            "reset",
+            "usage",
+            "connections",
+            "providers",
+            "secret",
+            "settings",
+            "mcp",
+            "extensions"
+        ]
     );
 }
 

@@ -448,8 +448,8 @@ impl Host {
                         .with(|computer| computer.screen().type_text(&typed))
                         .map(|()| "Typed.".to_owned()),
                     Err(_) => Err(std::io::Error::other(
-                        "a secret named there has not been entered: your Owner enters one on the machine with \
-                         `orbite secret set NAME`",
+                        "a secret named there has not been entered: your Owner gives one by sending \
+                         /secret NAME in the conversation, which you never see",
                     )),
                 };
                 (typed, Duration::from_secs(4))
@@ -801,8 +801,8 @@ impl Host {
             Ok(Action::ListSecrets) => {
                 match self.secrets.as_ref().map(Secrets::names_for_the_agent) {
                     Some(Ok(names)) if names.is_empty() => {
-                        "No secret has been entered. Your Owner enters one on the machine with \
-                     `orbite secret set NAME`."
+                        "No secret has been entered. Your Owner gives one by sending /secret NAME \
+                     in the conversation, which you never see."
                             .into()
                     }
                     Some(Ok(names)) => names.join("\n"),

@@ -301,6 +301,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
             }
         }
     }
+    let mut hears = own_way.is_some();
     for listening in config.providers().into_iter().filter(|_| own_way.is_none()) {
         let Some(model) = orbite::transcription_model(&listening.name) else { continue };
         // The first one's key may have been given in the environment.
@@ -314,7 +315,34 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         if let Some(root) = root {
             let model = setting("ORBITE_TRANSCRIPTION_MODEL").unwrap_or_else(|| model.to_owned());
             agent = agent.transcribing_with(orbite::Transcriber::new(root, key, model));
+            hears = true;
             break;
+        }
+    }
+    // Failing those, the Providers named in the environment: the usual one,
+    // then the one to fall back on.
+    let named_there = [
+        (Some(name.clone()), key.clone(), address.clone()),
+        (
+            setting("ORBITE_FALLBACK_PROVIDER"),
+            setting("ORBITE_FALLBACK_API_KEY"),
+            setting("ORBITE_FALLBACK_BASE_URL"),
+        ),
+    ];
+    for (listening, key, address) in named_there {
+        if hears {
+            break;
+        }
+        let (Some(listening), Some(key)) = (listening, key) else { continue };
+        let Some(model) = orbite::transcription_model(&listening) else { continue };
+        let root = address.or_else(|| {
+            let known = known_providers().iter().find(|known| known.name == listening)?;
+            Some(known.api_root.to_owned())
+        });
+        if let Some(root) = root {
+            let model = setting("ORBITE_TRANSCRIPTION_MODEL").unwrap_or_else(|| model.to_owned());
+            agent = agent.transcribing_with(orbite::Transcriber::new(root, key, model));
+            hears = true;
         }
     }
     // The Agent has a Computer where the machine has what one is made of.

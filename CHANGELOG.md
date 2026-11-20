@@ -2,6 +2,14 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.0
+
+Released on 2026-11-21.
+
+- **Ask in plain words.** "Add the Notion connector", "sign me in to it", "turn it off for now", "I have to give you my shop password", "no wake-ups at night": your agent now does these itself, by carrying out Orbite's own command for you; Orbite answers with the link to follow, the question to answer or the confirmation. The commands remain as shortcuts, none is needed any more. Adding, turning off or removing a connector and changing a setting are asked about first below the `free` level. Three things stay yours alone to write, whatever the agent is told: loosening its permission level, letting pasted secrets through to the AI provider, and resetting the conversation.
+- **A password or a key can be given in the conversation, safely.** `/secret NAME`, then its value in your next message (or both at once): Orbite seals it on the machine, removes your message from the conversation, and tells the model the name only, never the value. Your agent then uses it by its name, on its computer, in commands and in extensions. Until now a secret had to be typed on the machine, or let through to the AI provider with `/secrets on`. The value still travels through Telegram on its way; `orbite secret set` on the machine remains for those who want to avoid that.
+- A voice message is written down by the provider given as a fallback in the environment too, when it offers that.
+
 ## 0.4.9
 
 Released on 2026-11-21.

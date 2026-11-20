@@ -181,6 +181,9 @@ pub struct Agent<P> {
     /// Commands the Owner wrote while the Agent worked: carried out as
     /// commands once it is done, not handed to the model as something said.
     set_aside: std::collections::VecDeque<String>,
+    /// The name of the secret whose value the Owner is about to send:
+    /// what they write next is kept under it, and shown to no model.
+    awaiting_secret: Option<String>,
     /// How often the Agent wakes up when its Owner has set no pace, in
     /// minutes; zero for never.
     wake_up_pace: u32,
@@ -230,6 +233,7 @@ impl<P: Provider + 'static> Agent<P> {
             model_at_fault: 0,
             owed: false,
             set_aside: std::collections::VecDeque::new(),
+            awaiting_secret: None,
             wake_up_pace: 0,
             last_active: 0,
             sees_images: true,
@@ -452,6 +456,67 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
             };
+            // The value of the secret named just before: kept, and never
+            // shown to a model. Another command instead means a change of mind.
+            if let Some(name) = self.awaiting_secret.take() {
+                if text.trim() == "/cancel" {
+                    let said = self.language.say("Nothing was kept.", "Rien n'a été gardé.");
+                    if channel.send(said).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                if !text.trim_start().starts_with('/') {
+                    if !self.keep_secret(channel, &name, text.trim()).await {
+                        return;
+                    }
+                    continue;
+                }
+            }
+            let words: Vec<&str> = text.split_whitespace().collect();
+            if words.first() == Some(&"/secret") {
+                let open = match words[..] {
+                    [_, name] => match self.secret_may_be_named(name) {
+                        Ok(name) => {
+                            let said = format!(
+                                "{} **{name}**. {}",
+                                self.language.say("Send me now the value of", "Envoyez-moi maintenant la valeur de"),
+                                self.language.say(
+                                    "I keep it sealed on the machine, remove your message from here where I \
+                                     can, and never show it to my AI provider: I use it by its name. \
+                                     /cancel to give up.",
+                                    "Je la garde scellée sur la machine, je retire votre message d'ici \
+                                     quand c'est possible, et je ne la montre jamais à mon fournisseur \
+                                     d'IA : je l'utilise par son nom. /cancel pour renoncer.",
+                                )
+                            );
+                            self.awaiting_secret = Some(name);
+                            channel.send(&said).await.is_ok()
+                        }
+                        Err(problem) => channel.send(&problem).await.is_ok(),
+                    },
+                    // Name and value in one message.
+                    [_, name, ..] => {
+                        let value =
+                            text.trim_start()["/secret".len()..].trim_start()[name.len()..].trim();
+                        self.keep_secret(channel, name, value).await
+                    }
+                    _ => {
+                        let said = self.language.say(
+                            "To give me a secret (a password, a key): /secret NAME, then its value in your \
+                             next message. I keep it sealed and never show it to my AI provider.",
+                            "Pour me confier un secret (un mot de passe, une clé) : /secret NOM, puis sa valeur \
+                             dans votre message suivant. Je le garde scellé et ne le montre jamais à mon \
+                             fournisseur d'IA.",
+                        );
+                        channel.send(said).await.is_ok()
+                    }
+                };
+                if !open {
+                    return;
+                }
+                continue;
+            }
             if let Some(choice) = text.trim().strip_prefix("/secrets") {
                 let said = match choice.trim() {
                     "on" => self.store.set_setting("secrets_in_conversation", Some("on")).map(|()| {
@@ -465,10 +530,10 @@ impl<P: Provider + 'static> Agent<P> {
                     }),
                     "off" => self.store.set_setting("secrets_in_conversation", None).map(|()| {
                         self.language.say(
-                            "Secrets in the conversation are off: enter them on the machine with \
-                             `orbite secret set NAME`.",
-                            "Les secrets dans la discussion sont refusés : saisissez-les sur la \
-                             machine avec `orbite secret set NOM`.",
+                            "Secrets written in the conversation are turned away again. To give me \
+                             one safely: /secret NAME.",
+                            "Les secrets écrits dans la discussion sont de nouveau refusés. Pour m'en \
+                             confier un en sécurité : /secret NOM.",
                         )
                     }),
                     _ => Ok(self.language.say("Say /secrets on or /secrets off.", "Écrivez /secrets on ou /secrets off.")),
@@ -906,7 +971,7 @@ impl<P: Provider + 'static> Agent<P> {
                 Attended::Interrupted => {
                     // The Owner added something: think again with it.
                     for text in said {
-                        if text.trim_start().starts_with('/') {
+                        if text.trim_start().starts_with('/') || self.expects_a_secret() {
                             self.set_aside.push_back(text);
                             continue;
                         }
@@ -1132,7 +1197,7 @@ impl<P: Provider + 'static> Agent<P> {
                 return self.stopped(channel, &said).await;
             }
             for text in said {
-                if text.trim_start().starts_with('/') {
+                if text.trim_start().starts_with('/') || self.expects_a_secret() {
                     self.set_aside.push_back(text);
                     continue;
                 }
@@ -1277,6 +1342,45 @@ pub(crate) fn clip(text: &str, limit: usize) -> &str {
     &text[..end]
 }
 
+/// What a command the Agent gives for its Owner changes.
+#[derive(PartialEq, Eq, Debug)]
+enum Changes {
+    /// It shows something, or has the Owner do something themselves.
+    Nothing,
+    Something,
+    /// And it cannot be put back as it was.
+    ForGood,
+}
+
+/// Whether `command` is one the Agent may give for its Owner, and what it
+/// changes; otherwise what to tell the model. What loosens the Agent, lets
+/// secrets through to a model or changes who it thinks with stays the
+/// Owner's own to write.
+fn command_for_the_agent(command: &str) -> Result<Changes, String> {
+    let words: Vec<&str> = command.split_whitespace().collect();
+    Ok(match words[..] {
+        ["/connect", _, address] if address.starts_with("https://") => Changes::Something,
+        ["/mcp", "connect", _]
+        | ["/connections"]
+        | ["/usage"]
+        | ["/settings"]
+        | ["/settings", _] => Changes::Nothing,
+        // The name alone: a value is never a model's to carry.
+        ["/secret", _] => Changes::Nothing,
+        ["/connections", "off" | "on" | "disconnect", _] => Changes::Something,
+        ["/connections", "remove", _] => Changes::ForGood,
+        ["/settings", name, ..] if !["permission", "secrets"].contains(&name) => Changes::Something,
+        _ => {
+            return Err("That is not a command you can give. You can give: /connect NAME \
+                        https://ADDRESS, /mcp connect NAME, /connections [off|on|disconnect|remove \
+                        NAME], /secret NAME (never with a value), /settings [NAME VALUE] (not \
+                        permission nor secrets), /usage. Anything else your Owner writes \
+                        themselves: tell them which command."
+                .into());
+        }
+    })
+}
+
 fn permission_specs() -> Vec<ActionSpec> {
     let spec = |name: &str, description: &str, properties: serde_json::Value| {
         let required: Vec<&String> = properties.as_object().unwrap().keys().collect();
@@ -1292,6 +1396,16 @@ fn permission_specs() -> Vec<ActionSpec> {
             "Changes how much you do without asking your Owner, only when they ask you to. \
              Loosening it needs their approval.",
             serde_json::json!({ "level": { "type": "string", "enum": ["careful", "balanced", "free"] } }),
+        ),
+        spec(
+            "command",
+            "Does what your Owner asks in plain words about connectors, secrets or settings, as \
+             one of Orbite's commands. Orbite then answers them itself (a link, a question, a \
+             list): add nothing. /connect NAME ADDRESS adds a connector (notion: \
+             https://mcp.notion.com/mcp); /mcp connect NAME signs in to one; /connections [off|on|\
+             disconnect|remove NAME]; /secret NAME has them send a password or key you never see; \
+             /settings [NAME VALUE]; /usage.",
+            serde_json::json!({ "command": { "type": "string" } }),
         ),
         spec(
             "list_always_allowed",
@@ -2243,6 +2357,85 @@ impl<P: Provider + 'static> Agent<P> {
     /// the Channel where that is possible, and the Owner is told where
     /// secrets go. `None` when there is nothing to turn away; otherwise
     /// whether the Channel is still open.
+    /// True when what the Owner writes next is the value of a secret they
+    /// named: it is for Orbite alone, whatever the Agent is doing.
+    fn expects_a_secret(&self) -> bool {
+        let named = |command: &String| {
+            let words: Vec<&str> = command.split_whitespace().collect();
+            words.len() == 2 && words[0] == "/secret"
+        };
+        match self.set_aside.back() {
+            Some(last) => named(last),
+            None => self.awaiting_secret.is_some(),
+        }
+    }
+
+    /// `name` as a secret of the Owner's may be called, or why it may not.
+    fn secret_may_be_named(&self, name: &str) -> Result<String, String> {
+        let name = name.trim().to_uppercase();
+        let well_named = name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && name.chars().next().is_some_and(|first| first.is_ascii_alphabetic() || first == '_');
+        if !well_named || name.starts_with("ORBITE_") {
+            return Err(self
+                .language
+                .say(
+                    "A secret is named with letters, digits and _, not starting with a digit nor with \
+                     ORBITE_: for instance /secret SHOP_PASSWORD.",
+                    "Un secret se nomme avec des lettres, des chiffres et _, sans commencer par un chiffre \
+                     ni par ORBITE_ : par exemple /secret MOT_DE_PASSE_BOUTIQUE.",
+                )
+                .to_owned());
+        }
+        Ok(name)
+    }
+
+    /// Keeps `value` as the secret `name`, removes what the Owner wrote from
+    /// the Channel, and lets the Agent know the name alone. False once the
+    /// Channel is closed.
+    async fn keep_secret(&mut self, channel: &mut impl Channel, name: &str, value: &str) -> bool {
+        channel.erase_last_received().await;
+        let kept = match (self.secret_may_be_named(name), self.host.secrets.as_ref()) {
+            (Err(problem), _) => Err(problem),
+            (Ok(_), _) if value.is_empty() => {
+                Err(self.language.say("Nothing was kept.", "Rien n'a été gardé.").to_owned())
+            }
+            (Ok(_), None) => Err(self
+                .language
+                .say(
+                    "There is nowhere to keep secrets.",
+                    "Il n'y a nulle part où garder des secrets.",
+                )
+                .to_owned()),
+            (Ok(name), Some(secrets)) => {
+                secrets.set(&name, value).map_err(|error| error.to_string())
+            }
+        };
+        let name = match kept {
+            Ok(name) => name,
+            Err(problem) => return channel.send(&format!("🔴 {problem}")).await.is_ok(),
+        };
+        let said = format!(
+            "✅ **{name}** {}",
+            self.language.say(
+                "is kept, sealed on the machine. My AI provider did not see it, and I removed your \
+                 message from here where I could.",
+                "est gardé, scellé sur la machine. Mon fournisseur d'IA ne l'a pas vu, et j'ai retiré \
+                 votre message d'ici quand c'était possible.",
+            )
+        );
+        if channel.send(&said).await.is_err() {
+            return false;
+        }
+        let told = self.store.append(&Message::Notice(format!(
+            "Your Owner just gave you the secret named {name}. You do not see its value: use it by \
+             its name, as {{{{{name}}}}}. If you were waiting for it, carry on; otherwise say nothing more."
+        )));
+        if told.is_err() {
+            return true;
+        }
+        self.respond_on(channel, false).await
+    }
+
     async fn turn_away_a_secret(&mut self, channel: &mut impl Channel, text: &str) -> Option<bool> {
         let allowed = matches!(self.store.setting("secrets_in_conversation"), Ok(Some(_)));
         if allowed || !crate::secrets::holds_a_secret(text) {
@@ -2251,14 +2444,13 @@ impl<P: Provider + 'static> Agent<P> {
         channel.erase_last_received().await;
         let said = self.language.say(
             "That looks like a secret (a key, a token or a password). I did not keep it or show it \
-             to my AI provider, and removed it from here where I could. Enter it on the machine \
-             instead, with `orbite secret set NAME`: I can then use it by its name without ever \
-             seeing it. To give secrets here anyway, say /secrets on.",
+             to my AI provider, and removed it from here where I could. To give it to me \
+             safely, send /secret NAME, then its value: I keep it sealed and use it by its name, and \
+             my AI provider never sees it.",
             "Cela ressemble à un secret (une clé, un jeton ou un mot de passe). Je ne l'ai ni gardé ni \
              montré à mon fournisseur d'IA, et je l'ai retiré d'ici quand c'était possible. \
-             Saisissez-le plutôt sur la machine, avec `orbite secret set NOM` : je pourrai l'utiliser \
-             par son nom sans jamais le voir. Pour donner des secrets ici malgré tout, écrivez \
-             /secrets on.",
+             Pour me le confier en sécurité, envoyez /secret NOM, puis sa valeur : je le garde scellé \
+             et l'utilise par son nom, et mon fournisseur d'IA ne le voit jamais.",
         );
         Some(channel.send(said).await.is_ok())
     }
@@ -2659,6 +2851,22 @@ impl<P: Provider + 'static> Agent<P> {
         let now = (self.clock)();
         Some(match request.name.as_str() {
             "list_always_allowed" | "revoke_always_allowed" => Review::Free,
+            "command" => {
+                let command = request.input["command"].as_str().unwrap_or_default().trim();
+                match command_for_the_agent(command) {
+                    // Refused when carried out, with what may be asked.
+                    Err(_) | Ok(Changes::Nothing) => Review::Free,
+                    Ok(changes) => Review::Ask(Approval {
+                        summary: self
+                            .language
+                            .say("Carry out a command", "Exécuter une commande")
+                            .into(),
+                        detail: command.to_owned(),
+                        irreversible: changes == Changes::ForGood,
+                        ..Approval::default()
+                    }),
+                }
+            }
             "set_permission_level" => {
                 let asked = request.input["level"].as_str().unwrap_or_default();
                 match Level::named(asked) {
@@ -2738,6 +2946,21 @@ impl<P: Provider + 'static> Agent<P> {
     fn carry_out_routine(&mut self, request: &ActionRequest) -> String {
         let now = (self.clock)();
         let done = match request.name.as_str() {
+            "command" => {
+                let command = request.input["command"].as_str().unwrap_or_default().trim();
+                return match command_for_the_agent(command) {
+                    Err(problem) => problem,
+                    Ok(_) => {
+                        // Carried out once this turn is over, as if the
+                        // Owner had written it: Orbite answers it itself.
+                        self.set_aside.push_back(command.to_owned());
+                        "It is carried out right after your reply, and Orbite itself tells your \
+                         Owner what comes of it. Reply with a few words at most, or nothing: do \
+                         not describe, promise or repeat it."
+                            .into()
+                    }
+                };
+            }
             "set_permission_level" => {
                 let asked = request.input["level"].as_str().unwrap_or_default();
                 let Some(level) = Level::named(asked) else {

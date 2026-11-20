@@ -728,3 +728,30 @@ async fn a_connector_turned_off_is_kept_with_its_sign_in_and_left_alone_until_tu
     assert_eq!(owner.hears().await, "Hello again.");
     assert!(provider.last_offered().iter().any(|action| action == "far_lookup"));
 }
+
+#[tokio::test]
+async fn asked_in_plain_words_the_agent_adds_a_connector_once_its_owner_agrees() {
+    let server = service(Arc::new(Mutex::new(String::new()))).await;
+    let home = tempfile::tempdir().unwrap();
+    let address = format!("{}/mcp", server.uri()).replace("http://", "https://");
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("command", json!({ "command": format!("/connect far {address}") }))])
+        .then(Ok("On it.".into()));
+    let (mut owner, running) = installed_agent(home.path(), &provider);
+
+    owner.says("Add the far connector for me.");
+    // A new source of tools is the Owner's to agree to.
+    let asked = owner.is_asked().await;
+    assert!(asked.detail.contains("/connect far"), "{}", asked.detail);
+    owner.allows();
+    assert_eq!(owner.hears().await, "On it.");
+    // Orbite then does it and says so itself, and starts again to take it.
+    let said = owner.hears().await;
+    assert!(said.contains("far"), "{said}");
+    let _ = running.await;
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(home.path().join("mcp.json")).unwrap())
+            .unwrap();
+    assert_eq!(written["mcpServers"]["far"]["url"], json!(address));
+}
