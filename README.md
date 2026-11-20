@@ -12,6 +12,12 @@ On any Linux machine with systemd (x86_64 or aarch64), freshly installed, with n
 curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh
 ```
 
+Where there is no `curl` (a fresh Debian has `wget` instead):
+
+```sh
+wget -qO- https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh
+```
+
 The installer checks the machine before changing anything, verifies that what it downloads is signed by Orbite's key, gives Orbite an account of its own and a service that restarts by itself, then asks a few questions: which AI to think with, your Telegram bot, your agent's name. Running it again updates Orbite and keeps everything else.
 
 Then:
