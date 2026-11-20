@@ -66,7 +66,7 @@ Reading the web is done by fetching pages, which is fast. For what that cannot d
 
 The installer sets the computer up: a virtual screen, Firefox from Mozilla's own packages, and fonts. `sudo orbite computer check` says whether it works on your machine. An Orbite installed with `ORBITE_WITHOUT_COMPUTER=1` has none; running the installer again without it adds one.
 
-When a page asks something of you (a verification code, a confirmation before paying), your agent sends you a picture of its screen with its question, so that you answer knowing what it sees.
+When a page asks something of you (a verification code, a confirmation before paying), your agent is told to send you a picture of its screen with its question, so that you answer knowing what it sees. How reliably it does depends on the model you chose; you can ask it for its screen at any time.
 
 ## Commands
 
@@ -113,7 +113,7 @@ The agent then uses it by name, in commands and extensions, and never sees its v
 
 ## MCP servers
 
-Tools from MCP servers (connectors) become actions of your agent. The simple way: in the conversation, `/connect NAME ADDRESS`, for instance `/connect notion https://mcp.notion.com/mcp`. Orbite starts again and comes back with a link to sign in, or with the connector connected; `/connections` shows them all. A sign-in is renewed by itself for as long as the service allows; when one ends or is withdrawn, your agent tells you, once, with the command to sign in again. For a server that is a program on the machine, or that takes a key in its headers, list it in `/var/lib/orbite/mcp.json`, in the form other MCP clients use, then restart Orbite:
+Tools from MCP servers (connectors) become actions of your agent. The simple way: in the conversation, `/connect NAME ADDRESS`, for instance `/connect notion https://mcp.notion.com/mcp`. Orbite starts again and comes back with a link to sign in, or with the connector connected; `/connections` shows them all, with buttons to sign out of one, turn it off for a while (it is kept, with its sign-in, and left alone) or remove it. A sign-in is renewed by itself for as long as the service allows; when one ends or is withdrawn, your agent tells you, once, with the command to sign in again. For a server that is a program on the machine, or that takes a key in its headers, list it in `/var/lib/orbite/mcp.json`, in the form other MCP clients use, then restart Orbite:
 
 ```json
 { "mcpServers": {

@@ -2,6 +2,14 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.4.6
+
+Released on 2026-11-20.
+
+- **A connector can be turned off for a while, and on again.** `/connections` has a button for it (`/connections off NAME`, `/connections on NAME`). Turned off, a connector is kept in the list with its sign-in, is not reached and its tools are not offered; turned on, it is back with nothing to sign in to again. In `mcp.json` this is `"disabled": true`, as other MCP clients write it.
+- Signing in to a ChatGPT plan from the conversation says, as setup does, that this uses OpenAI's preview programme for open-source apps, which OpenAI may change or end.
+- When a site asks for a code, your agent is told to show you its screen with the question.
+
 ## 0.4.5
 
 Released on 2026-11-20.

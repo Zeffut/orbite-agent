@@ -676,3 +676,55 @@ async fn a_sign_in_that_ended_is_told_to_the_owner_once_with_how_to_sign_in_agai
     let listed = owner.hears().await;
     assert!(listed.contains("far") && listed.contains("/mcp connect far"), "{listed}");
 }
+
+#[tokio::test]
+async fn a_connector_turned_off_is_kept_with_its_sign_in_and_left_alone_until_turned_on() {
+    let server = server_taking_only("old-access").await;
+    let home = home_signed_in_to(&server).await;
+    let list = || -> Value {
+        serde_json::from_str(&std::fs::read_to_string(home.path().join("mcp.json")).unwrap())
+            .unwrap()
+    };
+    let provider = ScriptedProvider::default();
+    let (mut owner, running) = installed_agent(home.path(), &provider);
+
+    owner.says("/connections off far");
+    let said = owner.hears().await;
+    assert!(said.contains("far") && said.contains("turned off"), "{said}");
+    assert_eq!(list()["mcpServers"]["far"]["disabled"], json!(true));
+    assert!(
+        Secrets::kept_in(home.path()).get("ORBITE_MCP_FAR").unwrap().is_some(),
+        "its sign-in was not kept"
+    );
+    // Orbite starts again to take it, as its service has it do.
+    let _ = running.await;
+
+    // Back, its tools are not offered and the server is not even reached.
+    let before = server.received_requests().await.unwrap().len();
+    let provider = ScriptedProvider::default();
+    provider.then(Ok("Hello.".into()));
+    let (mut owner, running) = installed_agent(home.path(), &provider);
+    owner.says("Good morning.");
+    assert_eq!(owner.hears().await, "Hello.");
+    assert!(!provider.last_offered().iter().any(|action| action.contains("far")));
+    assert_eq!(server.received_requests().await.unwrap().len(), before);
+
+    // It is still listed, as off, with the way to turn it on.
+    owner.says("/connections");
+    let listed = owner.hears().await;
+    assert!(listed.contains("far") && listed.contains("/connections on far"), "{listed}");
+
+    owner.says("/connections on far");
+    let said = owner.hears().await;
+    assert!(said.contains("turned on"), "{said}");
+    assert!(list()["mcpServers"]["far"].get("disabled").is_none(), "{}", list());
+    let _ = running.await;
+
+    // Back once more, its tools are the Agent's again, with no new sign-in.
+    let provider = ScriptedProvider::default();
+    provider.then(Ok("Hello again.".into()));
+    let (mut owner, _running) = installed_agent(home.path(), &provider);
+    owner.says("And now?");
+    assert_eq!(owner.hears().await, "Hello again.");
+    assert!(provider.last_offered().iter().any(|action| action == "far_lookup"));
+}

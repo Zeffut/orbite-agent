@@ -573,8 +573,12 @@ impl<P: Provider + 'static> Agent<P> {
                     Ok(link) => format!(
                         "{}\n\n{link}\n\n{}",
                         self.language.say(
-                            "Continue with ChatGPT: open this link and sign in.",
-                            "Continuer avec ChatGPT : ouvrez ce lien et connectez-vous."
+                            "Continue with ChatGPT: open this link and sign in. (This uses the usage \
+                             included in your plan, through OpenAI's sign-in for open-source apps: a \
+                             preview, which OpenAI may change or end.)",
+                            "Continuer avec ChatGPT : ouvrez ce lien et connectez-vous. (Cela utilise \
+                             l'utilisation comprise dans votre forfait, par la connexion qu'OpenAI ouvre \
+                             aux applications libres : un aperçu, qu'OpenAI peut modifier ou arrêter.)"
                         ),
                         self.language.say(
                             "Your browser will then stop on a page that does not load, at an address starting with \
@@ -1870,6 +1874,34 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 Err(problem) => first = format!("🔴 {problem}\n\n"),
             },
+            ([turn @ ("on" | "off"), name], _, Some(home)) => {
+                let on = *turn == "on";
+                match crate::mcp::turn_server(home, name, on) {
+                    Ok(()) => {
+                        let then = if self.restarted {
+                            say(
+                                "I restart to take it: back in a moment.",
+                                "Je redémarre pour l'appliquer : je reviens dans un instant.",
+                            )
+                        } else {
+                            say(
+                                "It applies at the next start of Orbite.",
+                                "Ce sera appliqué au prochain démarrage d'Orbite.",
+                            )
+                        };
+                        let now = if on {
+                            say("is turned on.", "est activé.")
+                        } else {
+                            say(
+                                "is turned off: I keep it, with its sign-in, and leave it alone.",
+                                "est désactivé : je le garde, avec sa connexion, et n'y touche plus.",
+                            )
+                        };
+                        return (format!("✅ **{name}** {now} {then}"), Vec::new(), true);
+                    }
+                    Err(problem) => first = format!("🔴 {problem}\n\n"),
+                }
+            }
             _ => {}
         }
         let mut shown = first;
@@ -1955,7 +1987,8 @@ impl<P: Provider + 'static> Agent<P> {
             }
             None => Vec::new(),
         };
-        if servers.is_empty() {
+        let off = self.home.as_deref().map(crate::mcp::turned_off).unwrap_or_default();
+        if servers.is_empty() && off.is_empty() {
             shown.push_str(&say("None yet.\n", "Aucun pour l'instant.\n"));
         }
         for (name, state) in servers {
@@ -1982,6 +2015,24 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 Err(problem) => shown.push_str(&format!("🔴 {name}: {}\n", clip(&problem, 160))),
             }
+            choices.push((
+                format!("{} {name}", say("Turn off", "Désactiver")),
+                format!("/connections off {name}"),
+            ));
+            choices.push((
+                format!("{} {name}", say("Remove", "Retirer")),
+                format!("/connections remove {name}"),
+            ));
+        }
+        for name in off {
+            shown.push_str(&format!(
+                "⚪️ {name}: {} → /connections on {name}\n",
+                say("turned off", "désactivé")
+            ));
+            choices.push((
+                format!("{} {name}", say("Turn on", "Activer")),
+                format!("/connections on {name}"),
+            ));
             choices.push((
                 format!("{} {name}", say("Remove", "Retirer")),
                 format!("/connections remove {name}"),
@@ -2864,8 +2915,8 @@ fn folded(actions: Vec<ActionSpec>) -> Vec<ActionSpec> {
                         see, once your Owner agrees), key (such as Return, Tab, ctrl+l) or scroll \
                         (notches, positive for down). Each answers with a picture of the screen; `show` sends \
                         it to your Owner too, at the steps that matter. Before \
-                        anything that pays, sends or deletes, and when a site asks for a code, ask \
-                        your Owner. A page that wants proof of a person (a puzzle, \"verification \
+                        anything that pays, sends or deletes, ask your Owner; for a site's \
+                        code, `show` and ask. A page that wants proof of a person (a puzzle, \"verification \
                         required\") is not yours to pass: say so plainly and offer another way."
                         .into(),
                     input: serde_json::json!({

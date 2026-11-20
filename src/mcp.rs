@@ -56,6 +56,10 @@ struct Described {
     /// A client the Owner registered with the service themselves, for one
     /// that takes no program it does not already know.
     client: Option<OwnClient>,
+    /// Kept in the list and left alone: the Owner turned it off. Written
+    /// as other MCP clients write it.
+    #[serde(default)]
+    disabled: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -239,6 +243,40 @@ pub fn remove_server(home: &Path, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Turns the server `name` of `home`'s list off, or on again: off, it stays
+/// in the list with its sign-in, and is neither started nor offered.
+pub fn turn_server(home: &Path, name: &str, on: bool) -> Result<(), String> {
+    let (mut written, key) = written_in(home)?;
+    let Some(servers) = written[key].as_object_mut() else {
+        return Err("No connector is set up.".into());
+    };
+    let names = servers.keys().cloned().collect::<Vec<_>>().join(", ");
+    let Some(server) = servers.get_mut(name).and_then(Value::as_object_mut) else {
+        return Err(format!("No connector is called {name}. There: {names}."));
+    };
+    if on {
+        server.remove("disabled");
+    } else {
+        server.insert("disabled".into(), json!(true));
+    }
+    write_in(home, &written)
+}
+
+/// The names of the servers of `home`'s list that are turned off.
+pub fn turned_off(home: &Path) -> Vec<String> {
+    let Ok((written, key)) = written_in(home) else { return Vec::new() };
+    written[key]
+        .as_object()
+        .map(|servers| {
+            servers
+                .iter()
+                .filter(|(_, described)| described["disabled"] == json!(true))
+                .map(|(name, _)| name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl Mcp {
     /// The servers listed in `home`'s `mcp.json`, none of them started yet.
     pub(crate) fn configured_in(home: &Path) -> Self {
@@ -255,6 +293,7 @@ impl Mcp {
         let servers = settings
             .servers
             .into_iter()
+            .filter(|(_, described)| !described.disabled)
             .map(|(name, described)| Server {
                 name,
                 described,
