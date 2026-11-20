@@ -11,6 +11,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
@@ -43,6 +44,7 @@ jobs:
   # installer would put on a Host.
   computer-with-firefox:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal
@@ -78,6 +80,7 @@ jobs:
   # Ubuntu's own packages and its smallest published model.
   transcription-with-whisper-cpp:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     container: ubuntu:26.04
     steps:
       - run: |
@@ -97,6 +100,7 @@ jobs:
   # the Contributor Agreement.
   contributor-agreement:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - run: node --test .github/cla/cla.test.js
