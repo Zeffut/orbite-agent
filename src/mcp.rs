@@ -103,6 +103,10 @@ pub(crate) struct Mcp {
     http: reqwest::Client,
     /// The sign-in the Owner is in the middle of, when there is one.
     signing_in: std::sync::Mutex<Option<SigningIn>>,
+    /// The servers whose sign-in was found to have ended, and what there
+    /// is to tell the Owner of it: said once for each.
+    ended: std::sync::Mutex<Vec<String>>,
+    reports: std::sync::Mutex<Vec<String>>,
 }
 
 /// Where a sign-in ends: an address of the Host itself, where nothing
@@ -264,6 +268,8 @@ impl Mcp {
             problem,
             http: reqwest::Client::new(),
             signing_in: std::sync::Mutex::new(None),
+            ended: std::sync::Mutex::new(Vec::new()),
+            reports: std::sync::Mutex::new(Vec::new()),
         }
     }
 
@@ -289,11 +295,48 @@ impl Mcp {
 
     /// A fresh connection to `server`, greeted, and what it offers.
     async fn start(&self, server: &Server) -> Result<(Link, Vec<Tool>), String> {
-        self.renew(server).await;
+        self.renew(server, false).await;
+        let mut started = self.greeted(server).await;
+        // Refused though signed in to: what the sign-in obtained no longer
+        // holds, whatever date it bore. It is renewed once more; refused
+        // again, the sign-in has ended, and the Owner is to be told.
+        if started.as_ref().is_err_and(|problem| is_a_refusal(problem))
+            && self.signed_in(&server.name).is_some()
+        {
+            if self.renew(server, true).await {
+                started = self.greeted(server).await;
+            }
+            if started.as_ref().is_err_and(|problem| is_a_refusal(problem)) {
+                let mut ended = self.ended.lock().unwrap();
+                if !ended.contains(&server.name) {
+                    ended.push(server.name.clone());
+                    self.reports.lock().unwrap().push(format!(
+                        "The sign-in to the server {name} has ended or was withdrawn, and could not \
+                         be renewed: its tools are gone until your Owner signs in to it again. Tell \
+                         them, and that they do so by sending: /mcp connect {name}",
+                        name = server.name
+                    ));
+                }
+                return Err("the sign-in to it has ended: it has to be signed in to again".into());
+            }
+        }
+        if started.is_ok() {
+            self.ended.lock().unwrap().retain(|name| name != &server.name);
+        }
+        started
+    }
+
+    async fn greeted(&self, server: &Server) -> Result<(Link, Vec<Tool>), String> {
         match tokio::time::timeout(START_LIMIT, self.greet(server)).await {
             Ok(started) => started,
             Err(_) => Err(format!("it did not answer within {} seconds", START_LIMIT.as_secs())),
         }
+    }
+
+    /// What there is to tell the Owner that nobody asked about: each sign-in
+    /// that ended, said once.
+    pub(crate) fn take_reports(&self) -> Vec<String> {
+        std::mem::take(&mut *self.reports.lock().unwrap())
     }
 
     async fn greet(&self, server: &Server) -> Result<(Link, Vec<Tool>), String> {
@@ -432,13 +475,14 @@ impl Mcp {
         serde_json::from_str(&self.secrets.get(&Self::kept_as(server)).ok()??).ok()
     }
 
-    /// Obtains a fresh access when the one kept is about to end, with what
-    /// the sign-in gave for that.
-    async fn renew(&self, server: &Server) {
-        let Some(signed) = self.signed_in(&server.name) else { return };
-        let (Some(until), Some(refresh)) = (signed.until, signed.refresh.clone()) else { return };
-        if until > now() + 60 {
-            return;
+    /// Obtains a fresh access when the one kept is about to end, or
+    /// `whatever` its date, with what the sign-in gave for that. True when
+    /// a fresh one was obtained.
+    async fn renew(&self, server: &Server, whatever: bool) -> bool {
+        let Some(signed) = self.signed_in(&server.name) else { return false };
+        let Some(refresh) = signed.refresh.clone() else { return false };
+        if !whatever && signed.until.is_none_or(|until| until > now() + 60) {
+            return false;
         }
         let secret = self.client_secret(&server.name);
         let mut form = vec![
@@ -459,19 +503,18 @@ impl Mcp {
             .send()
             .await
         else {
-            return;
+            return false;
         };
-        let Ok(given) = answer.json::<Value>().await else { return };
-        let Some(access) = given["access_token"].as_str() else { return };
+        let Ok(given) = answer.json::<Value>().await else { return false };
+        let Some(access) = given["access_token"].as_str() else { return false };
         let renewed = SignedIn {
             access: access.to_owned(),
             refresh: given["refresh_token"].as_str().map(str::to_owned).or(Some(refresh)),
             until: given["expires_in"].as_u64().map(|lasts| now() + lasts),
             ..signed
         };
-        if let Ok(written) = serde_json::to_string(&renewed) {
-            let _ = self.secrets.set(&Self::kept_as(&server.name), &written);
-        }
+        serde_json::to_string(&renewed)
+            .is_ok_and(|written| self.secrets.set(&Self::kept_as(&server.name), &written).is_ok())
     }
 
     /// Begins signing in to the server called `name`: the text is the
@@ -905,8 +948,28 @@ impl Mcp {
             }
         }
         let call = json!({ "name": tool.name, "arguments": given });
-        let asked = link.as_mut()?.ask("tools/call", call);
-        let answer = match tokio::time::timeout(CALL_LIMIT, asked).await {
+        let asked = link.as_mut()?.ask("tools/call", call.clone());
+        let mut answered = tokio::time::timeout(CALL_LIMIT, asked).await;
+        // Refused though signed in to: reached afresh, which renews what the
+        // sign-in obtained or finds that it has ended, and asked once more.
+        if matches!(&answered, Ok(Err(problem)) if is_a_refusal(problem))
+            && self.signed_in(&server.name).is_some()
+        {
+            *link = None;
+            match self.start(server).await {
+                Ok((fresh, _)) => {
+                    let asked = link.insert(fresh).ask("tools/call", call);
+                    answered = tokio::time::timeout(CALL_LIMIT, asked).await;
+                }
+                Err(problem) => {
+                    return Some(format!(
+                        "The server {} could not be reached: {problem}.",
+                        server.name
+                    ));
+                }
+            }
+        }
+        let answer = match answered {
             Ok(Ok(answer)) => answer,
             Ok(Err(problem)) => {
                 *link = None;
@@ -1020,6 +1083,11 @@ impl Drop for Link {
 
 /// What a server answered: its result, or its error with the error's code.
 type Answered = Result<Value, (i64, String)>;
+
+/// True when `problem` is a server saying that who asks is not let in.
+fn is_a_refusal(problem: &str) -> bool {
+    problem.contains("it refused Orbite (HTTP 401)")
+}
 
 impl Link {
     /// Finds out whether the server speaks today's protocol, and remembers

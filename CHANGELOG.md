@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.4.5
+
+Released on 2026-11-20.
+
+- **Your agent tells you when a connector's sign-in has ended.** A connector that refuses though you signed in to it has its access renewed at once, whatever date it bore, and the action goes on. When it cannot be renewed (the sign-in ran out, or you withdrew it at the service), your agent tells you so, once, with the command to sign in again, instead of its tools quietly failing or being gone. `/connections` shows it as to be signed in to.
+
 ## 0.4.4
 
 Released on 2026-11-20. (0.4.3 was never published: its last check before publishing found one more file left behind on AlmaLinux.)

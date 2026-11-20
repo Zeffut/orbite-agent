@@ -113,7 +113,7 @@ The agent then uses it by name, in commands and extensions, and never sees its v
 
 ## MCP servers
 
-Tools from MCP servers (connectors) become actions of your agent. The simple way: in the conversation, `/connect NAME ADDRESS`, for instance `/connect notion https://mcp.notion.com/mcp`. Orbite starts again and comes back with a link to sign in, or with the connector connected; `/connections` shows them all. For a server that is a program on the machine, or that takes a key in its headers, list it in `/var/lib/orbite/mcp.json`, in the form other MCP clients use, then restart Orbite:
+Tools from MCP servers (connectors) become actions of your agent. The simple way: in the conversation, `/connect NAME ADDRESS`, for instance `/connect notion https://mcp.notion.com/mcp`. Orbite starts again and comes back with a link to sign in, or with the connector connected; `/connections` shows them all. A sign-in is renewed by itself for as long as the service allows; when one ends or is withdrawn, your agent tells you, once, with the command to sign in again. For a server that is a program on the machine, or that takes a key in its headers, list it in `/var/lib/orbite/mcp.json`, in the form other MCP clients use, then restart Orbite:
 
 ```json
 { "mcpServers": {

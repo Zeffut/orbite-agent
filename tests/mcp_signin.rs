@@ -548,3 +548,131 @@ async fn a_connector_is_signed_out_of_or_removed_from_the_conversation() {
             .unwrap();
     assert!(written["mcpServers"].get("far").is_none(), "{written}");
 }
+
+/// An MCP server that lets in only who carries `access`, with one tool, and
+/// refuses everybody else.
+async fn server_taking_only(access: &str) -> MockServer {
+    let server = MockServer::start().await;
+    let answering = |result: Value| {
+        move |request: &wiremock::Request| {
+            let asked: Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "jsonrpc": "2.0", "id": asked["id"], "result": result }))
+        }
+    };
+    for (asked, result) in [
+        (
+            "server/discover",
+            json!({ "resultType": "complete", "supportedVersions": ["2026-07-28"] }),
+        ),
+        (
+            "tools/list",
+            json!({ "resultType": "complete", "tools": [{
+                "name": "lookup", "description": "Looks a word up.",
+                "inputSchema": { "type": "object", "properties": { "word": { "type": "string" } } },
+                "annotations": { "readOnlyHint": true },
+            }] }),
+        ),
+        (
+            "tools/call",
+            json!({ "resultType": "complete", "content": [{ "type": "text", "text": "hello" }] }),
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .and(header("authorization", format!("Bearer {access}").as_str()))
+            .and(header("mcp-method", asked))
+            .respond_with(answering(result))
+            .mount(&server)
+            .await;
+    }
+    Mock::given(path("/mcp")).respond_with(ResponseTemplate::new(401)).mount(&server).await;
+    server
+}
+
+/// A home whose Owner signed in to `server` a while ago, and was given an
+/// access said to last a good while yet.
+async fn home_signed_in_to(server: &MockServer) -> tempfile::TempDir {
+    let home = home_with(server).await;
+    let here = server.uri();
+    let later =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+            + 3600;
+    let kept = json!({
+        "access": "old-access", "refresh": "the-refresh", "until": later, "client": "client-made-for-orbite",
+        "exchange": format!("{here}/token"), "resource": format!("{here}/mcp"),
+    });
+    Secrets::kept_in(home.path()).set("ORBITE_MCP_FAR", &kept.to_string()).unwrap();
+    home
+}
+
+#[tokio::test]
+async fn an_access_refused_before_its_time_is_renewed_and_the_tool_still_used() {
+    let server = server_taking_only("renewed-access").await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .and(body_string_contains("refresh_token=the-refresh"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({ "access_token": "renewed-access", "expires_in": 3600 })),
+        )
+        .mount(&server)
+        .await;
+    let home = home_signed_in_to(&server).await;
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("far_lookup", json!({ "word": "salut" }))]).then(Ok("Hello.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("What does salut mean?");
+    assert_eq!(owner.hears().await, "Hello.");
+
+    let told = provider.last_asked();
+    assert!(
+        told.iter()
+            .any(|message| matches!(message, Message::Outcome { text, .. } if text == "hello")),
+        "{told:?}"
+    );
+    assert!(
+        !told.iter().any(|message| matches!(message, Message::Notice(_))),
+        "nothing was to be told: {told:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_sign_in_that_ended_is_told_to_the_owner_once_with_how_to_sign_in_again() {
+    // Nothing is let in any more, and what renews the access refuses too.
+    let server = server_taking_only("an-access-nobody-has").await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({ "error": "invalid_grant" })))
+        .mount(&server)
+        .await;
+    let home = home_signed_in_to(&server).await;
+    let provider = ScriptedProvider::default();
+    provider.then(Ok("Your sign-in to far has ended.".into())).then(Ok("Nothing new.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Good morning.");
+    assert_eq!(owner.hears().await, "Your sign-in to far has ended.");
+    let notices = |told: &[Message]| -> Vec<String> {
+        told.iter()
+            .filter_map(|message| match message {
+                Message::Notice(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let first = notices(&provider.last_asked());
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(first[0].contains("far") && first[0].contains("/mcp connect far"), "{}", first[0]);
+
+    // Said once: the next message brings no second telling.
+    owner.says("Anything else?");
+    assert_eq!(owner.hears().await, "Nothing new.");
+    assert_eq!(notices(&provider.last_asked()).len(), 1);
+
+    // And where connections are listed, it is shown as to be signed in to.
+    owner.says("/connections");
+    let listed = owner.hears().await;
+    assert!(listed.contains("far") && listed.contains("/mcp connect far"), "{listed}");
+}

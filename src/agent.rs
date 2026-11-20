@@ -829,6 +829,10 @@ impl<P: Provider + 'static> Agent<P> {
             // Servers are started the first time their tools are wanted.
             mcp.connect(false).await;
             actions.extend(mcp.specs(&actions));
+            // A sign-in that ended is for the Owner to hear of, unasked.
+            for report in mcp.take_reports() {
+                self.store.append(&Message::Notice(report))?;
+            }
         }
         // An Extension that could not say what it adds was just turned off.
         for report in self.host.extensions.iter().flat_map(|extensions| extensions.take_reports()) {
