@@ -32,4 +32,4 @@ All three must be clean. The tests of the Agent's Computer need `Xvfb`, `xdotool
 
 ## What happens next
 
-A maintainer reads the pull request. CI runs the tests, the installer on fresh Debian and Ubuntu machines, and the Computer with two browsers. Releases are cut by the maintainers; installations update themselves from them.
+A maintainer reads the pull request. CI runs the tests, the installer on fresh machines of every system it supports, and the Computer with two browsers. Releases are cut by the maintainers; installations update themselves from them.

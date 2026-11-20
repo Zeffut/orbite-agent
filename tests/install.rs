@@ -286,8 +286,12 @@ fn the_agents_computer_is_set_up_with_a_screen_a_browser_and_fonts() {
     let calls = machine.calls();
     let computer = calls
         .lines()
-        .find(|call| call.starts_with("apt-get install") && call.contains("firefox"))
+        .find(|call| {
+            call.starts_with("apt-get ") && call.contains(" install ") && call.contains("firefox")
+        })
         .unwrap_or_else(|| panic!("the Computer's packages were not installed:\n{calls}"));
+    // A machine just started is updating itself: apt waits for its turn.
+    assert!(computer.contains("DPkg::Lock::Timeout="), "{computer}");
     for package in ["xvfb", "xdotool", "fonts-liberation", "fonts-noto-color-emoji"] {
         assert!(computer.contains(package), "{package} is missing from: {computer}");
     }

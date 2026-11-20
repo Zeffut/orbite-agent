@@ -148,6 +148,69 @@ jobs:
             docker exec -e ORBITE_WITHOUT_COMPUTER='${{ matrix.without_computer }}' -e TRY_WITH_WGET_ONLY='${{ matrix.wget_only }}' fresh sh /release/try-install.sh /release
           fi
 
+  # Real machines: each system's own published image, started untouched in
+  # a virtual machine, with nothing added before the installer runs. Then
+  # the machine is restarted, and Orbite must be back by itself.
+  machine:
+    name: Install on a real ${{ matrix.system }} machine
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: Debian 13
+            image: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
+          - system: Debian 12
+            image: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
+          - system: Ubuntu 24.04
+            image: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+          - system: Ubuntu 26.04
+            image: https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img
+          - system: Fedora
+            folder: https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/
+            named: 'Fedora-Cloud-Base-Generic-[0-9.-]*\.x86_64\.qcow2'
+          - system: AlmaLinux 9
+            image: https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2
+          - system: Arch
+            image: https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2
+          - system: openSUSE Tumbleweed
+            image: https://download.opensuse.org/tumbleweed/appliances/openSUSE-Tumbleweed-Minimal-VM.x86_64-Cloud.qcow2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: orbite-x86_64-linux
+          path: release
+      - name: Make a release to install from
+        run: |
+          cd release
+          FILE=orbite-x86_64-linux
+          chmod +x "$FILE"
+          "./$FILE" version | cut -d' ' -f2 > VERSION
+          sha256sum "$FILE" VERSION > SHA256SUMS
+          openssl genpkey -algorithm ed25519 -out ../try.key
+          openssl pkey -in ../try.key -pubout -out try.pub
+          openssl pkeyutl -sign -inkey ../try.key -rawin -in SHA256SUMS -out SHA256SUMS.sig
+          cp ../install.sh ../.github/try-install.sh ../.github/fake-telegram.py .
+          release() {
+            (cd "$1" && echo "$2" > VERSION && sha256sum "$FILE" VERSION > SHA256SUMS &&
+              openssl pkeyutl -sign -inkey ../../try.key -rawin -in SHA256SUMS -out SHA256SUMS.sig)
+          }
+          mkdir next broken
+          cp "$FILE" next/ && release next 99.0.0
+          printf '#!/bin/sh\nexit 1\n' > "broken/$FILE" && release broken 99.1.0
+      - name: What starts the machine
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils >/dev/null
+      - name: Start the machine, install, try the service, restart the machine
+        run: |
+          IMAGE='${{ matrix.image }}'
+          if [ -z "$IMAGE" ]; then
+            FOLDER='${{ matrix.folder }}'
+            IMAGE="$FOLDER$(curl -fsSL "$FOLDER" | grep -o '${{ matrix.named }}' | sort -u | tail -1)"
+          fi
+          sh .github/try-on-a-machine.sh "$IMAGE" "$PWD/release"
+
   # Where Orbite cannot be installed, the installer says why and changes nothing.
   refuse:
     name: Refuse ${{ matrix.system }}
@@ -224,7 +287,7 @@ jobs:
   publish:
     name: Publish the version
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, install, refuse, refuse-without-root]
+    needs: [build, install, machine, refuse, refuse-without-root]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -256,7 +319,7 @@ jobs:
           cat > notes.md <<'NOTES'
           Orbite is in early development: versions before 1.0 are for trying it out, and things will change.
 
-          Install on Debian or Ubuntu (x86_64 or aarch64):
+          Install on any Linux with systemd (x86_64 or aarch64), freshly installed, with nothing to prepare:
 
           ```sh
           curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh

@@ -121,11 +121,14 @@ fi
 
 # Installs the packages named, asking nothing: a question here would read
 # the rest of this script as its answer.
+# A machine just started is often updating itself: apt then waits for its
+# turn rather than failing on the lock.
+APT_WAITS="-o DPkg::Lock::Timeout=600"
 install_packages() {
     case "$PM" in
         apt-get)
-            apt-get update -qq </dev/null &&
-                DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" \
+            apt-get $APT_WAITS update -qq </dev/null &&
+                DEBIAN_FRONTEND=noninteractive apt-get $APT_WAITS install -y -qq --no-install-recommends "$@" \
                     </dev/null >/dev/null
             ;;
         dnf) dnf install -y -q "$@" </dev/null >/dev/null ;;
@@ -406,8 +409,8 @@ computer_with_mozillas_firefox() {
     # Only the browser is taken from there, whatever else that source offers.
     printf 'Package: firefox*\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n\nPackage: *\nPin: origin packages.mozilla.org\nPin-Priority: 1\n' \
         >"$ROOT/etc/apt/preferences.d/mozilla"
-    apt-get update -qq </dev/null || return 1
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends --allow-downgrades \
+    apt-get $APT_WAITS update -qq </dev/null || return 1
+    DEBIAN_FRONTEND=noninteractive apt-get $APT_WAITS install -y -qq --no-install-recommends --allow-downgrades \
         xvfb xdotool firefox fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
         </dev/null >/dev/null || return 1
 }
