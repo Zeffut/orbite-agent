@@ -161,11 +161,13 @@ everything > /root/trial/after
 comm -13 /root/trial/before /root/trial/after > /root/trial/new
 echo "Paths on the machine that were not there before Orbite: $(wc -l < /root/trial/new), of which outside /usr:"
 grep -v '^/usr/' /root/trial/new | head -40 || true
-# (What packages still on the machine keep under /usr/local is theirs.)
+# (What packages still on the machine keep under /usr/local is theirs, as
+# is what the system keeps in /tmp for its own services.)
 LEFT=$(grep -i -e orbite -e '^/tmp/' -e '^/usr/local/' -e '^/home/' -e '^/var/spool/' -e '^/var/mail/' \
     -e '^/etc/apt/' /root/trial/new |
     grep -v -e '^/root/orbite-export.tar.gz$' -e '^/root/orbite-to-uninstall$' \
-        -e '^/usr/local/share/ca-certificates' -e '^/usr/local/share/fonts' || true)
+        -e '^/usr/local/share/ca-certificates' -e '^/usr/local/share/fonts' \
+        -e '^/tmp/systemd-private-' || true)
 [ -e /var/lib/orbite ] && LEFT="$LEFT /var/lib/orbite"
 LEFT="$LEFT$(find /var/lib/systemd -iname '*orbite*' 2>/dev/null)"
 if [ -n "$LEFT" ]; then

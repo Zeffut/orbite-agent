@@ -381,6 +381,9 @@ pub struct Computer {
     browser: (String, bool),
     running: Option<Child>,
     size: (u16, u16),
+    /// What was in the machine's shared folder under the names this
+    /// browser writes there, before it was started: not its own to clear.
+    there_before: Vec<PathBuf>,
 }
 
 impl Computer {
@@ -440,6 +443,7 @@ impl Computer {
             browser: ((*command).to_owned(), *chrome),
             running: None,
             size: (width, height),
+            there_before: Vec::new(),
         })
     }
 
@@ -462,6 +466,7 @@ impl Computer {
         // it all behind, and here it can be cleared away.
         let scratch = scratch_of(&self.profile);
         if !running {
+            self.there_before = written_beside_everyone();
             let _ = std::fs::remove_dir_all(&scratch);
             std::fs::create_dir_all(&scratch)?;
             #[cfg(unix)]
@@ -566,6 +571,11 @@ impl Computer {
         let _ = browser.kill();
         let _ = browser.wait();
         let _ = std::fs::remove_dir_all(scratch_of(&self.profile));
+        for left in written_beside_everyone() {
+            if !self.there_before.contains(&left) {
+                let _ = std::fs::remove_file(left);
+            }
+        }
     }
 }
 
@@ -700,6 +710,23 @@ impl Desk {
 }
 
 /// Where the programs a Computer started are noted, beside its profile.
+/// What Firefox writes in the machine's shared folder wherever it is told
+/// to write: a file by which its copies agree on who updates, which it
+/// leaves there when it stops.
+fn written_beside_everyone() -> Vec<PathBuf> {
+    std::fs::read_dir("/tmp")
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    entry.file_name().to_string_lossy().starts_with("MozillaUpdateLock-")
+                })
+                .map(|entry| entry.path())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Where the browser of `profile` writes what it needs only while it runs.
 fn scratch_of(profile: &Path) -> PathBuf {
     profile.with_extension("tmp")
