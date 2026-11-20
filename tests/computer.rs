@@ -275,6 +275,20 @@ mod browser {
     }
 
     #[test]
+    fn what_the_browser_writes_while_it_runs_is_kept_off_the_machine_and_cleared_when_it_closes() {
+        let home = tempfile::tempdir().unwrap();
+        let Some(mut computer) = started(&home.path().join("profile")) else { return };
+        computer.open("about:blank").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let scratch = home.path().join("profile.tmp");
+        assert!(scratch.is_dir(), "the browser was given no folder of its own to write in");
+
+        computer.close_browser();
+
+        assert!(!scratch.exists(), "what the browser wrote while running was left behind");
+    }
+
+    #[test]
     fn a_computer_in_use_by_another_orbite_is_left_alone() {
         let home = tempfile::tempdir().unwrap();
         let profile = home.path().join("profile");

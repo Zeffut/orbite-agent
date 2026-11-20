@@ -6,7 +6,8 @@ What changed in each version of Orbite, for the people who run it.
 
 Released on 2026-11-20.
 
-- **Removing Orbite leaves the machine as it was.** The installer writes down what it brings for the agent's computer that the machine did not have (Firefox, Xvfb, `xdotool`, fonts, Mozilla's package source), and `orbite uninstall` takes it away again, with the account's mailbox and the last traces of the service. What the machine already had is never removed; `--keep-computer` keeps what was brought. This is checked on every real machine before a version is published, by comparing the whole machine before installing and after removing.
+- **Removing Orbite leaves the machine as it was.** The installer writes down what it brings for the agent's computer that the machine did not have (Firefox, Xvfb, `xdotool`, fonts, Mozilla's package source), and `orbite uninstall` takes it away again, with the account's mailbox and the last traces of the service. What the machine already had is never removed, nor a package that something you installed since needs, nor everyday tools the installer had to install (`curl`, `sudo`): those are named. `--keep-computer` keeps what was brought. This is checked on every real machine before a version is published, by comparing the whole machine before installing and after removing.
+- **The agent's computer leaves nothing in `/tmp`.** Its browser writes what it needs while running into a folder of the computer's own, cleared when it closes, and the screen takes its socket away when it stops. Before, every stop left a few files and folders there.
 
 ## 0.4.2
 

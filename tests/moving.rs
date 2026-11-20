@@ -137,6 +137,8 @@ impl Machine {
         for file in [
             "usr/local/bin/orbite",
             "usr/local/bin/orbite.previous",
+            "usr/local/bin/orbite.refused",
+            "usr/local/bin/orbite.updating",
             "etc/systemd/system/orbite.service",
             "etc/systemd/system/orbite-update.service",
             "etc/systemd/system/orbite-update.timer",
@@ -194,6 +196,8 @@ fn uninstalling_removes_the_service_the_account_the_program_and_the_data() {
     for gone in [
         "usr/local/bin/orbite",
         "usr/local/bin/orbite.previous",
+        "usr/local/bin/orbite.refused",
+        "usr/local/bin/orbite.updating",
         "etc/systemd/system/orbite.service",
         "etc/systemd/system/orbite-update.service",
         "etc/systemd/system/orbite-update.timer",
@@ -240,7 +244,7 @@ fn uninstalling_takes_away_what_was_brought_for_the_computer_and_nothing_else() 
     let calls = machine.calls();
     let purge = calls
         .lines()
-        .find(|call| call.starts_with("apt-get ") && call.contains(" purge "))
+        .find(|call| call.contains(" purge ") && !call.contains(" -s "))
         .unwrap_or_else(|| panic!("nothing was removed:\n{calls}"));
     assert!(purge.ends_with("xvfb firefox"), "{purge}");
     for gone in [
@@ -252,6 +256,44 @@ fn uninstalling_takes_away_what_was_brought_for_the_computer_and_nothing_else() 
     }
     assert!(machine.has("etc/apt/sources.list.d/the-owners.list"));
     assert!(shown(&removed).contains("xvfb firefox"), "{}", shown(&removed));
+}
+
+#[test]
+fn what_the_owner_installed_since_and_needs_a_package_brought_keeps_that_package() {
+    let machine = with_a_computer_brought();
+    // Asked what would go with firefox, apt names a program of the Owner's.
+    let log = machine.root.path().join("calls.log");
+    let apt = format!(
+        "#!/bin/sh\necho \"apt-get $*\" >> '{}'\ncase \"$*\" in '-s purge firefox') echo 'Purg firefox [1.0]'; echo 'Purg the-owners-program [2.0]';; '-s purge xvfb') echo 'Purg xvfb [1.0]';; esac\n",
+        log.display()
+    );
+    fs::write(machine.root.path().join("stand-ins/apt-get"), apt).unwrap();
+
+    let removed = machine.uninstall(&["--yes"]);
+
+    assert!(removed.status.success(), "{}", shown(&removed));
+    let calls = machine.calls();
+    let purged: Vec<&str> =
+        calls.lines().filter(|call| call.contains(" purge ") && !call.contains(" -s ")).collect();
+    assert!(purged.iter().any(|call| call.ends_with(" xvfb")), "{calls}");
+    assert!(!purged.iter().any(|call| call.contains("firefox")), "{calls}");
+    let said = shown(&removed);
+    assert!(said.contains("Left on the machine") && said.contains("firefox"), "{said}");
+}
+
+#[test]
+fn the_everyday_tools_the_installer_installed_are_left_and_said_so() {
+    let machine = Machine::installed();
+    let written = machine.root.path().join("usr/local/share/orbite/brought");
+    fs::create_dir_all(written.parent().unwrap()).unwrap();
+    fs::write(&written, "manager apt-get\ntool curl\ntool sudo\n").unwrap();
+
+    let removed = machine.uninstall(&["--yes"]);
+
+    assert!(removed.status.success(), "{}", shown(&removed));
+    assert!(!machine.calls().contains("apt-get"), "{}", machine.calls());
+    assert!(shown(&removed).contains("curl, sudo"), "{}", shown(&removed));
+    assert!(!machine.has("usr/local/share/orbite"));
 }
 
 #[test]
@@ -282,7 +324,8 @@ fn what_is_written_down_cannot_make_uninstalling_remove_anything_else() {
 
     assert!(removed.status.success(), "{}", shown(&removed));
     let calls = machine.calls();
-    let purge = calls.lines().find(|call| call.contains(" purge ")).unwrap();
+    let purge =
+        calls.lines().find(|call| call.contains(" purge ") && !call.contains(" -s ")).unwrap();
     assert!(purge.ends_with(" xvfb") && !purge.contains("essential"), "{purge}");
 }
 

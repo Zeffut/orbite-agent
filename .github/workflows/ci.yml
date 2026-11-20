@@ -19,7 +19,13 @@ jobs:
       - run: cargo clippy --all-targets --locked -- -D warnings
       # The Agent's Computer is tested on a screen of its own.
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb xdotool
-      - run: cargo test --locked
+      - run: |
+          ls -A /tmp | sort > "$RUNNER_TEMP/before"
+          cargo test --locked
+          # The tests leave nothing behind on the machine that ran them.
+          sleep 2
+          left=$(ls -A /tmp | sort | comm -13 "$RUNNER_TEMP/before" - | grep -v '^systemd-private' || true)
+          [ -z "$left" ] || { echo "left in /tmp by the tests:"; echo "$left"; exit 1; }
         env:
           ORBITE_TESTS_NEED_A_SCREEN: "1"
           # The browser the Computer was tried with so far.
@@ -42,7 +48,13 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --allow-downgrades xvfb xdotool firefox
           firefox --version
-      - run: cargo test --locked --test computer --test computer_agent
+      - run: |
+          ls -A /tmp | sort > "$RUNNER_TEMP/before"
+          cargo test --locked --test computer --test computer_agent
+          # The tests leave nothing behind on the machine that ran them.
+          sleep 2
+          left=$(ls -A /tmp | sort | comm -13 "$RUNNER_TEMP/before" - | grep -v '^systemd-private' || true)
+          [ -z "$left" ] || { echo "left in /tmp by the tests:"; echo "$left"; exit 1; }
         env:
           ORBITE_TESTS_NEED_A_SCREEN: "1"
           ORBITE_BROWSER: firefox

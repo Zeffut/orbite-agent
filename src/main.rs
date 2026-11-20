@@ -535,6 +535,8 @@ fn uninstall() -> Result<(), Failure> {
         "/etc/systemd/system/orbite-update.timer",
         "/etc/sudoers.d/orbite",
         "/usr/local/bin/orbite.previous",
+        "/usr/local/bin/orbite.refused",
+        "/usr/local/bin/orbite.updating",
         "/usr/local/bin/orbite",
     ] {
         match fs::remove_file(format!("{root}{file}")) {
@@ -574,6 +576,8 @@ struct Brought {
     manager: String,
     packages: Vec<String>,
     files: Vec<String>,
+    /// Everyday tools the installer had to install: never removed.
+    tools: Vec<String>,
     written: bool,
 }
 
@@ -595,6 +599,7 @@ impl Brought {
                 Some(("file", path)) if path.starts_with('/') && !path.contains("..") => {
                     brought.files.push(path.to_owned())
                 }
+                Some(("tool", name)) => brought.tools.push(name.to_owned()),
                 _ => {}
             }
         }
@@ -616,46 +621,112 @@ impl Brought {
         if let Some(folder) = written.parent() {
             let _ = fs::remove_dir(folder);
         }
+        if !self.tools.is_empty() {
+            println!(
+                "Left on the machine, as other things may use them by now: {} (installed by Orbite's \
+                 installer).",
+                self.tools.join(", ")
+            );
+        }
         if self.packages.is_empty() && self.files.is_empty() {
             return;
         }
-        let named = self.packages.join(" ");
         if keep {
-            println!("Kept, as asked, what was brought for the agent's computer: {named}.");
+            println!(
+                "Kept, as asked, what was brought for the agent's computer: {}.",
+                self.packages.join(" ")
+            );
             return;
         }
-        let removing: Option<(&str, &[&str])> = match self.manager.as_str() {
-            "apt-get" => Some((
-                "apt-get",
-                &["-o", "DPkg::Lock::Timeout=600", "purge", "-y", "-qq", "--auto-remove"],
-            )),
-            "dnf" => Some(("dnf", &["remove", "-y", "-q"])),
-            "pacman" => Some(("pacman", &["-Rns", "--noconfirm"])),
-            "zypper" => Some(("zypper", &["--non-interactive", "remove", "--clean-deps"])),
-            _ => None,
-        };
-        let removed = self.packages.is_empty()
-            || removing.is_some_and(|(program, arguments)| {
-                std::process::Command::new(program)
-                    .args(arguments)
-                    .args(&self.packages)
-                    .env("DEBIAN_FRONTEND", "noninteractive")
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .status()
-                    .is_ok_and(|status| status.success())
-            });
+        // A package goes only when nothing but what was brought goes with
+        // it: what the Owner installed since and that needs one is never
+        // taken along. Several rounds, as one may be freed by another going.
+        let mut left = self.packages.clone();
+        let mut gone: Vec<String> = Vec::new();
+        for _ in 0..4 {
+            let free: Vec<String> =
+                left.iter().filter(|package| self.goes_alone(package)).cloned().collect();
+            let removed: Vec<String> = if self.manager == "pacman" {
+                // pacman refuses by itself what something else needs.
+                free.into_iter()
+                    .filter(|package| self.remove(std::slice::from_ref(package)))
+                    .collect()
+            } else if !free.is_empty() && self.remove(&free) {
+                free
+            } else {
+                Vec::new()
+            };
+            if removed.is_empty() {
+                break;
+            }
+            left.retain(|package| !removed.contains(package));
+            gone.extend(removed);
+        }
         for file in &self.files {
             let _ = fs::remove_file(format!("{root}{file}"));
         }
-        if removed {
-            println!("What was brought for the agent's computer is removed too: {named}.");
-        } else {
+        if !gone.is_empty() {
             println!(
-                "What was brought for the agent's computer could not be removed: {named}. Remove it \
-                 with your system's own tools if nothing else uses it."
+                "What was brought for the agent's computer is removed too: {}.",
+                gone.join(" ")
             );
         }
+        if !left.is_empty() {
+            println!(
+                "Left on the machine, as something else there needs it or it could not be removed: {}.",
+                left.join(" ")
+            );
+        }
+    }
+
+    /// True when removing `package` would take nothing with it but what
+    /// was brought.
+    fn goes_alone(&self, package: &str) -> bool {
+        let quietly = |program: &str, arguments: &[&str]| {
+            std::process::Command::new(program)
+                .args(arguments)
+                .env("LC_ALL", "C")
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+        };
+        match self.manager.as_str() {
+            "apt-get" => quietly("apt-get", &["-s", "purge", package]).is_ok_and(|tried| {
+                tried.status.success()
+                    && String::from_utf8_lossy(&tried.stdout)
+                        .lines()
+                        .filter_map(|line| line.strip_prefix("Purg "))
+                        .filter_map(|line| line.split_whitespace().next())
+                        .all(|going| self.packages.iter().any(|brought| brought == going))
+            }),
+            "dnf" | "zypper" => {
+                quietly("rpm", &["-e", "--test", package]).is_ok_and(|tried| tried.status.success())
+            }
+            "pacman" => true,
+            _ => false,
+        }
+    }
+
+    /// Removes `packages` and what came with them that nothing needs any more.
+    fn remove(&self, packages: &[String]) -> bool {
+        let (program, arguments): (&str, &[&str]) = match self.manager.as_str() {
+            "apt-get" => (
+                "apt-get",
+                &["-o", "DPkg::Lock::Timeout=600", "purge", "-y", "-qq", "--auto-remove"],
+            ),
+            "dnf" => ("dnf", &["remove", "-y", "-q"]),
+            "pacman" => ("pacman", &["-Rns", "--noconfirm"]),
+            "zypper" => ("zypper", &["--non-interactive", "remove", "--clean-deps"]),
+            _ => return false,
+        };
+        std::process::Command::new(program)
+            .args(arguments)
+            .args(packages)
+            .env("DEBIAN_FRONTEND", "noninteractive")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }
 

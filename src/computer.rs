@@ -320,8 +320,31 @@ impl Drop for Screen {
             let _ = std::fs::remove_file(kept);
         }
         if let Some(serving) = &mut self.serving {
+            // Asked to stop, the server takes away what it put on the
+            // machine to be reached by; made to, it leaves that behind.
+            // SAFETY: a signal sent to a program this one started.
+            unsafe { libc::kill(serving.id() as libc::pid_t, libc::SIGTERM) };
+            let until = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < until && matches!(serving.try_wait(), Ok(None)) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             let _ = serving.kill();
             let _ = serving.wait();
+            // Had it to be made to stop, what it left is taken away, as long
+            // as it is still its own: the lock names the server it is of,
+            // and another may have taken the number since.
+            if let Some(number) = self.display.strip_prefix(':')
+                && !number.is_empty()
+                && number.bytes().all(|digit| digit.is_ascii_digit())
+            {
+                let lock = format!("/tmp/.X{number}-lock");
+                let ours = std::fs::read_to_string(&lock)
+                    .is_ok_and(|held| held.trim() == serving.id().to_string());
+                if ours {
+                    let _ = std::fs::remove_file(format!("/tmp/.X11-unix/X{number}"));
+                    let _ = std::fs::remove_file(lock);
+                }
+            }
         }
     }
 }
@@ -434,7 +457,21 @@ impl Computer {
         let running =
             self.running.as_mut().is_some_and(|browser| matches!(browser.try_wait(), Ok(None)));
         let (command, chrome) = &self.browser;
+        // What a browser writes for the time it runs goes to a folder of
+        // the Computer's own, not the machine's: stopped, a browser leaves
+        // it all behind, and here it can be cleared away.
+        let scratch = scratch_of(&self.profile);
+        if !running {
+            let _ = std::fs::remove_dir_all(&scratch);
+            std::fs::create_dir_all(&scratch)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&scratch, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
         let mut starting = Command::new(command);
+        starting.env("TMPDIR", &scratch);
         // On this screen and no other: a browser that finds a desktop
         // session in its environment would open there instead.
         starting
@@ -528,6 +565,7 @@ impl Computer {
         }
         let _ = browser.kill();
         let _ = browser.wait();
+        let _ = std::fs::remove_dir_all(scratch_of(&self.profile));
     }
 }
 
@@ -662,6 +700,11 @@ impl Desk {
 }
 
 /// Where the programs a Computer started are noted, beside its profile.
+/// Where the browser of `profile` writes what it needs only while it runs.
+fn scratch_of(profile: &Path) -> PathBuf {
+    profile.with_extension("tmp")
+}
+
 fn running_file(profile: &Path) -> PathBuf {
     profile.with_extension("running")
 }

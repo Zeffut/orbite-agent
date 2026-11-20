@@ -138,6 +138,42 @@ install_packages() {
     esac
 }
 
+# What the installer brings and the machine did not have is written down:
+# what is for the Agent's Computer, for `orbite uninstall` to take away
+# again and leave the machine as it was; and the everyday tools (curl,
+# sudo), for it to say they were left, as other things may use them by then.
+BROUGHT=/usr/local/share/orbite/brought
+is_there() {
+    case "$PM" in
+        apt-get) dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed' ;;
+        dnf | zypper) rpm -q "$1" >/dev/null 2>&1 ;;
+        pacman) pacman -Q "$1" >/dev/null 2>&1 ;;
+        *) return 0 ;;
+    esac
+}
+# `brought package xvfb`, `brought file /etc/...`: written down once.
+brought() {
+    mkdir -p "$ROOT${BROUGHT%/*}"
+    grep -qx "manager $PM" "$ROOT$BROUGHT" 2>/dev/null || echo "manager $PM" >>"$ROOT$BROUGHT"
+    grep -qx "$1 $2" "$ROOT$BROUGHT" 2>/dev/null || echo "$1 $2" >>"$ROOT$BROUGHT"
+}
+# Those of the packages named that the machine does not have yet.
+lacking() {
+    LACKING=""
+    for package in "$@"; do
+        is_there "$package" || LACKING="$LACKING $package"
+    done
+}
+# Installs the packages named, and writes down those that are new here.
+bring() {
+    lacking "$@"
+    NEW=$LACKING
+    install_packages "$@" || return 1
+    for package in $NEW; do
+        brought package "$package"
+    done
+}
+
 # Fetches `$1` into the file `$2`, with whichever of curl and wget is there.
 fetch() {
     if command -v curl >/dev/null 2>&1; then
@@ -170,6 +206,7 @@ fi
 
 # --- What the installer itself needs ---
 
+TOOLS=""
 MISSING=""
 command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || MISSING="$MISSING curl"
 for tool in openssl sha256sum; do
@@ -181,6 +218,7 @@ if [ -n "$MISSING" ]; then
     [ -n "$PM" ] || refuse "this system lacks$MISSING, and this installer does not know how to install packages on it. Install them, then run this again."
     # sha256sum comes with coreutils; certificates with what fetches.
     install_packages ca-certificates curl openssl coreutils
+    TOOLS="$TOOLS$MISSING"
 fi
 
 # --- The program is downloaded and checked before it is put anywhere ---
@@ -292,7 +330,7 @@ chmod 644 "$ROOT$SERVICE"
 STEP="letting the agent keep its machine"
 # sudo is what lets an account that is not root do a named few things as root.
 if ! command -v sudo >/dev/null 2>&1; then
-    install_packages sudo 2>/dev/null || true
+    install_packages sudo 2>/dev/null && TOOLS="$TOOLS sudo" || true
 fi
 if command -v sudo >/dev/null 2>&1 && [ -d "$ROOT/etc/sudoers.d" ]; then
     cat >"$WORK/sudoers" <<RULES
@@ -352,41 +390,6 @@ systemctl enable --now orbite-update.timer >/dev/null 2>&1 || systemctl enable -
 # out. Orbite is installed whether or not this part succeeds.
 
 MOZILLA_KEY=35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
-
-# What is brought for the Computer and was not on the machine before is
-# written down, for `orbite uninstall` to take away again and leave the
-# machine as it was.
-BROUGHT=/usr/local/share/orbite/brought
-is_there() {
-    case "$PM" in
-        apt-get) dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed' ;;
-        dnf | zypper) rpm -q "$1" >/dev/null 2>&1 ;;
-        pacman) pacman -Q "$1" >/dev/null 2>&1 ;;
-        *) return 0 ;;
-    esac
-}
-# `brought package xvfb`, `brought file /etc/...`: written down once.
-brought() {
-    mkdir -p "$ROOT${BROUGHT%/*}"
-    grep -qx "manager $PM" "$ROOT$BROUGHT" 2>/dev/null || echo "manager $PM" >>"$ROOT$BROUGHT"
-    grep -qx "$1 $2" "$ROOT$BROUGHT" 2>/dev/null || echo "$1 $2" >>"$ROOT$BROUGHT"
-}
-# Those of the packages named that the machine does not have yet.
-lacking() {
-    LACKING=""
-    for package in "$@"; do
-        is_there "$package" || LACKING="$LACKING $package"
-    done
-}
-# Installs the packages named, and writes down those that are new here.
-bring() {
-    lacking "$@"
-    NEW=$LACKING
-    install_packages "$@" || return 1
-    for package in $NEW; do
-        brought package "$package"
-    done
-}
 
 # The screen, what moves the pointer and types, and the browser, as each
 # system names them; then fonts, each for itself: a page still shows
@@ -456,6 +459,12 @@ computer_with_mozillas_firefox() {
         brought package "$package"
     done
 }
+
+# Written down now that Orbite is on the machine, not before: an install
+# that is refused leaves nothing.
+for tool in $TOOLS; do
+    brought tool "$tool"
+done
 
 if [ "${ORBITE_WITHOUT_COMPUTER:-}" = "1" ]; then
     say "Left out, as asked: the agent's own computer. Without it the agent cannot use sites that need"

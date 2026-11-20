@@ -47,16 +47,27 @@ async fn site() -> (MockServer, String) {
     (site, address)
 }
 
-fn agent_in(home: &Path, provider: &ScriptedProvider) -> Owner {
+/// The folder a test's Agent lives in. The Agent holds it too: it is removed
+/// only once the Agent is gone and its browser closed, or the browser would
+/// write into it again after the test and leave it behind.
+type Home = std::sync::Arc<tempfile::TempDir>;
+
+fn a_home() -> Home {
+    std::sync::Arc::new(tempfile::tempdir().unwrap())
+}
+
+fn agent_in(home: &Home, provider: &ScriptedProvider) -> Owner {
     let (mut channel, owner) = memory_channel();
     let provider = provider.clone();
-    let home = home.to_owned();
+    let held = home.clone();
     tokio::spawn(async move {
+        let home = held.path().to_owned();
         Agent::new(provider, Store::in_memory())
             .keeping_secrets_in(&home)
             .using_a_computer_in(home.join("computer"))
             .converse(&mut channel)
-            .await
+            .await;
+        drop(held);
     });
     owner
 }
@@ -98,7 +109,7 @@ async fn the_agent_goes_to_a_site_once_allowed_acts_there_and_the_model_sees_the
         return;
     }
     let (_site, address) = site().await;
-    let home = tempfile::tempdir().unwrap();
+    let home = a_home();
     let provider = ScriptedProvider::default();
     provider
         .then_acts([("computer_open", json!({ "url": address, "purpose": "fill in the form" }))])
@@ -106,7 +117,7 @@ async fn the_agent_goes_to_a_site_once_allowed_acts_there_and_the_model_sees_the
         .then_acts([("computer", json!({ "do": "click", "x": 127, "y": 98 }))])
         .then_acts([("computer", json!({ "do": "type", "text": "tulip-42" }))])
         .then(Ok("The form is filled in.".into()));
-    let mut owner = agent_in(home.path(), &provider);
+    let mut owner = agent_in(&home, &provider);
 
     owner.says("Fill in the form on that site.");
     let approval = asked(&mut owner).await;
@@ -146,7 +157,7 @@ async fn a_secret_is_typed_by_name_after_asking_and_its_value_never_reaches_the_
         return;
     }
     let (_site, address) = site().await;
-    let home = tempfile::tempdir().unwrap();
+    let home = a_home();
     Secrets::kept_in(home.path()).set("FORM_CODE", "tulip-42").unwrap();
     let provider = ScriptedProvider::default();
     provider
@@ -154,7 +165,7 @@ async fn a_secret_is_typed_by_name_after_asking_and_its_value_never_reaches_the_
         .then_acts([("computer_click", json!({ "x": 127, "y": 98 }))])
         .then_acts([("computer_type", json!({ "text": "{{FORM_CODE}}" }))])
         .then(Ok("Entered.".into()));
-    let mut owner = agent_in(home.path(), &provider);
+    let mut owner = agent_in(&home, &provider);
 
     owner.says("Enter my code on that site.");
     asked(&mut owner).await;
@@ -180,7 +191,7 @@ async fn the_owner_is_sent_a_picture_of_the_screen_when_they_ask_for_one() {
         return;
     }
     let (_site, address) = site().await;
-    let home = tempfile::tempdir().unwrap();
+    let home = a_home();
     let picture = home.path().join("computer/pictures/screen-0.png");
     let provider = ScriptedProvider::default();
     provider
@@ -190,7 +201,7 @@ async fn the_owner_is_sent_a_picture_of_the_screen_when_they_ask_for_one() {
         )])
         .then_acts([("send_file", json!({ "path": picture, "caption": "The page." }))])
         .then(Ok("Sent.".into()));
-    let mut owner = agent_in(home.path(), &provider);
+    let mut owner = agent_in(&home, &provider);
 
     owner.says("Open that site and send me a picture of it.");
     asked(&mut owner).await;
@@ -311,13 +322,13 @@ async fn a_screen_that_died_is_started_again_for_the_next_action() {
         return;
     }
     let (_site, address) = site().await;
-    let home = tempfile::tempdir().unwrap();
+    let home = a_home();
     let provider = ScriptedProvider::default();
     provider
         .then_acts([("computer", json!({ "do": "open", "url": address, "purpose": "look" }))])
         .then_acts([("computer", json!({ "do": "open", "url": address, "purpose": "look again" }))])
         .then(Ok("There.".into()));
-    let mut owner = agent_in(home.path(), &provider);
+    let mut owner = agent_in(&home, &provider);
 
     owner.says("Open the site, twice.");
     asked(&mut owner).await;
@@ -344,7 +355,7 @@ async fn the_agent_shows_its_owner_the_screen_at_a_step_that_matters_in_one_gest
         return;
     }
     let (_site, address) = site().await;
-    let home = tempfile::tempdir().unwrap();
+    let home = a_home();
     let provider = ScriptedProvider::default();
     provider
         .then_acts([(
@@ -352,7 +363,7 @@ async fn the_agent_shows_its_owner_the_screen_at_a_step_that_matters_in_one_gest
             json!({ "do": "open", "url": address, "purpose": "The form before I send it", "show": true }),
         )])
         .then(Ok("Shall I send it?".into()));
-    let mut owner = agent_in(home.path(), &provider);
+    let mut owner = agent_in(&home, &provider);
 
     owner.says("Fill in the form and show me before sending.");
     asked(&mut owner).await;
