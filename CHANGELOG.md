@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.4.1
+
+Released on 2026-11-20.
+
+- **The installer runs on any Linux with systemd, freshly installed, with nothing to prepare.** Beyond Debian and Ubuntu: Fedora, AlmaLinux, Arch, openSUSE and the systems made from them, each with its own way of installing packages. It fetches with `curl` or `wget`, whichever is there, and installs itself what it needs and the system lacks. On a system whose packages it does not know, Orbite is installed all the same and you are told how to give the agent its computer.
+
 ## 0.4.0
 
 Released on 2026-11-20.

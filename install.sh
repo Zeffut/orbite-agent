@@ -5,6 +5,13 @@
 #
 #   curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh
 #
+# or, where there is no curl:
+#
+#   wget -qO- https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh
+#
+# It runs on any Linux with systemd, freshly installed, with nothing to
+# prepare: what it needs and the system lacks, it installs itself.
+#
 # Running it again updates the program and keeps everything else.
 set -eu
 # What is installed for the whole machine is readable by it, however
@@ -95,18 +102,50 @@ PRETTY_NAME="This system"
 # shellcheck disable=SC1091
 [ -r "$ROOT/etc/os-release" ] && . "$ROOT/etc/os-release"
 ID_LIKE="${ID_LIKE:-}"
-case "$ID" in
-    debian | ubuntu) ;;
-    *)
-        # A system made from Debian or Ubuntu is installed as they are.
-        case " $ID_LIKE " in
-            *" debian "* | *" ubuntu "*)
-                say "Note: $PRETTY_NAME is made from Debian or Ubuntu, and Orbite is installed as on them."
-                ;;
-            *) refuse "$PRETTY_NAME is not supported yet (Debian, Ubuntu and systems made from them are)." ;;
-        esac
-        ;;
+
+# How this system installs packages: by what it says it is made from, or
+# else by what is there. None is no obstacle to Orbite itself.
+PM=""
+case " $ID $ID_LIKE " in
+    *" debian "* | *" ubuntu "*) PM=apt-get ;;
+    *" fedora "* | *" rhel "* | *" centos "*) PM=dnf ;;
+    *" arch "*) PM=pacman ;;
+    *" suse "* | *" opensuse "*) PM=zypper ;;
 esac
+if [ -z "$PM" ] || ! command -v "$PM" >/dev/null 2>&1; then
+    PM=""
+    for candidate in apt-get dnf pacman zypper; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PM=$candidate
+            break
+        fi
+    done
+fi
+
+# Installs the packages named, asking nothing: a question here would read
+# the rest of this script as its answer.
+install_packages() {
+    case "$PM" in
+        apt-get)
+            apt-get update -qq </dev/null &&
+                DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" \
+                    </dev/null >/dev/null
+            ;;
+        dnf) dnf install -y -q "$@" </dev/null >/dev/null ;;
+        pacman) pacman -Syu --noconfirm --needed "$@" </dev/null >/dev/null ;;
+        zypper) zypper --non-interactive install --no-recommends "$@" </dev/null >/dev/null ;;
+        *) return 1 ;;
+    esac
+}
+
+# Fetches `$1` into the file `$2`, with whichever of curl and wget is there.
+fetch() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$1" -o "$2"
+    else
+        wget -q -O "$2" "$1"
+    fi
+}
 
 # Too old to check a release's signature (it takes OpenSSL 3): said now,
 # before anything is fetched or installed.
@@ -121,7 +160,7 @@ fi
 
 [ -d "$ROOT/run/systemd/system" ] || refuse "systemd is not running here, and Orbite runs as a systemd service."
 
-[ "$(id -u)" = "0" ] || refuse "it must be run as root, for example: curl ... | sudo sh"
+[ "$(id -u)" = "0" ] || refuse "it must be run as root: with sudo in front of sh, or from a root shell."
 
 MEMORY_KB=$(awk '/^MemTotal:/ { print $2 }' "$ROOT/proc/meminfo" 2>/dev/null || true)
 if [ -n "${MEMORY_KB:-}" ] && [ "$MEMORY_KB" -lt 1900000 ]; then
@@ -132,16 +171,16 @@ fi
 # --- What the installer itself needs ---
 
 MISSING=""
-for tool in curl openssl sha256sum; do
+command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || MISSING="$MISSING curl"
+for tool in openssl sha256sum; do
     command -v "$tool" >/dev/null 2>&1 || MISSING="$MISSING $tool"
 done
 if [ -n "$MISSING" ]; then
     STEP="installing what the installer needs ($(echo $MISSING))"
     say "Installing what the installer needs:$MISSING"
-    # Asked nothing: a question here would read the rest of this script as its answer.
-    apt-get update -qq </dev/null
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-        ca-certificates curl openssl coreutils </dev/null >/dev/null
+    [ -n "$PM" ] || refuse "this system lacks$MISSING, and this installer does not know how to install packages on it. Install them, then run this again."
+    # sha256sum comes with coreutils; certificates with what fetches.
+    install_packages ca-certificates curl openssl coreutils
 fi
 
 # --- The program is downloaded and checked before it is put anywhere ---
@@ -152,7 +191,7 @@ FILE="orbite-$ARCH-linux"
 
 say "Downloading Orbite for $ARCH..."
 for name in "$FILE" SHA256SUMS SHA256SUMS.sig; do
-    curl -fsSL "$RELEASE/$name" -o "$WORK/$name" || refuse "$name could not be downloaded from $RELEASE."
+    fetch "$RELEASE/$name" "$WORK/$name" || refuse "$name could not be downloaded from $RELEASE."
 done
 
 STEP="checking what was downloaded"
@@ -173,7 +212,7 @@ openssl pkeyutl -verify -pubin -inkey "$WORK/orbite.pub" -rawin \
 # An older release is not put over a newer Orbite: a release that was once
 # sound stays signed for ever, known defects included.
 if [ -x "$ROOT$PROGRAM" ] && [ "${ORBITE_ALLOW_OLDER:-}" != 1 ] &&
-    curl -fsSL "$RELEASE/VERSION" -o "$WORK/VERSION" 2>/dev/null &&
+    fetch "$RELEASE/VERSION" "$WORK/VERSION" 2>/dev/null &&
     (cd "$WORK" && grep ' VERSION$' SHA256SUMS | sha256sum -c - >/dev/null 2>&1); then
     OFFERED="$(tr -d ' \n' <"$WORK/VERSION")"
     INSTALLED="$("$ROOT$PROGRAM" version 2>/dev/null | awk '{print $2}')"
@@ -190,7 +229,9 @@ UPDATING=no
 
 STEP="creating the agent's account"
 if ! id orbite >/dev/null 2>&1; then
-    useradd --system --home-dir "$HOME_DIR" --shell /usr/sbin/nologin orbite
+    # Where the shell that lets nobody in is differs from one system to the next.
+    NOLOGIN=$(command -v nologin 2>/dev/null || echo /usr/sbin/nologin)
+    useradd --system --home-dir "$HOME_DIR" --shell "$NOLOGIN" orbite
 fi
 mkdir -p "$ROOT$HOME_DIR"
 # With all that is in it: data kept from an earlier installation was given
@@ -243,8 +284,7 @@ chmod 644 "$ROOT$SERVICE"
 STEP="letting the agent keep its machine"
 # sudo is what lets an account that is not root do a named few things as root.
 if ! command -v sudo >/dev/null 2>&1; then
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends sudo \
-        </dev/null >/dev/null 2>&1 || true
+    install_packages sudo 2>/dev/null || true
 fi
 if command -v sudo >/dev/null 2>&1 && [ -d "$ROOT/etc/sudoers.d" ]; then
     cat >"$WORK/sudoers" <<RULES
@@ -305,12 +345,43 @@ systemctl enable --now orbite-update.timer >/dev/null 2>&1 || systemctl enable -
 
 MOZILLA_KEY=35BAA0B33E9EB396F59CA838C0BA5CE6DC6315A3
 
+# The screen, what moves the pointer and types, and the browser, as each
+# system names them; then fonts, each for itself: a page still shows
+# without one of them.
 computer() {
+    case "$PM" in
+        apt-get) computer_with_mozillas_firefox ;;
+        dnf)
+            # Outside Fedora, what moves the pointer is in the extra packages.
+            case " $ID " in *" fedora "*) ;; *) install_packages epel-release 2>/dev/null || true ;; esac
+            install_packages xorg-x11-server-Xvfb xdotool firefox || return 1
+            for font in liberation-fonts google-noto-sans-fonts google-noto-sans-cjk-fonts google-noto-color-emoji-fonts; do
+                install_packages "$font" 2>/dev/null || true
+            done
+            ;;
+        pacman)
+            install_packages xorg-server-xvfb xdotool firefox || return 1
+            for font in ttf-liberation noto-fonts noto-fonts-cjk noto-fonts-emoji; do
+                install_packages "$font" 2>/dev/null || true
+            done
+            ;;
+        zypper)
+            install_packages xorg-x11-server-Xvfb xdotool MozillaFirefox || return 1
+            for font in liberation-fonts google-noto-sans-fonts google-noto-sans-cjk-fonts google-noto-coloremoji-fonts; do
+                install_packages "$font" 2>/dev/null || true
+            done
+            ;;
+        # A system whose packages this installer does not know.
+        *) return 2 ;;
+    esac
+}
+
+computer_with_mozillas_firefox() {
     mkdir -p "$ROOT/etc/apt/keyrings" "$ROOT/etc/apt/sources.list.d" "$ROOT/etc/apt/preferences.d"
     KEYRING=/etc/apt/keyrings/packages.mozilla.org.asc
     if [ ! -s "$ROOT$KEYRING" ]; then
-        curl -fsSL "${ORBITE_MOZILLA_KEY_URL:-https://packages.mozilla.org/apt/repo-signing-key.gpg}" \
-            -o "$ROOT$KEYRING.new" || return 1
+        fetch "${ORBITE_MOZILLA_KEY_URL:-https://packages.mozilla.org/apt/repo-signing-key.gpg}" \
+            "$ROOT$KEYRING.new" || return 1
         # Mozilla publishes the fingerprint of its key: it is checked where
         # the machine has what it takes, and the key is refused if it differs.
         if command -v gpg >/dev/null 2>&1; then
@@ -341,7 +412,12 @@ if [ "${ORBITE_WITHOUT_COMPUTER:-}" = "1" ]; then
     say "signing in or a person's gestures. Run this installer again without ORBITE_WITHOUT_COMPUTER to add it."
 else
     say "Setting up the agent's own computer (a screen, Firefox and fonts)..."
-    if ! computer; then
+    computer && SET_UP=0 || SET_UP=$?
+    if [ "$SET_UP" = 2 ]; then
+        say "Note: this installer does not know how to install packages on $PRETTY_NAME, so the agent's"
+        say "computer was not set up. Orbite works without it. To give it one, install Xvfb, xdotool and"
+        say "Firefox (or Chromium) with your system's own tools, then check with: orbite computer check"
+    elif [ "$SET_UP" != 0 ]; then
         say "Note: the agent's computer could not be set up. Orbite works without it; run this installer"
         say "again later to add it."
         report "Orbite was installed, but the agent's computer (xvfb, xdotool, Firefox from Mozilla's packages, fonts) could not be set up." "Install: the agent's computer could not be set up"

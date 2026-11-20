@@ -6,7 +6,7 @@ An open-source personal AI agent that lives on a machine you control, uses the A
 
 ## Trying it
 
-On a Debian or Ubuntu machine (x86_64 or aarch64), as root:
+On any Linux machine with systemd (x86_64 or aarch64), freshly installed, with nothing to prepare:
 
 ```sh
 curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh
@@ -25,7 +25,7 @@ Then:
 
 Already there:
 
-- One command installs Orbite on a Debian or Ubuntu machine: a spare computer, a mini PC, a VPS.
+- One command installs Orbite on a Linux machine (Debian, Ubuntu, Fedora, Arch, openSUSE and those made from them): a spare computer, a mini PC, a VPS.
 - You talk to your agent in Telegram, in one continuous conversation.
 - It runs on API keys from the provider you choose, or on a model on your own machine.
 - It has its own computer on your machine, with a screen and a browser.

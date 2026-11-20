@@ -6,7 +6,7 @@ Orbite is in early development: versions before 1.0 are for trying it out, and t
 
 ## What you need
 
-- A machine running **Debian 12 or later, Ubuntu 22.04 or later**, or a system made from them (Linux Mint, Kali, Raspberry Pi OS), with systemd, on an x86_64 or aarch64 processor, where you can run commands as root. The installer checks all of this before changing anything, and warns when the machine has little memory.
+- A machine running **Linux with systemd**, as freshly installed: Debian 12 or later, Ubuntu 22.04 or later, Fedora, Arch, openSUSE, AlmaLinux and the systems made from them (Linux Mint, Kali, Raspberry Pi OS, Manjaro). Nothing has to be installed beforehand: what the installer needs and the system lacks, it installs itself. On a system whose packages it does not know, Orbite is installed all the same, and you add the agent's computer by hand, on an x86_64 or aarch64 processor, where you can run commands as root. The installer checks all of this before changing anything, and warns when the machine has little memory.
 - **An AI to think with**: an API key from a provider, a ChatGPT Plus or Pro plan, or a model running on the machine itself with Ollama or LM Studio (see [Providers](providers.md)).
 - **A Telegram account.** Telegram is where you talk to your agent.
 
@@ -25,6 +25,14 @@ On the machine, as root:
 ```sh
 curl -fsSL https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh
 ```
+
+Where there is no `curl` (a fresh Debian has `wget` instead), the same with `wget`:
+
+```sh
+wget -qO- https://github.com/Zeffut/orbite-agent/releases/latest/download/install.sh | sudo sh
+```
+
+And from a root shell, where there is no `sudo`, leave `sudo` out.
 
 The installer:
 

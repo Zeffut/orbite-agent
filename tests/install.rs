@@ -166,9 +166,6 @@ fn a_supported_machine_gets_the_program_an_account_and_a_service_that_restarts()
 
 #[test]
 fn an_unsupported_machine_is_refused_before_anything_is_changed() {
-    let other_system = Machine::debian();
-    other_system
-        .write("etc/os-release", "ID=fedora\nVERSION_ID=43\nPRETTY_NAME=\"Fedora Linux 43\"\n");
     let other_processor = Machine::debian();
     other_processor.stand_in("uname", "case \"$1\" in -m) echo riscv64;; *) echo Linux;; esac");
     let no_systemd = Machine::debian();
@@ -177,12 +174,9 @@ fn an_unsupported_machine_is_refused_before_anything_is_changed() {
     not_root
         .stand_in("id", "[ \"$1\" = \"-u\" ] && [ -z \"$2\" ] && { echo 1000; exit 0; }; exit 1");
 
-    for (machine, reason) in [
-        (other_system, "Fedora"),
-        (other_processor, "riscv64"),
-        (no_systemd, "systemd"),
-        (not_root, "root"),
-    ] {
+    for (machine, reason) in
+        [(other_processor, "riscv64"), (no_systemd, "systemd"), (not_root, "root")]
+    {
         let refused = machine.install();
 
         assert!(!refused.status.success(), "it was installed: {}", shown(&refused));
@@ -490,13 +484,8 @@ fn a_system_made_from_debian_or_ubuntu_is_installed_as_they_are_and_told_so() {
         let installed = machine.install();
 
         assert!(installed.status.success(), "{about}: {}", shown(&installed));
-        assert!(shown(&installed).contains("made from Debian or Ubuntu"), "{}", shown(&installed));
         assert!(machine.path("usr/local/bin/orbite").exists());
     }
-    // What only resembles them by name is not.
-    let other = Machine::debian();
-    other.write("etc/os-release", "ID=fedora\nID_LIKE=\"rhel centos\"\nPRETTY_NAME=\"Fedora\"\n");
-    assert!(!other.install().status.success());
 }
 
 /// The address of the report offered in what was `shown`, taken apart.
@@ -553,10 +542,10 @@ fn an_install_that_fails_unexpectedly_offers_a_report_the_owner_sends_themselves
 
 #[test]
 fn a_refusal_the_installer_explains_offers_no_report() {
-    let other_system = Machine::debian();
-    other_system.write("etc/os-release", "ID=fedora\nPRETTY_NAME=\"Fedora Linux 43\"\n");
+    let no_systemd = Machine::debian();
+    fs::remove_dir_all(no_systemd.path("run/systemd")).unwrap();
 
-    let refused = other_system.install();
+    let refused = no_systemd.install();
 
     assert!(report_offered(&shown(&refused)).is_none(), "{}", shown(&refused));
 }
@@ -665,4 +654,165 @@ fn a_rule_sudo_would_not_read_is_not_put_in_place() {
     assert!(machine.install().status.success());
 
     assert!(!machine.path("etc/sudoers.d/orbite").exists());
+}
+
+// --- Any Linux with systemd, freshly installed ---
+
+impl Machine {
+    /// This machine, saying it is another system, with that system's way
+    /// of installing packages standing in.
+    fn saying(about: &str, package_manager: &str) -> Self {
+        let machine = Self::debian();
+        machine.write("etc/os-release", about);
+        machine.stand_in(package_manager, "exit 0");
+        machine
+    }
+
+    /// Runs the installer where only a few programs exist: the stand-ins,
+    /// and those of `kept` taken from this machine.
+    fn install_with_only(&self, kept: &[&str]) -> Output {
+        let toolbox = self.path("toolbox");
+        fs::create_dir_all(&toolbox).unwrap();
+        for tool in kept {
+            let real = std::env::var("PATH")
+                .unwrap()
+                .split(':')
+                .map(|folder| Path::new(folder).join(tool))
+                .find(|file| file.is_file())
+                .unwrap_or_else(|| panic!("{tool} is not on this machine"));
+            let _ = std::os::unix::fs::symlink(real, toolbox.join(tool));
+        }
+        self.write("mozilla.key", "a key");
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("install.sh");
+        Command::new(toolbox.join("sh"))
+            .arg(script)
+            .env("PATH", format!("{}:{}", self.path("stand-ins").display(), toolbox.display()))
+            .env("ORBITE_ROOT", self.root.path())
+            .env("ORBITE_RELEASE_URL", format!("file://{}", self.path("release").display()))
+            .env(
+                "ORBITE_SIGNING_KEY",
+                fs::read_to_string(self.path("release/signing.pub")).unwrap(),
+            )
+            .env("ORBITE_SKIP_SETUP", "1")
+            .output()
+            .unwrap()
+    }
+}
+
+/// What a fresh system has whatever it is, curl aside.
+const BARE: &[&str] = &[
+    "sh",
+    "awk",
+    "sed",
+    "grep",
+    "od",
+    "tr",
+    "sort",
+    "head",
+    "tail",
+    "cut",
+    "mktemp",
+    "rm",
+    "cp",
+    "mv",
+    "chmod",
+    "mkdir",
+    "cat",
+    "cmp",
+    "dirname",
+    "sha256sum",
+    "openssl",
+    "tee",
+];
+
+#[test]
+fn other_systems_are_installed_with_their_own_way_of_installing_packages() {
+    for (about, package_manager, screen, browser) in [
+        (
+            "ID=fedora\nVERSION_ID=43\nPRETTY_NAME=\"Fedora Linux 43\"\n",
+            "dnf",
+            "xorg-x11-server-Xvfb",
+            "firefox",
+        ),
+        (
+            "ID=almalinux\nID_LIKE=\"rhel centos fedora\"\nVERSION_ID=\"9.5\"\nPRETTY_NAME=\"AlmaLinux 9.5\"\n",
+            "dnf",
+            "xorg-x11-server-Xvfb",
+            "firefox",
+        ),
+        ("ID=arch\nPRETTY_NAME=\"Arch Linux\"\n", "pacman", "xorg-server-xvfb", "firefox"),
+        (
+            "ID=manjaro\nID_LIKE=arch\nPRETTY_NAME=\"Manjaro Linux\"\n",
+            "pacman",
+            "xorg-server-xvfb",
+            "firefox",
+        ),
+        (
+            "ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\nPRETTY_NAME=\"openSUSE Tumbleweed\"\n",
+            "zypper",
+            "xorg-x11-server-Xvfb",
+            "MozillaFirefox",
+        ),
+    ] {
+        let machine = Machine::saying(about, package_manager);
+
+        let installed = machine.install();
+
+        assert!(installed.status.success(), "{about}: {}", shown(&installed));
+        assert!(machine.path("usr/local/bin/orbite").exists(), "{about}");
+        assert!(machine.path("etc/systemd/system/orbite.service").exists(), "{about}");
+        let calls = machine.calls();
+        let asked: Vec<&str> =
+            calls.lines().filter(|call| call.starts_with(&format!("{package_manager} "))).collect();
+        assert!(
+            asked.iter().any(|call| call.contains(screen)
+                && call.contains("xdotool")
+                && call.contains(browser)),
+            "{about}:\n{calls}"
+        );
+        // Nothing of Debian's way is used or left on another system.
+        assert!(!calls.contains("apt-get"), "{about}:\n{calls}");
+        assert!(!machine.path("etc/apt").exists(), "{about}");
+        assert!(!shown(&installed).contains("could not be set up"), "{}", shown(&installed));
+    }
+}
+
+#[test]
+fn a_fresh_system_without_curl_is_installed_with_wget() {
+    let machine = Machine::debian();
+    // wget, as far as the installer uses it: a file fetched into another.
+    machine.stand_in(
+        "wget",
+        "out=\"\"; while [ $# -gt 1 ]; do [ \"$1\" = -O ] && out=\"$2\"; shift; done; cp \"${1#file://}\" \"$out\"",
+    );
+
+    let installed = machine.install_with_only(BARE);
+
+    assert!(installed.status.success(), "{}", shown(&installed));
+    assert!(machine.path("usr/local/bin/orbite").exists());
+    assert!(machine.calls().contains("wget "), "{}", machine.calls());
+    assert!(
+        !shown(&installed).contains("Installing what the installer needs"),
+        "{}",
+        shown(&installed)
+    );
+}
+
+#[test]
+fn a_system_whose_packages_are_unknown_still_gets_orbite_and_is_told_about_the_computer() {
+    let machine = Machine::debian();
+    machine.write("etc/os-release", "ID=void\nPRETTY_NAME=\"Void Linux\"\n");
+    // None of the ways of installing packages this installer knows is there.
+    fs::remove_file(machine.path("stand-ins/apt-get")).unwrap();
+    let mut kept = BARE.to_vec();
+    kept.push("curl");
+
+    let installed = machine.install_with_only(&kept);
+
+    assert!(installed.status.success(), "{}", shown(&installed));
+    assert!(machine.path("usr/local/bin/orbite").exists());
+    assert!(machine.path("etc/systemd/system/orbite.service").exists());
+    let said = shown(&installed);
+    assert!(said.contains("Void Linux") && said.contains("Xvfb, xdotool"), "{said}");
+    assert!(report_offered(&said).is_none(), "this is no defect to report: {said}");
 }
