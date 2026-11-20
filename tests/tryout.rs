@@ -214,3 +214,38 @@ async fn what_was_tried_on_this_host_is_kept_and_comes_before_the_catalogue() {
     assert_eq!(orbite::rating(home.path(), "groq", "qwen/qwen3.8-27b"), Some(tried.clone()));
     assert!(tried.in_brief(Language::English).contains("cannot act"));
 }
+
+#[tokio::test]
+async fn the_owner_is_told_which_models_of_a_provider_do_all_an_agent_needs() {
+    let home = tempfile::tempdir().unwrap();
+    // What tryouts on this Host showed of four models of one Provider.
+    let able = try_out(&ABLE).await.unwrap();
+    let quick = orbite::Verdict { seconds_per_answer: 0.4, ..able.clone() };
+    let slow = orbite::Verdict { seconds_per_answer: 3.0, ..able.clone() };
+    let blind = orbite::Verdict { sees_images: false, seconds_per_answer: 0.1, ..able.clone() };
+    let mute = try_out(&Model { acts: false, ..ABLE }).await.unwrap();
+    for (model, verdict) in
+        [("large", &slow), ("small", &quick), ("blind", &blind), ("mute", &mute)]
+    {
+        orbite::keep_rating(home.path(), "mistral", model, verdict).unwrap();
+    }
+
+    let advice = orbite::advice(home.path(), "mistral", Language::English).unwrap();
+
+    // Those that act, see and remember, by name; nothing ranks them further.
+    assert!(advice.contains("large") && advice.contains("small"), "{advice}");
+    assert!(!advice.contains("mute"), "{advice}");
+    // For light work, the quickest that acts reliably and remembers: sight is not needed.
+    assert!(advice.contains("light work") && advice.contains("blind"), "{advice}");
+    assert!(advice.contains("tryouts"), "where this comes from is said: {advice}");
+
+    // Nothing is advised of a Provider none of whose models was tried.
+    assert_eq!(orbite::advice(home.path(), "deepseek", Language::English), None);
+    // From the catalogue alone, for a Provider it knows.
+    let shipped =
+        orbite::advice(tempfile::tempdir().unwrap().path(), "anthropic", Language::French).unwrap();
+    assert!(
+        shipped.contains("claude-sonnet-5-5") && shipped.contains("claude-haiku-5-5"),
+        "{shipped}"
+    );
+}

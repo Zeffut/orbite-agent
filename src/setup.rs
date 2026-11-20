@@ -257,6 +257,10 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                 self.say(&format!("  {}. {model}{known}", place + 1))?;
             }
         }
+        // What real tryouts say of this Provider's models, to choose by.
+        if let Some(advice) = crate::advice(&self.home, known.name, language) {
+            self.say(&format!("\n{advice}"))?;
+        }
         let model = loop {
             let answer =
                 self.ask(language.say("Model (number or name) > ", "Modèle (numéro ou nom) > "))?;

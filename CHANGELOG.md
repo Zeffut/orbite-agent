@@ -7,6 +7,8 @@ What changed in each version of Orbite, for the people who run it.
 Released on 2026-11-20.
 
 - **At the free permission level nothing is asked any more, critical actions included.** Your agent keeps its own machine: it may update itself, restart its service, restart the machine, change its own settings and read any file its account can read, without asking. At the careful and balanced levels critical actions are asked about each time, as before. Choose `free` knowing that what your agent reads on the web or in a file could then talk it into something you would have refused. Raising the level is still yours alone to allow.
+- **Choosing a model by what was tried.** Where you choose a model (setup, `/settings model`), Orbite says which models of the provider you use do all an agent needs, and which is the quickest for light work, from real tryouts: those shipped with Orbite and those run on your own machine.
+- Outside contributions are held until their authors have agreed to the contributor agreement, and nothing is merged automatically.
 - The installer lets the agent's account do exactly this as root, and nothing else: update Orbite, restart Orbite's service, restart or stop the machine.
 
 ## 0.3.15

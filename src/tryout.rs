@@ -442,6 +442,64 @@ pub fn rating(home: &std::path::Path, provider: &str, model: &str) -> Option<Ver
         .or_else(|| serde_json::from_str::<Rated>(CATALOGUE).ok().and_then(known))
 }
 
+/// What real tryouts say of the models of `provider`, for an Owner about
+/// to choose one: those that do all an Agent needs, and the quickest for
+/// light work. None when no model of that Provider was tried. Nothing here
+/// ranks models beyond what was measured.
+pub fn advice(home: &std::path::Path, provider: &str, language: Language) -> Option<String> {
+    let mut rated: std::collections::BTreeMap<String, Verdict> =
+        serde_json::from_str::<Rated>(CATALOGUE)
+            .ok()
+            .and_then(|mut all| all.remove(provider))
+            .unwrap_or_default();
+    // What was tried on this Host comes before the catalogue.
+    let here = std::fs::read_to_string(home.join("tryouts.json"))
+        .ok()
+        .and_then(|kept| serde_json::from_str::<Rated>(&kept).ok())
+        .and_then(|mut all| all.remove(provider))
+        .unwrap_or_default();
+    rated.extend(here);
+    if rated.is_empty() {
+        return None;
+    }
+    let acts =
+        |verdict: &Verdict| verdict.tools == Tools::Reliable && verdict.remembers != Some(false);
+    let able: Vec<&str> = rated
+        .iter()
+        .filter(|(_, verdict)| acts(verdict) && verdict.sees_images && verdict.declined == 0)
+        .map(|(model, _)| model.as_str())
+        .collect();
+    // For summaries and wake-ups: quick, reliable, and sight is not needed.
+    let mut quick: Vec<(&str, f32)> = rated
+        .iter()
+        .filter(|(_, verdict)| acts(verdict))
+        .map(|(model, verdict)| (model.as_str(), verdict.seconds_per_answer))
+        .collect();
+    quick.sort_by(|one, other| one.1.total_cmp(&other.1));
+    let lightest = match quick[..] {
+        [(model, fastest), (_, next), ..] if fastest < next => Some(model),
+        [(model, _)] => Some(model),
+        _ => None,
+    };
+    let mut advice = match (language, able.is_empty()) {
+        (Language::French, true) => "D'après de vrais essais, aucun des modèles essayés ici ne fait tout ce dont un agent a besoin (agir, voir les images, retenir) : voyez ce que chacun a montré.".to_owned(),
+        (Language::English, true) => "From real tryouts, none of the models tried here does all an agent needs (act, see images, remember): see what each one showed.".to_owned(),
+        (Language::French, false) => format!("D'après de vrais essais, ces modèles font tout ce dont un agent a besoin (agir, voir les images, retenir) : {}.", able.join(", ")),
+        (Language::English, false) => format!("From real tryouts, these models do all an agent needs (act, see images, remember): {}.", able.join(", ")),
+    };
+    if let Some(lightest) = lightest.filter(|_| quick.len() > 1) {
+        advice.push_str(&match language {
+            Language::French => {
+                format!(" Pour le travail léger (résumés, réveils), le plus rapide est {lightest}.")
+            }
+            Language::English => {
+                format!(" For light work (summaries, wake-ups), the quickest is {lightest}.")
+            }
+        });
+    }
+    Some(advice)
+}
+
 /// Keeps in `home` what trying `model` at `provider` out showed.
 pub fn keep_rating(
     home: &std::path::Path,

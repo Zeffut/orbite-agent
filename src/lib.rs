@@ -69,5 +69,5 @@ pub use store::{Entry, Store, StoreError};
 pub use telegram::Telegram;
 pub use terminal::Terminal;
 pub use transcriber::Transcriber;
-pub use tryout::{Tools, Verdict, keep_rating, rating, try_out};
+pub use tryout::{Tools, Verdict, advice, keep_rating, rating, try_out};
 pub use updater::{RELEASE_KEY, Service, Systemd, UpdateError, Updater};

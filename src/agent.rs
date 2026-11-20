@@ -1669,6 +1669,15 @@ impl<P: Provider + 'static> Agent<P> {
                 .collect();
             choices.push((say("← Back", "← Retour"), "/settings".into()));
             let mut text = format!("**{}**", line(key));
+            // What real tryouts say of the Provider's models, to choose by.
+            if key == "model"
+                && let Some(home) = &self.home
+                && let Some(chosen) =
+                    crate::Config::load(home).ok().and_then(|config| config.provider)
+                && let Some(advice) = crate::advice(home, &chosen.name, language)
+            {
+                text.push_str(&format!("\n{advice}"));
+            }
             // What trying the model out showed, when it was tried.
             if key == "model"
                 && let Some(home) = &self.home
