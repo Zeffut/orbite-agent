@@ -909,16 +909,19 @@ impl<P: Provider + 'static> Agent<P> {
                 let used = self.store.tokens_used_on(&today).unwrap_or_default();
                 let changed = match asked.is_empty() {
                     true => None,
-                    false => Some(crate::change_providers(&home, &asked).await),
+                    false => Some(crate::change_providers_in(&home, &asked, self.language).await),
                 };
                 let mut said = match &changed {
                     Some(Ok(done)) => format!("✅ {done}\n\n"),
                     Some(Err(why)) => format!("{why}\n\n"),
                     None => String::new(),
                 };
-                said.push_str(&crate::providers_shown(&home, self.language, &used));
                 let restart = matches!(changed, Some(Ok(_)));
-                said.push_str("\n\n");
+                // A change is confirmed in a line; the list is for who asks for it.
+                if !restart {
+                    said.push_str(&crate::providers_shown(&home, self.language, &used));
+                    said.push_str("\n\n");
+                }
                 said.push_str(match (restart, self.restarted) {
                     (true, true) => self.language.say(
                         "I restart to take it: back in a moment.",

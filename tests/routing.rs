@@ -348,7 +348,8 @@ async fn the_owner_sees_and_changes_their_providers_from_the_conversation() {
     owner.says("/providers first groq");
     let shown = owner.hears().await;
     assert!(shown.contains("groq is now asked first"), "{shown}");
-    assert!(shown.contains("1. groq") && shown.contains("next start"), "{shown}");
+    // Confirmed in a line, with when it applies; the list is for who asks for it.
+    assert!(shown.contains("next start") && !shown.contains("1. groq"), "{shown}");
     let all = orbite::Config::load(home.path()).unwrap().providers();
     assert_eq!(all[0].name, "groq");
     assert_eq!(asked.times_asked(), 1, "/providers is not sent to the model");

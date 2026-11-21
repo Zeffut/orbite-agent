@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.10
+
+Released on 2026-11-21.
+
+- A change to the AIs your agent thinks with is confirmed in one line, in your language, without the whole list after it.
+
 ## 0.5.9
 
 Released on 2026-11-21.

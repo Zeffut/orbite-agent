@@ -98,6 +98,16 @@ pub fn providers_shown(home: &Path, language: Language, used: &[(String, u64)]) 
 /// `first NAME`, `remove NAME`, `limit NAME TOKENS` or `limit NAME none`.
 /// Says what was done; the text of a failure is for the Owner.
 pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, String> {
+    change_providers_in(home, asked, Language::English).await
+}
+
+/// The same, said in the Owner's language.
+pub async fn change_providers_in(
+    home: &Path,
+    asked: &[&str],
+    language: Language,
+) -> Result<String, String> {
+    let french = language == Language::French;
     let mut config = Config::load(home).map_err(|error| error.to_string())?;
     let mut all = config.providers();
     let first_was = all.first().map(|first| first.name.clone());
@@ -116,18 +126,30 @@ pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, Str
             let preferred = all.remove(at);
             all.insert(0, preferred);
             config.set_providers(all);
-            format!("{} is now asked first.", name.to_lowercase())
+            if french {
+                format!("{} est maintenant sollicitée en premier.", name.to_lowercase())
+            } else {
+                format!("{} is now asked first.", name.to_lowercase())
+            }
         }
         ["remove", name] => {
             let at = place(name)?;
             if all.len() == 1 {
-                return Err("This is the only provider: set another up before removing it.".into());
+                return Err(if french {
+                    "C'est la seule IA : ajoutes-en une autre avant de la retirer.".into()
+                } else {
+                    "This is the only provider: set another up before removing it.".into()
+                });
             }
             give_each_its_key(&mut config, &Secrets::kept_in(home))?;
             let mut all = config.providers();
             let gone = all.remove(at);
             config.set_providers(all);
-            let done = format!("{} is removed.", gone.name);
+            let done = if french {
+                format!("{} est retirée.", gone.name)
+            } else {
+                format!("{} is removed.", gone.name)
+            };
             removed = Some(gone);
             done
         }
@@ -147,7 +169,11 @@ pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, Str
                 return Err("A ChatGPT plan is connected by signing in to it, not added.".into());
             }
             if all.iter().any(|provider| provider.name == name) {
-                return Err(format!("{name} is already set up."));
+                return Err(if french {
+                    format!("{name} est déjà configurée.")
+                } else {
+                    format!("{name} is already set up.")
+                });
             }
             let secrets = Secrets::kept_in(home);
             let key = key_of(&name);
@@ -163,9 +189,15 @@ pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, Str
                 ..ProviderChoice::default()
             });
             config.set_providers(all);
-            format!(
-                "{name} is added, with the model {model}: it is asked when those before it cannot answer."
-            )
+            if french {
+                format!(
+                    "{name} est ajoutée, avec le modèle {model} : elle prend le relais quand celles d'avant ne peuvent pas répondre."
+                )
+            } else {
+                format!(
+                    "{name} is added, with the model {model}: it is asked when those before it cannot answer."
+                )
+            }
         }
         ["limit", name, tokens] => {
             let at = place(name)?;
@@ -181,7 +213,11 @@ pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, Str
             let name = all[at].name.clone();
             config.set_providers(all);
             match limit {
+                Some(limit) if french => {
+                    format!("{name} peut utiliser {} jetons par jour.", grouped(limit))
+                }
                 Some(limit) => format!("{name} may use {} tokens a day.", grouped(limit)),
+                None if french => format!("{name} n'a plus de limite."),
                 None => format!("{name} has no limit."),
             }
         }
