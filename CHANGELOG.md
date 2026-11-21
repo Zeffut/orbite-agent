@@ -2,6 +2,35 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.14
+
+Released on 2026-11-21. A fourth independent check of the secrets code; update from any 0.5 version.
+
+- **A secret holding a backslash, a quote or a new line was kept but not cleared from the conversation**, so it still went to the provider. It is cleared like any other now, and Orbite tells you if clearing ever fails.
+- **At the strict setting, a second message written before you settled the first is no longer lost or sent in its place.** Orbite says it takes it up afterwards, and does: each message held back gets its own question.
+- On Telegram, what you wrote while your agent was working is no longer taken for the answer to a question asked afterwards.
+- A secret your agent asks you for while Orbite already awaits something from you waits its turn instead of replacing the question.
+- Resetting the conversation gives up what was awaited and what your agent was about to ask you, even while it works. Before, a secret it had asked for was still asked after the reset.
+
+## 0.5.13
+
+Released on 2026-11-21. A third independent check of the secrets code; update from any 0.5 version.
+
+- **With Anthropic, a secret your agent had put away was still sent back to the provider on every turn**, inside what Claude needs returned as it wrote it. It is now cleared there too, and from every older entry of the conversation, which a search could still read.
+- **Only what you write after being asked answers the question.** Something you wrote while your agent was working, before Orbite asked you for a secret, could be taken for the secret, or cancel the question so that your real answer went to the model. In the terminal, a line typed ahead could do the same.
+- What Orbite awaits from you is taken up before anything else when it starts again, written down before it is asked, and given up when you reset the conversation.
+- What your agent may keep as a secret is looked for in your last few messages only.
+
+## 0.5.12
+
+Released on 2026-11-21. A second independent review found the fixes of 0.5.11 incomplete; update from any 0.5 version.
+
+- **Keeping what you wrote as a secret is now yours to agree to.** When your agent picks a password out of your message, you are asked with a button, shown the name it chose and never the value again; at the `free` level it is done without asking, as everything is. Before, a model talked into it could still file an ordinary word of yours as a "secret" and have it wiped. This costs one tap when you write a password in passing; saying first that you have a secret to give still costs none.
+- What is cleared from the conversation is only what was said, answered or given to an action, wherever the model still sees it: never the name of an action, which 0.5.11 could rewrite.
+- A secret already kept is never replaced without your say, whichever way the new one comes; when Orbite asks you for one that exists, it says that your answer replaces it.
+- What Orbite awaits from you is written down at once and said again after a restart ("I am still waiting for…"), including the value of a message held back at the strict setting. After adding an AI, your next message is no longer taken for its key.
+- The message removed is always the one that held the secret.
+
 ## 0.5.11
 
 Released on 2026-11-21. Fixes found by an independent review of versions 0.5.0 to 0.5.10; update from any of them.

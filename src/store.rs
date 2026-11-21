@@ -397,63 +397,138 @@ impl Store {
         Ok(())
     }
 
-    /// Replaces `value` by `with` where the latest of the Conversation kept
-    /// it: a secret that was written in it, which must not be shown again.
-    /// Only what was said or answered is changed, never how an entry is
-    /// built, and only where the value stands as a whole.
+    /// Replaces `value` by `with` wherever what the model is still shown
+    /// holds it: a secret that was written in the Conversation, which must
+    /// not be shown again. Only what was said, answered or given to an
+    /// Action is changed, where the value stands as a whole: never the name
+    /// of an Action, what ties an Outcome to it, nor what a Provider needs
+    /// back as it was.
     pub(crate) fn redact(&self, value: &str, with: &str) -> Result<(), StoreError> {
+        use crate::secrets::{holds_whole, without_whole};
         if value.is_empty() {
             return Ok(());
         }
-        fn cleared(entry: &mut serde_json::Value, value: &str, with: &str) -> bool {
-            match entry {
-                serde_json::Value::String(text) if crate::secrets::holds_whole(text, value) => {
-                    *text = crate::secrets::without_whole(text, value, with);
+        fn given(input: &mut serde_json::Value, value: &str, with: &str) -> bool {
+            match input {
+                serde_json::Value::String(text) if holds_whole(text, value) => {
+                    *text = without_whole(text, value, with);
                     true
                 }
-                // Every one of them is gone through: the value may be in several.
                 serde_json::Value::Array(all) => {
                     let mut any = false;
                     for one in all.iter_mut() {
-                        any |= cleared(one, value, with);
+                        any |= given(one, value, with);
                     }
                     any
                 }
                 serde_json::Value::Object(all) => {
                     let mut any = false;
                     for one in all.values_mut() {
-                        any |= cleared(one, value, with);
+                        any |= given(one, value, with);
                     }
                     any
                 }
                 _ => false,
             }
         }
-        let database = self.database.lock().expect("the Store is not poisoned");
-        let latest: Vec<(i64, String)> = {
-            let mut reading =
-                database.prepare("SELECT id, body FROM messages ORDER BY id DESC LIMIT 40")?;
+        let said = |text: &mut String| {
+            let holds = holds_whole(text, value);
+            if holds {
+                *text = without_whole(text, value, with);
+            }
+            holds
+        };
+        // What a Provider needs back as it was is its own answer again: what
+        // it said, and what it gave its Actions. Those are cleared there
+        // too, and nothing else of it is touched.
+        fn kept_back(kept: &mut serde_json::Value, value: &str, with: &str) -> bool {
+            match kept {
+                serde_json::Value::Array(all) => {
+                    let mut any = false;
+                    for one in all.iter_mut() {
+                        any |= kept_back(one, value, with);
+                    }
+                    any
+                }
+                serde_json::Value::Object(block) => {
+                    let kind = block.get("type").and_then(|kind| kind.as_str()).map(str::to_owned);
+                    match kind.as_deref() {
+                        Some("text") => match block.get_mut("text") {
+                            Some(serde_json::Value::String(text)) if holds_whole(text, value) => {
+                                *text = without_whole(text, value, with);
+                                true
+                            }
+                            _ => false,
+                        },
+                        Some("tool_use") => {
+                            block.get_mut("input").is_some_and(|input| given(input, value, with))
+                        }
+                        // Kept under a Provider's name, or wrapped: looked into.
+                        None => {
+                            let mut any = false;
+                            for one in block.values_mut() {
+                                any |= kept_back(one, value, with);
+                            }
+                            any
+                        }
+                        // Reasoning only its Provider can read, and the like.
+                        Some(_) => false,
+                    }
+                }
+                _ => false,
+            }
+        }
+        // The value as it is written inside an entry, whatever it holds: a
+        // quote, a new line, a backslash are all written another way there.
+        let as_kept = serde_json::to_string(value)
+            .map(|quoted| quoted[1..quoted.len() - 1].to_owned())
+            .unwrap_or_else(|_| value.to_owned());
+        // Every entry, the ones the model is no longer shown as well: a
+        // search of the Conversation still reads them.
+        let all: Vec<(i64, String)> = {
+            let database = self.database.lock().expect("the Store is not poisoned");
+            let mut reading = database.prepare("SELECT id, body FROM messages ORDER BY id")?;
             let read = reading.query_map((), |row| Ok((row.get(0)?, row.get(1)?)))?;
             read.filter_map(Result::ok).collect()
         };
-        for (id, body) in latest {
-            let Ok(mut entry) = serde_json::from_str::<serde_json::Value>(&body) else { continue };
-            if cleared(&mut entry, value, with) {
-                database.execute(
-                    "UPDATE messages SET body = ?1 WHERE id = ?2",
-                    (entry.to_string(), id),
-                )?;
+        for (id, body) in all {
+            // Looked into only where it could be: most entries are not.
+            if !body.contains(&as_kept) {
+                continue;
+            }
+            let Ok(mut message) = read(&body) else { continue };
+            let changed = match &mut message {
+                Message::Owner(text) | Message::Notice(text) => said(text),
+                Message::Outcome { text, .. } => said(text),
+                Message::Agent { text, actions, kept } => {
+                    let mut any = said(text);
+                    for action in actions.iter_mut() {
+                        any |= given(&mut action.input, value, with);
+                    }
+                    if let Some(kept) = kept {
+                        any |= kept_back(kept, value, with);
+                    }
+                    any
+                }
+            };
+            if changed {
+                let body = serde_json::to_string(&message)
+                    .map_err(|error| StoreError(error.to_string()))?;
+                self.database
+                    .lock()
+                    .expect("the Store is not poisoned")
+                    .execute("UPDATE messages SET body = ?1 WHERE id = ?2", (body, id))?;
             }
         }
         // The summary of what came before is shown to the model on every turn.
+        let database = self.database.lock().expect("the Store is not poisoned");
         let summary: Option<String> = database
             .query_row("SELECT value FROM settings WHERE key = 'summary'", (), |row| row.get(0))
             .ok();
-        if let Some(summary) = summary.filter(|summary| crate::secrets::holds_whole(summary, value))
-        {
+        if let Some(summary) = summary.filter(|summary| holds_whole(summary, value)) {
             database.execute(
                 "UPDATE settings SET value = ?1 WHERE key = 'summary'",
-                [crate::secrets::without_whole(&summary, value, with)],
+                [without_whole(&summary, value, with)],
             )?;
         }
         Ok(())

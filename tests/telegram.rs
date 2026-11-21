@@ -898,6 +898,24 @@ async fn what_the_owner_last_wrote_can_be_removed_from_the_chat() {
 }
 
 #[tokio::test]
+async fn what_arrived_before_a_question_is_handed_over_as_written_before_it() {
+    let server = telegram_delivering(vec![
+        text_from(100, OWNER, "first"),
+        text_from(101, OWNER, "second"),
+        text_from(102, OWNER, "third"),
+    ])
+    .await;
+    let mut channel = telegram(&server);
+    assert_eq!(received(&mut channel).await, "first");
+    // The two others have arrived by now, unread.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_eq!(channel.written_before().await, ["second", "third"]);
+    // Nothing is handed over twice.
+    assert!(channel.written_before().await.is_empty());
+}
+
+#[tokio::test]
 async fn a_bot_telegram_refuses_is_asked_about_less_and_less_often() {
     let server = MockServer::start().await;
     Mock::given(path("/botTOKEN/getUpdates"))

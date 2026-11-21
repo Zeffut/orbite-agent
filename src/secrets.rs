@@ -293,13 +293,23 @@ fn stands_whole(text: &str, value: &str) -> Vec<usize> {
     if value.is_empty() {
         return Vec::new();
     }
-    let apart = |near: Option<char>| near.is_none_or(|near| !near.is_alphanumeric());
-    text.match_indices(value)
-        .filter(|(at, _)| {
-            apart(text[..*at].chars().next_back()) && apart(text[at + value.len()..].chars().next())
-        })
-        .map(|(at, _)| at)
-        .collect()
+    // A letter, a digit or an underscore on either side makes it part of a
+    // longer word or name.
+    let apart = |near: Option<char>| near.is_none_or(|near| !near.is_alphanumeric() && near != '_');
+    // Every place is looked at, so that one standing whole is found even
+    // where it overlaps one that does not.
+    let mut found = Vec::new();
+    let mut after = 0;
+    for (at, _) in text.char_indices() {
+        if at < after || !text[at..].starts_with(value) {
+            continue;
+        }
+        if apart(text[..at].chars().next_back()) && apart(text[at + value.len()..].chars().next()) {
+            found.push(at);
+            after = at + value.len();
+        }
+    }
+    found
 }
 
 /// True when `text` holds `value` as a whole.

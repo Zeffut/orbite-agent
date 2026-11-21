@@ -332,4 +332,24 @@ async fn asked_in_plain_words_the_agent_adds_an_ai_and_its_key_is_given_in_the_c
     );
     let shown = format!("{:?}", provider.every_call());
     assert!(!shown.contains("mk-a-key"), "the key was shown to a model: {shown}");
+
+    // Back after the restart, nothing is awaited any more: what the Owner
+    // says next is an ordinary message, and the key stays the one they gave.
+    let after = ScriptedProvider::answering(["Hello."]);
+    let (mut channel, mut owner) = memory_channel();
+    let store = Store::open(home.path().join("orbite.db")).unwrap();
+    let (folder, model) = (home.path().to_owned(), after.clone());
+    tokio::spawn(async move {
+        Agent::new(model, store)
+            .configured_in(&folder)
+            .keeping_secrets_in(&folder)
+            .converse(&mut channel)
+            .await
+    });
+    owner.says("Hi there");
+    assert_eq!(owner.hears().await, "Hello.");
+    assert_eq!(
+        orbite::Secrets::kept_in(home.path()).get(&key).unwrap().as_deref(),
+        Some("mk-a-key-made-up-for-this-test")
+    );
 }
