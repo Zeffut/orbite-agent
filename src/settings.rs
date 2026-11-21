@@ -65,6 +65,7 @@ impl<'a> Settings<'a> {
                     minutes => minutes.to_string(),
                 }
             }
+            "secrets" if self.kept("secrets_strict")?.is_some() => "strict".into(),
             "secrets" => on_or_off(self.kept("secrets_in_conversation")?.is_some()).into(),
             "updates" => on_or_off(self.config().automatic_updates != Some(false)).into(),
             "language" => self.config().language.unwrap_or_else(|| "en".into()),
@@ -90,7 +91,10 @@ impl<'a> Settings<'a> {
             "permission" => &["careful", "balanced", "free"],
             "quiet" => &["off", "22:00-07:00", "23:00-08:00", "00:00-09:00"],
             "wakeups" => &["off", "60", "240", "720"],
-            "secrets" | "updates" => &["off", "on"],
+            // strict: what speaks of a password is held back from the AI
+            // provider until the Owner says what it is.
+            "secrets" => &["off", "strict", "on"],
+            "updates" => &["off", "on"],
             "language" => &["en", "fr"],
             "light" => &["off"],
             "voice" => &["provider", "whisper.cpp", "server", "command", "off"],
@@ -142,6 +146,7 @@ impl<'a> Settings<'a> {
             }
             "secrets" => {
                 one_of(Self::choices(key))?;
+                keep("secrets_strict", (value == "strict").then_some("on"))?;
                 keep("secrets_in_conversation", (value == "on").then_some("on"))
             }
             "updates" | "language" => {

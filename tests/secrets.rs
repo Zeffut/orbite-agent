@@ -561,3 +561,69 @@ async fn several_secrets_written_in_one_message_are_each_kept_under_their_name()
     owner.says("Hello");
     assert_eq!(owner.hears().await, "Hello.");
 }
+
+#[tokio::test]
+async fn at_the_strict_setting_a_password_is_taken_out_before_any_model_sees_it() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("command", json!({ "command": "/secret DISCORD_PASSWORD" }))])
+        .then(Ok("[silent]".into()))
+        .then(Ok("[silent]".into()));
+    let mut owner = agent_in(home.path(), &provider);
+    owner.says("/secrets strict");
+    assert!(owner.hears().await.contains("Strict"));
+
+    owner.says("My Discord password is Soleil-2024! and my mail is ada@example.com");
+    // Held back: the Owner is asked, with choices, and no model is.
+    let asked = owner.hears().await;
+    assert!(asked.contains("not shown it to my AI provider"), "{asked}");
+    assert!(asked.contains("/withheld secret") && asked.contains("/withheld send"), "{asked}");
+    assert_eq!(provider.times_asked(), 0);
+
+    owner.says("/withheld secret");
+    assert!(owner.hears().await.contains("value alone"));
+    owner.says("Soleil-2024!");
+    // The Agent names it without having seen it, and Orbite keeps it.
+    let kept = owner.hears().await;
+    assert!(kept.contains("DISCORD_PASSWORD") && kept.contains("is kept"), "{kept}");
+    assert!(!kept.contains("saw it"), "no provider saw it: {kept}");
+
+    assert_eq!(
+        Secrets::kept_in(home.path()).get("DISCORD_PASSWORD").unwrap().as_deref(),
+        Some("Soleil-2024!")
+    );
+    let shown = shown_to_the_model(&provider);
+    assert!(!shown.contains("Soleil-2024!"), "{shown}");
+    assert!(shown.contains("My Discord password is [secret]"), "{shown}");
+    assert!(shown.contains("ada@example.com"), "{shown}");
+}
+
+#[tokio::test]
+async fn at_the_strict_setting_a_message_that_only_speaks_of_passwords_is_sent_on_when_said_so() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::answering(["Use a password manager.", "Hello."]);
+    let mut owner = agent_in(home.path(), &provider);
+    owner.says("/secrets strict");
+    owner.hears().await;
+
+    owner.says("How do I choose a good password?");
+    owner.hears().await;
+    owner.says("/withheld send");
+    assert_eq!(owner.hears().await, "Use a password manager.");
+    // What does not speak of one is not held back at all.
+    owner.says("Hello");
+    assert_eq!(owner.hears().await, "Hello.");
+
+    // And without the strict setting, nothing is held back.
+    owner.says("/secrets off");
+    owner.hears().await;
+    assert!(orbite_settings_say_off(&mut owner).await);
+}
+
+async fn orbite_settings_say_off(owner: &mut Owner) -> bool {
+    owner.says("/secrets strict");
+    let strict = owner.hears().await.contains("Strict");
+    owner.says("/secrets off");
+    strict && owner.hears().await.contains("turned away again")
+}

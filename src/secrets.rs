@@ -286,6 +286,31 @@ fn write_privately(path: &Path, content: &[u8]) -> Result<(), SecretsError> {
 
 /// True when `text` holds what looks like a secret: a key or token of a kind
 /// that is recognisable by its shape.
+/// True when `text` speaks of a password, a code or a key: it may hold one
+/// written in plain words, which nothing can tell from any other word.
+pub(crate) fn speaks_of_a_secret(text: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "mot de passe",
+        "mots de passe",
+        "mdp",
+        "password",
+        "passwd",
+        "passphrase",
+        "code pin",
+        "code d'accès",
+        "code d’accès",
+        "code secret",
+        "digicode",
+        "api key",
+        "clé api",
+        "clé d'api",
+        "token",
+        "jeton d'accès",
+    ];
+    let text = text.to_lowercase();
+    WORDS.iter().any(|word| text.contains(word))
+}
+
 pub(crate) fn holds_a_secret(text: &str) -> bool {
     const MARKED: &[&str] = &[
         "sk-ant-",

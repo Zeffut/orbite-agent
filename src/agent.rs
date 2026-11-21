@@ -194,6 +194,12 @@ pub struct Agent<P> {
     /// True when Orbite itself just answered the Owner and the Agent only
     /// goes on if it has something to do: its silence is then taken as such.
     may_stay_silent: bool,
+    /// At the strict setting, a message that speaks of a password, held
+    /// back from the model until the Owner says what it is; true once
+    /// they said it holds one and are to send its value alone.
+    withheld: Option<(String, bool)>,
+    /// A secret taken out of such a message, waiting for the Agent to name it.
+    unnamed_secret: Option<String>,
     /// How often the Agent wakes up when its Owner has set no pace, in
     /// minutes; zero for never.
     wake_up_pace: u32,
@@ -246,6 +252,8 @@ impl<P: Provider + 'static> Agent<P> {
             awaiting_secret: None,
             held_secrets: Vec::new(),
             may_stay_silent: false,
+            withheld: None,
+            unnamed_secret: None,
             wake_up_pace: 0,
             last_active: 0,
             sees_images: true,
@@ -436,7 +444,7 @@ impl<P: Provider + 'static> Agent<P> {
         let mut time_check = tokio::time::interval(self.time_check);
         time_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            let text = tokio::select! {
+            let mut text = tokio::select! {
                 biased;
                 Some(text) = std::future::ready(self.set_aside.pop_front()) => text,
                 written = channel.receive() => match written {
@@ -468,6 +476,74 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
             };
+            // A message held back at the strict setting: sent on as it is,
+            // or its secret taken out first, as the Owner says.
+            let mut looked_at = false;
+            if let Some((held, awaiting_value)) = self.withheld.take() {
+                let say = |english: &'static str, french: &'static str| {
+                    self.language.say(english, french)
+                };
+                let open = match text.trim() {
+                    "/withheld send" if !awaiting_value => {
+                        text = held;
+                        looked_at = true;
+                        true
+                    }
+                    "/withheld secret" if !awaiting_value => {
+                        channel.erase_received_holding(&held).await;
+                        self.withheld = Some((held, true));
+                        channel
+                            .send(say(
+                                "Send me the value alone: I seal it, and my AI provider never sees it. \
+                                 /cancel to give up.",
+                                "Envoie-moi la valeur seule : je la scelle, et mon fournisseur d'IA ne la \
+                                 voit jamais. /cancel pour renoncer.",
+                            ))
+                            .await
+                            .is_ok()
+                    }
+                    "/cancel" => {
+                        channel.send(say("Nothing was kept.", "Rien n'a été gardé.")).await.is_ok()
+                    }
+                    value if awaiting_value && !value.starts_with('/') => {
+                        channel.erase_last_received().await;
+                        // What the model reads has the value taken out.
+                        let said = held.replace(value, "[secret]");
+                        self.unnamed_secret = Some(value.to_owned());
+                        let kept = self.store.append(&Message::from_owner(said)).and_then(|()| {
+                            self.store.append(&Message::Notice(
+                                "The secret your Owner wrote there was taken out before you saw it, \
+                                 and is held. Name it now with the `command` action, /secret NAME: it \
+                                 is then kept under that name, and you never see its value."
+                                    .into(),
+                            ))
+                        });
+                        match kept {
+                            Ok(()) => self.respond_on(channel, false).await,
+                            Err(error) => channel.send(&explain_storage(&error)).await.is_ok(),
+                        }
+                    }
+                    // Something else: the question stands.
+                    _ => {
+                        self.withheld = Some((held, awaiting_value));
+                        channel
+                            .send(say(
+                                "First tell me about the message I am holding back: answer above, or \
+                                 /cancel.",
+                                "Dis-moi d'abord quoi faire du message que je retiens : réponds \
+                                 au-dessus, ou /cancel.",
+                            ))
+                            .await
+                            .is_ok()
+                    }
+                };
+                if !open {
+                    return;
+                }
+                if !looked_at {
+                    continue;
+                }
+            }
             // The value of the secret named just before: kept, and never
             // shown to a model. Another command instead means a change of mind.
             if let Some(name) = self.awaiting_secret.take() {
@@ -497,6 +573,11 @@ impl<P: Provider + 'static> Agent<P> {
                     [_, name] if held.is_some() => {
                         let value = held.map(|(_, value)| value).unwrap_or_default();
                         self.keep_secret(channel, name, &value, true).await
+                    }
+                    // The one taken out of a message before any model saw it.
+                    [_, name] if self.unnamed_secret.is_some() => {
+                        let value = self.unnamed_secret.take().unwrap_or_default();
+                        self.keep_secret(channel, name, &value, false).await
                     }
                     [_, name] => match self.secret_may_be_named(name) {
                         Ok(name) => {
@@ -538,7 +619,20 @@ impl<P: Provider + 'static> Agent<P> {
                 continue;
             }
             if let Some(choice) = text.trim().strip_prefix("/secrets") {
+                if ["on", "off", "strict"].contains(&choice.trim()) {
+                    let strict = (choice.trim() == "strict").then_some("on");
+                    let _ = self.store.set_setting("secrets_strict", strict);
+                }
                 let said = match choice.trim() {
+                    "strict" => self.store.set_setting("secrets_in_conversation", None).map(|()| {
+                        self.language.say(
+                            "Strict: a message that speaks of a password or a code is held back from my \
+                             AI provider until you tell me whether it holds one. /secrets off to go back.",
+                            "Strict : un message qui parle d'un mot de passe ou d'un code n'est pas montré \
+                             à mon fournisseur d'IA tant que tu ne m'as pas dit s'il en contient un. \
+                             /secrets off pour revenir en arrière.",
+                        )
+                    }),
                     "on" => self.store.set_setting("secrets_in_conversation", Some("on")).map(|()| {
                         self.language.say(
                             "Secrets in the conversation are on: what you paste here is shown to my \
@@ -556,7 +650,10 @@ impl<P: Provider + 'static> Agent<P> {
                              confier un en sécurité : /secret NOM.",
                         )
                     }),
-                    _ => Ok(self.language.say("Say /secrets on or /secrets off.", "Écris /secrets on ou /secrets off.")),
+                    _ => Ok(self.language.say(
+                        "Say /secrets off, /secrets strict or /secrets on.",
+                        "Écris /secrets off, /secrets strict ou /secrets on.",
+                    )),
                 };
                 let said = said.map(str::to_owned).unwrap_or_else(|error| explain_storage(&error));
                 if channel.send(&said).await.is_err() {
@@ -790,6 +887,34 @@ impl<P: Provider + 'static> Agent<P> {
                     Err(error) => explain_storage(&error),
                 };
                 if channel.send(&said).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            // At the strict setting, what speaks of a password is not shown to
+            // a model before the Owner has said whether it holds one.
+            if !looked_at
+                && !text.trim_start().starts_with('/')
+                && matches!(self.store.setting("secrets_strict"), Ok(Some(_)))
+                && crate::secrets::speaks_of_a_secret(&text)
+            {
+                let say =
+                    |english: &str, french: &str| self.language.say(english, french).to_owned();
+                self.withheld = Some((text, false));
+                let asked = say(
+                    "This message speaks of a password or a code: I have not shown it to my AI provider. \
+                     Does it hold the value itself?",
+                    "Ce message parle d'un mot de passe ou d'un code : je ne l'ai pas montré à mon \
+                     fournisseur d'IA. Contient-il la valeur elle-même ?",
+                );
+                let choices = [
+                    (
+                        say("Yes, keep it as a secret", "Oui, garde-le comme secret"),
+                        "/withheld secret".to_owned(),
+                    ),
+                    (say("No, send it on", "Non, envoie-le tel quel"), "/withheld send".to_owned()),
+                ];
+                if channel.offer(&asked, &choices).await.is_err() {
                     return;
                 }
                 continue;

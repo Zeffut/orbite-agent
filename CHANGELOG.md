@@ -6,6 +6,7 @@ What changed in each version of Orbite, for the people who run it.
 
 Released on 2026-11-21.
 
+- **A strict setting for secrets, for when nothing of them may reach the AI provider.** `/settings secrets strict` (or "be strict with my secrets"): a message that speaks of a password or a code is held back, and Orbite asks whether it holds one. If it does, you send the value alone, Orbite takes it out of the message, and the model reads "my password is [secret]", names it, and never sees it. If it does not, the message goes on as it was. Left off by default: with a local AI there is no provider to keep it from.
 - In French, Orbite's own messages now say "tu", as your agent does, in the conversation and in setup.
 
 ## 0.5.2
