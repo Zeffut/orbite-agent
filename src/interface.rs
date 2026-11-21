@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -28,6 +28,10 @@ const CODE_LASTS: i64 = 600;
 /// How many wrong codes are taken before every code is void: nobody finds
 /// one by trying them all.
 const WRONG_CODES: i64 = 8;
+/// The largest file a device may send, in bytes.
+const UPLOAD_LIMIT: usize = 50_000_000;
+/// How many files may wait to be sent with a message.
+const WAITING_FILES: usize = 20;
 /// How much of the Conversation a device is shown when it opens the page.
 const SHOWN_AT_FIRST: i64 = 200;
 
@@ -39,9 +43,9 @@ const ICON: &str = include_str!("interface/icon.svg");
 
 /// What a device sent.
 enum Incoming {
-    /// What was written, or the command a choice stands for when one was
-    /// tapped: that one is not shown as something the Owner said.
-    Said(String, bool),
+    /// What was written, and how it is shown as something the Owner said;
+    /// the command a choice stands for when one was tapped is not shown.
+    Said(String, Option<Value>),
     Answered(String, Answer),
 }
 
@@ -54,7 +58,45 @@ struct Shared {
     to_agent: mpsc::UnboundedSender<Incoming>,
     live: broadcast::Sender<Told>,
     files: PathBuf,
+    /// Where what the Owner sends is saved for the Agent.
+    inbox: PathBuf,
+    /// Files received and not yet sent with a message, oldest first.
+    waiting: Mutex<Vec<Waiting>>,
     language: String,
+}
+
+/// A file a device sent, waiting for the message it goes with.
+struct Waiting {
+    /// What the device names it by.
+    token: String,
+    /// Where it is saved for the Agent.
+    saved: PathBuf,
+    /// The name it is shown and fetched under.
+    kept: String,
+    name: String,
+}
+
+impl Waiting {
+    /// Removes the file, which no message took.
+    fn dropped(&self, files: &Path) {
+        let _ = std::fs::remove_file(&self.saved);
+        let _ = std::fs::remove_file(files.join(&self.kept));
+    }
+}
+
+/// True for what a page may show as a picture.
+fn is_a_picture(ending: &str) -> bool {
+    matches!(ending, "png" | "jpg" | "jpeg" | "gif" | "webp")
+}
+
+/// The ending of `file`'s name, in small letters: "bin" when it has none
+/// that can be trusted in a name.
+fn ending_of(file: &Path) -> String {
+    file.extension()
+        .and_then(|ending| ending.to_str())
+        .filter(|ending| !ending.is_empty() && ending.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or("bin")
+        .to_lowercase()
 }
 
 /// The Channel of the web interface.
@@ -208,6 +250,8 @@ impl Interface {
             to_agent,
             live,
             files,
+            inbox: home.join("workspace/inbox"),
+            waiting: Mutex::new(Vec::new()),
             language: language.to_owned(),
         });
         let listening = tokio::net::TcpListener::bind(address).await?;
@@ -227,6 +271,10 @@ impl Interface {
             .route("/api/say", post(say))
             .route("/api/answer", post(answer))
             .route("/api/file", get(file))
+            .route(
+                "/api/upload",
+                post(upload).delete(give_up).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
+            )
             .with_state(shared.clone());
         let serving = tokio::spawn(async move {
             let _ = axum::serve(listening, pages).await;
@@ -250,6 +298,13 @@ impl Interface {
     /// Keeps `body` as something shown and tells every connected device.
     fn show(&self, body: Value) -> i64 {
         self.shared.show(body)
+    }
+
+    /// Shows what the Owner just said, as the device that sent it had it.
+    fn received(&mut self, shown: Option<Value>) {
+        if let Some(shown) = shown {
+            self.last_received = Some(self.show(shown));
+        }
     }
 
     /// Tells every connected device of something that is not kept.
@@ -478,12 +533,46 @@ async fn say(
     if !from_the_page(&headers) || shared.device(&headers).is_none() {
         return refused(StatusCode::UNAUTHORIZED, "not paired");
     }
-    let text = sent["text"].as_str().unwrap_or_default().trim().to_owned();
-    if text.is_empty() || text.len() > 100_000 {
+    let mut text = sent["text"].as_str().unwrap_or_default().trim().to_owned();
+    // The files sent ahead to go with these words.
+    let named: Vec<&str> =
+        sent["files"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let with: Vec<Waiting> = {
+        let mut waiting = shared.waiting.lock().expect("not poisoned");
+        if named.iter().any(|token| !waiting.iter().any(|one| one.token == *token)) {
+            return refused(StatusCode::GONE, "a file is no longer there: send it again");
+        }
+        let (with, left) =
+            waiting.drain(..).partition(|one: &Waiting| named.contains(&one.token.as_str()));
+        *waiting = left;
+        with
+    };
+    if (text.is_empty() && with.is_empty()) || text.len() > 100_000 {
         return refused(StatusCode::BAD_REQUEST, "nothing to say");
     }
-    let tapped = sent["tapped"].as_bool().unwrap_or(false);
-    match shared.to_agent.send(Incoming::Said(text, tapped)) {
+    let tapped = sent["tapped"].as_bool().unwrap_or(false) && with.is_empty();
+    let shown = (!tapped).then(|| {
+        let files: Vec<Value> = with
+            .iter()
+            .map(|one| {
+                json!({
+                    "file": one.kept, "name": one.name,
+                    "image": is_a_picture(&ending_of(Path::new(&one.kept))),
+                })
+            })
+            .collect();
+        match files.is_empty() {
+            true => json!({ "kind": "owner", "text": text }),
+            false => json!({ "kind": "owner", "text": text, "files": files }),
+        }
+    });
+    for one in &with {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(&crate::attached(&one.saved));
+    }
+    match shared.to_agent.send(Incoming::Said(text, shown)) {
         Ok(()) => Json(json!({ "sent": true })).into_response(),
         Err(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "the agent is not listening"),
     }
@@ -508,6 +597,76 @@ async fn answer(
         Ok(()) => Json(json!({ "sent": true })).into_response(),
         Err(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "the agent is not listening"),
     }
+}
+
+/// Takes in a file to go with the next message: saved where the Agent
+/// reads what its Owner sends, and named by something only this device is
+/// told.
+async fn upload(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(asked): Query<std::collections::HashMap<String, String>>,
+    content: axum::body::Bytes,
+) -> Response {
+    if !from_the_page(&headers) || shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    if content.is_empty() {
+        return refused(StatusCode::BAD_REQUEST, "an empty file");
+    }
+    // A name as people write them: no way out of the inbox, nothing unseen.
+    let name: String = asked
+        .get("name")
+        .map(String::as_str)
+        .unwrap_or("file")
+        .chars()
+        .filter(|c| !c.is_control() && !matches!(c, '/' | '\\' | '[' | ']'))
+        .take(120)
+        .collect();
+    let name = match name.trim().trim_start_matches('.') {
+        "" => "file".to_owned(),
+        name => name.to_owned(),
+    };
+    let taken = || -> io::Result<Waiting> {
+        let saved = crate::attachments::save_in(&shared.inbox, &name, &content)?;
+        let kept = format!("{}.{}", unguessable()?.replace(['-', '_'], "x"), ending_of(&saved));
+        // The same file under both names where that can be, a copy otherwise.
+        let shown = shared.files.join(&kept);
+        if std::fs::hard_link(&saved, &shown).is_err() {
+            std::fs::copy(&saved, &shown)?;
+        }
+        Ok(Waiting { token: unguessable()?, saved, kept, name: name.clone() })
+    };
+    match taken() {
+        Ok(one) => {
+            let token = one.token.clone();
+            let mut waiting = shared.waiting.lock().expect("not poisoned");
+            waiting.push(one);
+            // Never more than a few: the oldest that no message took goes.
+            while waiting.len() > WAITING_FILES {
+                waiting.remove(0).dropped(&shared.files);
+            }
+            Json(json!({ "file": token })).into_response()
+        }
+        Err(error) => refused(StatusCode::INSUFFICIENT_STORAGE, &error.to_string()),
+    }
+}
+
+/// Forgets a file sent ahead that its Owner took back before sending.
+async fn give_up(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(asked): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !from_the_page(&headers) || shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let token = asked.get("file").map(String::as_str).unwrap_or_default();
+    let mut waiting = shared.waiting.lock().expect("not poisoned");
+    if let Some(at) = waiting.iter().position(|one| one.token == token) {
+        waiting.remove(at).dropped(&shared.files);
+    }
+    Json(json!({ "gone": true })).into_response()
 }
 
 async fn file(
@@ -554,11 +713,8 @@ impl Channel for Interface {
     async fn receive(&mut self) -> Option<String> {
         loop {
             match self.from_devices.recv().await? {
-                Incoming::Said(text, tapped) => {
-                    if !tapped {
-                        self.last_received =
-                            Some(self.show(json!({ "kind": "owner", "text": text })));
-                    }
+                Incoming::Said(text, shown) => {
+                    self.received(shown);
                     return Some(text);
                 }
                 // An answer to an Approval that is no longer asked.
@@ -606,17 +762,27 @@ impl Channel for Interface {
                     return Ok(answer);
                 }
                 Some(Incoming::Answered(..)) => {}
-                Some(Incoming::Said(text, tapped)) => {
-                    if !tapped {
-                        self.last_received =
-                            Some(self.show(json!({ "kind": "owner", "text": text })));
-                    }
+                Some(Incoming::Said(text, shown)) => {
+                    self.received(shown);
                     let answer = Answer::Wrote(text);
                     self.settle(approval, &answer).await;
                     return Ok(answer);
                 }
             }
         }
+    }
+
+    async fn written_before(&mut self) -> Vec<String> {
+        // What devices sent that was not read yet: written before whatever
+        // Orbite is about to ask.
+        let mut written = Vec::new();
+        while let Ok(sent) = self.from_devices.try_recv() {
+            if let Incoming::Said(text, shown) = sent {
+                self.received(shown);
+                written.push(text);
+            }
+        }
+        written
     }
 
     async fn settle(&mut self, _approval: &Approval, answer: &Answer) {
@@ -632,16 +798,11 @@ impl Channel for Interface {
     }
 
     async fn send_file(&mut self, file: &Path, caption: &str) -> io::Result<()> {
-        let ending = file
-            .extension()
-            .and_then(|ending| ending.to_str())
-            .filter(|ending| ending.chars().all(|c| c.is_ascii_alphanumeric()))
-            .unwrap_or("bin")
-            .to_lowercase();
+        let ending = ending_of(file);
         let kept = format!("{}.{ending}", unguessable()?.replace(['-', '_'], "x"));
         std::fs::copy(file, self.shared.files.join(&kept))?;
         let name = file.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let image = matches!(ending.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp");
+        let image = is_a_picture(&ending);
         self.show(json!({
             "kind": "file", "file": kept, "name": name, "caption": caption, "image": image,
         }));

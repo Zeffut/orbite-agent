@@ -240,21 +240,7 @@ impl Bot {
             .map_err(|error| failed(&error))?;
         let content = response.bytes().await.map_err(|error| failed(&error))?;
 
-        // Only the last part of the name is kept, so it cannot lead elsewhere.
-        let name = Path::new(name).file_name().and_then(|name| name.to_str()).unwrap_or("file");
-        let (stem, extension) = match name.rsplit_once('.') {
-            Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
-            _ => (name, String::new()),
-        };
-        std::fs::create_dir_all(inbox).map_err(|error| failed(&error))?;
-        let mut place = inbox.join(name);
-        let mut copy = 2;
-        while place.exists() {
-            place = inbox.join(format!("{stem}-{copy}{extension}"));
-            copy += 1;
-        }
-        std::fs::write(&place, &content).map_err(|error| failed(&error))?;
-        Ok(place)
+        crate::attachments::save_in(inbox, name, &content).map_err(|error| failed(&error))
     }
 
     /// Sends the Owner `file` as a document, with `caption`.

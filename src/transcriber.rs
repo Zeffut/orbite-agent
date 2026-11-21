@@ -53,7 +53,10 @@ pub(crate) fn sound_type(file: &Path) -> Option<&'static str> {
 
 /// True when `file` is a video rather than a recording of sound alone.
 pub(crate) fn is_video(file: &Path) -> bool {
-    sound_type(file).is_some_and(|kind| kind.starts_with("video/"))
+    // What a Channel names a voice message is sound alone, even in the
+    // wrapping a browser records in, which is a video's.
+    let voice = file.file_name().is_some_and(|name| name.to_string_lossy().starts_with("voice-"));
+    !voice && sound_type(file).is_some_and(|kind| kind.starts_with("video/"))
 }
 
 /// `text` as one word of a shell command, whatever it holds.
