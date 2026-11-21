@@ -64,6 +64,16 @@ impl<A: Channel, B: Channel> Channel for Both<A, B> {
         }
     }
 
+    async fn erase_last_received(&mut self) {
+        self.first.erase_last_received().await;
+        self.second.erase_last_received().await;
+    }
+
+    async fn erase_received_holding(&mut self, text: &str) {
+        self.first.erase_received_holding(text).await;
+        self.second.erase_received_holding(text).await;
+    }
+
     async fn interruption(&mut self) -> Option<String> {
         loop {
             let (place, written) = tokio::select! {

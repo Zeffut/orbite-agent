@@ -85,6 +85,14 @@ pub trait Channel: Send {
         async {}
     }
 
+    /// Removes from where the Conversation is shown what the Owner wrote
+    /// lately that holds `text`: a secret they wrote in passing. Does
+    /// nothing where that is not possible.
+    fn erase_received_holding(&mut self, text: &str) -> impl Future<Output = ()> + Send {
+        let _ = text;
+        async {}
+    }
+
     /// Sends the Owner a text with choices under it, each a few words and
     /// the command that choosing it stands for: choosing one is received as
     /// if the Owner had written that command. A Channel with no buttons

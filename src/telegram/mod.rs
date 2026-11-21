@@ -46,6 +46,9 @@ pub struct Telegram {
     open_approval: Option<(i64, String)>,
     /// The message the Owner's latest words came in.
     last_received: Option<i64>,
+    /// The Owner's latest messages and what each said, for one that turns
+    /// out to hold a secret to be removed.
+    lately: VecDeque<(i64, String)>,
 }
 
 /// How to reach Telegram as the bot.
@@ -95,6 +98,7 @@ impl Telegram {
             progress: None,
             open_approval: None,
             last_received: None,
+            lately: VecDeque::new(),
         }
     }
 
@@ -134,8 +138,12 @@ impl Telegram {
             (sent, tokio::spawn(listen(bot.clone(), sending)))
         });
         let received = sent.recv().await;
-        if let Some(Sent::Text(_, message)) = &received {
+        if let Some(Sent::Text(text, message)) = &received {
             self.last_received = Some(*message);
+            self.lately.push_back((*message, text.clone()));
+            if self.lately.len() > 40 {
+                self.lately.pop_front();
+            }
         }
         received
     }
@@ -586,6 +594,24 @@ impl Channel for Telegram {
         if let Some(message) = self.last_received.take() {
             let body = json!({ "chat_id": self.bot.owner, "message_id": message });
             let _ = self.bot.call::<Value>("deleteMessage", body).await;
+            self.lately.retain(|(known, _)| *known != message);
+        }
+    }
+
+    async fn erase_received_holding(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let holding: Vec<i64> = self
+            .lately
+            .iter()
+            .filter(|(_, said)| said.contains(text))
+            .map(|(message, _)| *message)
+            .collect();
+        for message in holding {
+            let body = json!({ "chat_id": self.bot.owner, "message_id": message });
+            let _ = self.bot.call::<Value>("deleteMessage", body).await;
+            self.lately.retain(|(known, _)| *known != message);
         }
     }
 

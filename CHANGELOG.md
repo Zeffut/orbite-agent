@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.1
+
+Released on 2026-11-21.
+
+- **A password you write in passing is put away by your agent itself.** "My password is …" in an ordinary message: your agent names it, Orbite seals it on the machine, removes the message it was written in from the conversation, and no longer shows it to the model from then on. Written in plain words, it was seen by the AI provider that once, which Orbite says; telling your agent first that you have a secret to give avoids even that. Only messages received since Orbite last started can be removed from Telegram.
+- The approval asked when your agent carries out a command for you says in plain words what it does ("Add the connector notion"), and when several are asked at once all are done, the one that restarts Orbite last.
+
 ## 0.5.0
 
 Released on 2026-11-21.

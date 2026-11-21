@@ -120,6 +120,8 @@ What you send does travel through Telegram on its way, as every message to a bot
 sudo orbite secret set SHOP_PASSWORD
 ```
 
+If you simply write a password in a message ("my password is …"), your agent puts it away itself: it is sealed under a name, the message is removed, and it is not shown to the model again. It was seen by the AI provider that once, so prefer saying first that you have a secret to give.
+
 If you paste something that looks like a secret in an ordinary message, the agent refuses it, removes your message and points you to `/secret`. `/secrets on` lifts that refusal, and what you paste is then shown to the AI provider: it is there for those who accept that, and `/secret` is the better way.
 
 ## MCP servers

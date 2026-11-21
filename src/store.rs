@@ -397,6 +397,32 @@ impl Store {
         Ok(())
     }
 
+    /// Replaces `value` by `with` wherever the Conversation kept it: a
+    /// secret that was written in it, which must not be shown again.
+    pub(crate) fn redact(&self, value: &str, with: &str) -> Result<(), StoreError> {
+        if value.is_empty() {
+            return Ok(());
+        }
+        // As it is written inside the JSON each entry is kept as.
+        let inside = |text: &str| {
+            let quoted = serde_json::to_string(text).unwrap_or_default();
+            quoted[1..quoted.len().saturating_sub(1)].to_owned()
+        };
+        let database = self.database.lock().expect("the Store is not poisoned");
+        let holding: Vec<(i64, String)> = {
+            let mut reading = database.prepare("SELECT id, body FROM messages")?;
+            let read = reading.query_map((), |row| Ok((row.get(0)?, row.get(1)?)))?;
+            read.filter_map(Result::ok)
+                .filter(|(_, body): &(i64, String)| body.contains(&inside(value)))
+                .collect()
+        };
+        for (id, body) in holding {
+            let cleared = body.replace(&inside(value), &inside(with));
+            database.execute("UPDATE messages SET body = ?1 WHERE id = ?2", (cleared, id))?;
+        }
+        Ok(())
+    }
+
     /// Takes back the latest message of the Conversation.
     pub(crate) fn forget_latest(&self) -> Result<(), StoreError> {
         self.database

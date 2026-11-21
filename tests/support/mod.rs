@@ -272,6 +272,10 @@ impl Channel for MemoryChannel {
         self.shown.lock().unwrap().push("(erased what the Owner wrote)".to_string());
     }
 
+    async fn erase_received_holding(&mut self, _text: &str) {
+        self.shown.lock().unwrap().push("(erased what held the secret)".to_string());
+    }
+
     async fn doing(&mut self, step: &Step) {
         self.shown.lock().unwrap().push(format!("{} {}", step.icon, step.text));
     }

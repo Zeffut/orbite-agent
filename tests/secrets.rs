@@ -451,7 +451,7 @@ async fn asked_in_plain_words_the_agent_has_its_owner_send_a_secret_it_never_see
 #[tokio::test]
 async fn the_agent_cannot_loosen_itself_nor_carry_a_secrets_value_by_giving_a_command() {
     let home = tempfile::tempdir().unwrap();
-    for refused in ["/settings permission free", "/secrets on", "/secret DOOR 4921", "/reset"] {
+    for refused in ["/settings permission free", "/secrets on", "/reset"] {
         let provider = ScriptedProvider::default();
         provider
             .then_acts([("command", json!({ "command": refused }))])
@@ -485,4 +485,51 @@ fn outcome_of_last_action(provider: &ScriptedProvider) -> String {
         })
         .next_back()
         .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_password_written_in_passing_is_kept_by_the_agent_and_removed_from_the_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("command", json!({ "command": "/secret DISCORD_PASSWORD Soleil-2024!" }))])
+        .then(Ok("I put it away.".into()))
+        .then(Ok("Ready to sign in.".into()))
+        .then(Ok("Yes.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("My Discord password is Soleil-2024! and my mail is ada@example.com");
+    assert_eq!(owner.hears().await, "I put it away.");
+    // Orbite keeps it under the name the Agent chose, and says what it did.
+    let kept = owner.hears().await;
+    assert!(kept.contains("DISCORD_PASSWORD") && kept.contains("removed"), "{kept}");
+    assert!(!kept.contains("Soleil"), "{kept}");
+    assert_eq!(owner.hears().await, "Ready to sign in.");
+    assert_eq!(
+        Secrets::kept_in(home.path()).get("DISCORD_PASSWORD").unwrap().as_deref(),
+        Some("Soleil-2024!")
+    );
+    assert!(owner.saw().iter().any(|shown| shown.contains("erased what held the secret")));
+
+    // From then on the Conversation no longer shows it to a model.
+    owner.says("Are you ready?");
+    assert_eq!(owner.hears().await, "Yes.");
+    let again = format!("{:?}", provider.last_asked());
+    assert!(!again.contains("Soleil-2024!"), "{again}");
+    assert!(again.contains("ada@example.com"), "the rest of what was said is kept: {again}");
+}
+
+#[tokio::test]
+async fn the_agent_cannot_keep_as_a_secret_what_its_owner_never_wrote() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("command", json!({ "command": "/secret DOOR 4921" }))])
+        .then(Ok("I could not.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Keep my door code.");
+    assert_eq!(owner.hears().await, "I could not.");
+    assert!(outcome_of_last_action(&provider).contains("not something your Owner wrote"));
+    assert_eq!(Secrets::kept_in(home.path()).get("DOOR").unwrap(), None);
 }
