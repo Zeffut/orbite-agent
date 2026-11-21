@@ -120,7 +120,7 @@ What you send does travel through Telegram on its way, as every message to a bot
 sudo orbite secret set SHOP_PASSWORD
 ```
 
-If you simply write a password in a message ("my password is …"), your agent puts it away itself: it is sealed under a name, the message is removed, and it is not shown to the model again. It was seen by the AI provider that once, so prefer saying first that you have a secret to give.
+If you simply write a password in a message ("my password is …"), your agent offers to put it away: you agree with a button, and it is sealed under a name, the message is removed, and it is not shown to the model again. It was seen by the AI provider that once, so prefer saying first that you have a secret to give.
 
 For nothing of a password ever to reach the AI provider, set `/settings secrets strict`: a message that speaks of a password or a code is then held back, Orbite asks whether it holds one, and takes its value out before the model reads the rest. It costs a tap on messages that merely mention passwords, which is why it is off unless you choose it.
 

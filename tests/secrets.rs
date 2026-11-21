@@ -506,6 +506,12 @@ async fn a_password_written_in_passing_is_kept_by_the_agent_and_removed_from_the
     let mut owner = agent_in(home.path(), &provider);
 
     owner.says("My Discord password is Soleil-2024! and my mail is ada@example.com");
+    // What the Agent picks out to keep is the Owner's to agree to: they are
+    // shown the name it chose, never the value again.
+    let asked = owner.is_asked().await;
+    assert!(asked.summary.contains("Keep as the secret DISCORD_PASSWORD"), "{}", asked.summary);
+    assert!(!format!("{asked:?}").contains("Soleil"), "{asked:?}");
+    owner.allows();
     assert_eq!(owner.hears().await, "I put it away.");
     // Orbite keeps it under the name the Agent chose, and says what it did.
     let kept = owner.hears().await;
@@ -557,6 +563,10 @@ async fn several_secrets_written_in_one_message_are_each_kept_under_their_name()
     let mut owner = agent_in(home.path(), &provider);
 
     owner.says("My shop password is Tournesol-88! and the PIN is 4921.");
+    for _ in 0..2 {
+        owner.is_asked().await;
+        owner.allows();
+    }
     assert_eq!(owner.hears().await, "Both are put away.");
     assert!(owner.hears().await.contains("is kept"));
     assert!(owner.hears().await.contains("is kept"));
@@ -707,21 +717,67 @@ async fn a_model_cannot_file_a_word_or_a_piece_of_one_as_a_secret() {
 }
 
 #[tokio::test]
-async fn a_model_cannot_file_what_was_said_before_this_exchange() {
+async fn a_word_the_agent_would_file_as_a_secret_is_the_owners_to_refuse() {
+    // What a page read by the Agent could talk it into: filing an ordinary
+    // word the Owner wrote, to have it wiped from the Conversation.
     let home = tempfile::tempdir().unwrap();
     let provider = ScriptedProvider::default();
     provider
-        .then(Ok("Noted.".into()))
-        .then_acts([("command", json!({ "command": "/secret X Marseille" }))])
-        .then(Ok("Done.".into()));
+        .then_acts([("read_file", json!({ "path": "notes.txt" }))])
+        .then_acts([("command", json!({ "command": "/secret NOTE file" }))])
+        .then(Ok("As you wish.".into()))
+        .then(Ok("Still here.".into()));
+    std::fs::create_dir_all(home.path().join("workspace")).unwrap();
+    std::fs::write(home.path().join("workspace/notes.txt"), "a note").unwrap();
     let mut owner = agent_in(home.path(), &provider);
 
-    owner.says("I was born in Marseille");
-    assert_eq!(owner.hears().await, "Noted.");
-    owner.says("What is the weather today?");
-    assert_eq!(owner.hears().await, "Done.");
+    owner.says("Please read the file notes.txt");
+    let asked = owner.is_asked().await;
+    assert!(asked.summary.contains("Keep as the secret NOTE"), "{}", asked.summary);
+    owner.denies();
+    assert_eq!(owner.hears().await, "As you wish.");
 
-    assert_eq!(Secrets::kept_in(home.path()).get("X").unwrap(), None);
+    assert_eq!(Secrets::kept_in(home.path()).get("NOTE").unwrap(), None);
+    assert!(!owner.saw().iter().any(|shown| shown.contains("erased")));
+    owner.says("Are you there?");
+    assert_eq!(owner.hears().await, "Still here.");
+    assert!(said_by_the_owner(&provider).contains(&"Please read the file notes.txt".to_owned()));
+}
+
+#[tokio::test]
+async fn keeping_a_secret_never_rewrites_what_an_action_is_called() {
+    // Agreed to, a word that is also part of an Action's name is cleared
+    // from what was said, and the Actions stay what they are.
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("read_file", json!({ "path": "notes.txt" }))])
+        .then_acts([("command", json!({ "command": "/secret NOTE file" }))])
+        .then(Ok("[silent]".into()))
+        .then(Ok("[silent]".into()))
+        .then(Ok("Still here.".into()));
+    std::fs::create_dir_all(home.path().join("workspace")).unwrap();
+    std::fs::write(home.path().join("workspace/notes.txt"), "a note").unwrap();
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Please read the file notes.txt");
+    owner.is_asked().await;
+    owner.allows();
+    assert!(owner.hears().await.contains("NOTE"));
+    owner.says("Are you there?");
+    assert_eq!(owner.hears().await, "Still here.");
+
+    let again = provider.last_asked();
+    assert!(
+        again.iter().any(|message| matches!(message, Message::Agent { actions, .. }
+            if actions.iter().any(|action| action.name == "read_file"))),
+        "the name of an Action was rewritten: {again:?}"
+    );
+    assert!(
+        again.iter().any(|message| matches!(message, Message::Owner(text)
+            if text.contains("[the secret NOTE]") && !text.contains("the file"))),
+        "{again:?}"
+    );
 }
 
 #[tokio::test]
@@ -736,6 +792,8 @@ async fn a_short_secret_is_cleared_where_it_stands_alone_and_nowhere_inside_othe
     let mut owner = agent_in(home.path(), &provider);
 
     owner.says("The door code is 4921, and my order number is 849213.");
+    owner.is_asked().await;
+    owner.allows();
     assert!(owner.hears().await.contains("DOOR"));
     owner.says("Still there?");
     assert_eq!(owner.hears().await, "Yes.");
@@ -860,6 +918,9 @@ async fn a_secret_asked_for_is_still_awaited_after_orbite_starts_again() {
 
     let provider = ScriptedProvider::answering(["[silent]"]);
     let (mut owner, _running) = converse(&provider);
+    // Back, Orbite says what it is still waiting for.
+    let still = owner.hears().await;
+    assert!(still.contains("still waiting") && still.contains("DOOR_CODE"), "{still}");
     owner.says("7731-and-more");
     assert!(owner.hears().await.contains("is kept"));
 
@@ -891,4 +952,46 @@ async fn at_the_strict_setting_a_password_written_while_the_agent_works_is_held_
     // ...and Orbite then asks what to do with the message it held back.
     assert!(owner.hears().await.contains("not shown it to my AI provider"));
     assert!(!shown_to_the_model(&provider).contains("hunter2"));
+}
+
+#[tokio::test]
+async fn at_the_strict_setting_the_value_of_a_held_back_message_is_still_awaited_after_a_restart() {
+    let home = tempfile::tempdir().unwrap();
+    let database = home.path().join("orbite.db");
+    let converse = |provider: &ScriptedProvider| {
+        let (mut channel, owner) = memory_channel();
+        let (provider, store, folder) =
+            (provider.clone(), Store::open(&database).unwrap(), home.path().to_owned());
+        let running = tokio::spawn(async move {
+            Agent::new(provider, store).keeping_secrets_in(&folder).converse(&mut channel).await
+        });
+        (owner, running)
+    };
+    let provider = ScriptedProvider::default();
+    let (mut owner, running) = converse(&provider);
+    owner.says("/secrets strict");
+    owner.hears().await;
+    owner.says("My bank password is Mimosa-2026-bank");
+    owner.hears().await;
+    owner.says("/withheld secret");
+    assert!(owner.hears().await.contains("value alone"));
+    // Orbite stops before the value comes.
+    running.abort();
+    let _ = running.await;
+
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("command", json!({ "command": "/secret BANK_PASSWORD" }))])
+        .then(Ok("[silent]".into()))
+        .then(Ok("[silent]".into()));
+    let (mut owner, _running) = converse(&provider);
+    assert!(owner.hears().await.contains("still waiting"));
+    owner.says("Mimosa-2026-bank");
+    assert!(owner.hears().await.contains("is kept"));
+
+    assert_eq!(
+        Secrets::kept_in(home.path()).get("BANK_PASSWORD").unwrap().as_deref(),
+        Some("Mimosa-2026-bank")
+    );
+    assert!(!shown_to_the_model(&provider).contains("Mimosa"));
 }

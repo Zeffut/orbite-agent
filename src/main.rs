@@ -815,27 +815,29 @@ impl Brought {
         match self.manager.as_str() {
             "apt-get" => {
                 // What apt would clear away by itself, before and after.
-                let unneeded = || -> Vec<String> {
-                    run("apt-get", &["-s", "autoremove"], &[])
-                        .map(|tried| {
-                            String::from_utf8_lossy(&tried.stdout)
-                                .lines()
-                                .filter_map(|line| line.strip_prefix("Remv "))
-                                .filter_map(|line| line.split_whitespace().next())
-                                .map(str::to_owned)
-                                .collect()
-                        })
-                        .unwrap_or_default()
+                // `None` when apt could not say: nothing more is then removed.
+                let unneeded = || -> Option<Vec<String>> {
+                    let tried = run("apt-get", &["-s", "autoremove"], &[]).ok()?;
+                    tried.status.success().then(|| {
+                        String::from_utf8_lossy(&tried.stdout)
+                            .lines()
+                            .filter_map(|line| line.strip_prefix("Remv "))
+                            .filter_map(|line| line.split_whitespace().next())
+                            .map(str::to_owned)
+                            .collect()
+                    })
                 };
                 let before = unneeded();
                 let waits = ["-o", "DPkg::Lock::Timeout=600", "purge", "-y", "-qq"];
                 if !done(run("apt-get", &waits, packages)) {
                     return false;
                 }
-                let left: Vec<String> =
-                    unneeded().into_iter().filter(|package| !before.contains(package)).collect();
-                if !left.is_empty() {
-                    let _ = run("apt-get", &waits, &left);
+                if let (Some(before), Some(after)) = (before, unneeded()) {
+                    let left: Vec<String> =
+                        after.into_iter().filter(|package| !before.contains(package)).collect();
+                    if !left.is_empty() {
+                        let _ = run("apt-get", &waits, &left);
+                    }
                 }
                 true
             }
