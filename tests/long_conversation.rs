@@ -165,7 +165,9 @@ async fn a_detail_from_long_ago_can_still_be_found() {
     let provider = talkative();
     let store_folder = tempfile::tempdir().unwrap();
     let mut owner =
-        agent_with(&provider, Store::open(store_folder.path().join("orbite.db")).unwrap(), 6_500);
+        // (Small, for the detail to leave what the model is shown quickly, and
+        // large enough for what is offered on every turn plus one exchange.)
+        agent_with(&provider, Store::open(store_folder.path().join("orbite.db")).unwrap(), 7_000);
     owner.says("The door code of the cellar is 4417.");
     owner.hears().await;
     chat(&mut owner, 60).await;

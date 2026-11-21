@@ -1515,6 +1515,8 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
         ["/secret", _, ..] => Changes::Nothing,
         ["/connections", "off" | "on" | "disconnect", _] => Changes::Something,
         ["/connections", "remove", _] => Changes::ForGood,
+        // Stricter with secrets it may make itself; looser is the Owner's.
+        ["/settings", "secrets", "strict"] => Changes::Something,
         ["/settings", name, ..] if !["permission", "secrets"].contains(&name) => Changes::Something,
         _ => {
             return Err("That is not a command you can give. You can give: /connect NAME \
@@ -1550,7 +1552,7 @@ fn permission_specs() -> Vec<ActionSpec> {
              list): add nothing. /connect NAME ADDRESS adds a connector (notion: \
              https://mcp.notion.com/mcp); /mcp connect NAME signs in to one; /connections [off|on|\
              disconnect|remove NAME]; /secret NAME [VALUE] for a password or key; \
-             /settings [NAME VALUE]; /usage.",
+             /settings [NAME VALUE] (secrets strict keeps passwords from the AI provider); /usage.",
             serde_json::json!({ "command": { "type": "string" } }),
         ),
         spec(

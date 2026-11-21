@@ -627,3 +627,30 @@ async fn orbite_settings_say_off(owner: &mut Owner) -> bool {
     owner.says("/secrets off");
     strict && owner.hears().await.contains("turned away again")
 }
+
+#[tokio::test]
+async fn asked_in_plain_words_the_agent_turns_the_strict_setting_on_but_never_lets_secrets_through()
+{
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("command", json!({ "command": "/settings secrets strict" }))])
+        .then(Ok("[silent]".into()))
+        .then_acts([("command", json!({ "command": "/settings secrets on" }))])
+        .then(Ok("That one is yours to write.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("Be strict with my secrets.");
+    owner.is_asked().await;
+    owner.allows();
+    assert!(owner.hears().await.contains("strict"), "Orbite says the setting changed");
+    // From then on, what speaks of a password is held back.
+    owner.says("My password is hunter2");
+    assert!(owner.hears().await.contains("not shown it to my AI provider"));
+    owner.says("/cancel");
+    owner.hears().await;
+
+    owner.says("Now let secrets through.");
+    assert_eq!(owner.hears().await, "That one is yours to write.");
+    assert!(outcome_of_last_action(&provider).contains("not a command you can give"));
+}

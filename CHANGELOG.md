@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.4
+
+Released on 2026-11-21.
+
+- "Be strict with my secrets", said to your agent, turns the strict setting on, once you agree. Making it less strict stays yours alone to write.
+
 ## 0.5.3
 
 Released on 2026-11-21.
