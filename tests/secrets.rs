@@ -533,3 +533,31 @@ async fn the_agent_cannot_keep_as_a_secret_what_its_owner_never_wrote() {
     assert!(outcome_of_last_action(&provider).contains("not something your Owner wrote"));
     assert_eq!(Secrets::kept_in(home.path()).get("DOOR").unwrap(), None);
 }
+
+#[tokio::test]
+async fn several_secrets_written_in_one_message_are_each_kept_under_their_name() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([
+            ("command", json!({ "command": "/secret SHOP_PASSWORD Tournesol-88!" })),
+            ("command", json!({ "command": "/secret SHOP_PIN 4921" })),
+        ])
+        .then(Ok("Both are put away.".into()))
+        // Told that both are kept, it has nothing to add, and says nothing.
+        .then(Ok("[silent]".into()))
+        .then(Ok("Hello.".into()));
+    let mut owner = agent_in(home.path(), &provider);
+
+    owner.says("My shop password is Tournesol-88! and the PIN is 4921.");
+    assert_eq!(owner.hears().await, "Both are put away.");
+    assert!(owner.hears().await.contains("sealed"));
+    assert!(owner.hears().await.contains("sealed"));
+
+    let secrets = Secrets::kept_in(home.path());
+    assert_eq!(secrets.get("SHOP_PASSWORD").unwrap().as_deref(), Some("Tournesol-88!"));
+    assert_eq!(secrets.get("SHOP_PIN").unwrap().as_deref(), Some("4921"));
+    // Nothing more was said: the next thing heard answers the next message.
+    owner.says("Hello");
+    assert_eq!(owner.hears().await, "Hello.");
+}

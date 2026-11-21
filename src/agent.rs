@@ -51,6 +51,10 @@ with exactly [silent]. What you write on your own initiative during your \
 Owner's quiet hours is kept until they end; start it with [urgent] only when \
 it truly cannot wait.
 
+A password or key your Owner writes in a message, you put away at once \
+yourself with `command`: /secret NAME VALUE. One you need and do not have: \
+/secret NAME. Never send them to the machine for it.
+
 Answer in the language your Owner writes in. Be direct and brief.";
 
 const MEMORY_INSTRUCTIONS: &str = "\
@@ -186,7 +190,10 @@ pub struct Agent<P> {
     awaiting_secret: Option<String>,
     /// A secret the Owner wrote in passing, which the Agent named: kept
     /// under that name, and removed from the Conversation, once it is done.
-    held_secret: Option<(String, String)>,
+    held_secrets: Vec<(String, String)>,
+    /// True when Orbite itself just answered the Owner and the Agent only
+    /// goes on if it has something to do: its silence is then taken as such.
+    may_stay_silent: bool,
     /// How often the Agent wakes up when its Owner has set no pace, in
     /// minutes; zero for never.
     wake_up_pace: u32,
@@ -237,7 +244,8 @@ impl<P: Provider + 'static> Agent<P> {
             owed: false,
             set_aside: std::collections::VecDeque::new(),
             awaiting_secret: None,
-            held_secret: None,
+            held_secrets: Vec::new(),
+            may_stay_silent: false,
             wake_up_pace: 0,
             last_active: 0,
             sees_images: true,
@@ -480,8 +488,10 @@ impl<P: Provider + 'static> Agent<P> {
             let words: Vec<&str> = text.split_whitespace().collect();
             if words.first() == Some(&"/secret") {
                 let held = self
-                    .held_secret
-                    .take_if(|(named, _)| words.len() == 2 && named.eq_ignore_ascii_case(words[1]));
+                    .held_secrets
+                    .iter()
+                    .position(|(named, _)| words.len() == 2 && named.eq_ignore_ascii_case(words[1]))
+                    .map(|at| self.held_secrets.remove(at));
                 let open = match words[..] {
                     // The one the Owner wrote in passing, named by the Agent.
                     [_, name] if held.is_some() => {
@@ -1416,8 +1426,7 @@ fn permission_specs() -> Vec<ActionSpec> {
              one of Orbite's commands. Orbite then answers them itself (a link, a question, a \
              list): add nothing. /connect NAME ADDRESS adds a connector (notion: \
              https://mcp.notion.com/mcp); /mcp connect NAME signs in to one; /connections [off|on|\
-             disconnect|remove NAME]; /secret NAME has them send a password or key you never see (one they already wrote: \
-             /secret NAME VALUE, at once); \
+             disconnect|remove NAME]; /secret NAME [VALUE] for a password or key; \
              /settings [NAME VALUE]; /usage.",
             serde_json::json!({ "command": { "type": "string" } }),
         ),
@@ -1569,6 +1578,9 @@ impl<P: Provider + 'static> Agent<P> {
         let said = text.replace(SILENT, "").replace(URGENT, "");
         let text = said.trim();
         if !initiated {
+            if std::mem::take(&mut self.may_stay_silent) && (text.is_empty() || silent) {
+                return Ok(true);
+            }
             // Asked directly, the Agent owes an answer.
             let text = if text.is_empty() { "(nothing to add)" } else { text };
             return Ok(channel.send(text).await.is_ok());
@@ -2471,12 +2483,17 @@ impl<P: Provider + 'static> Agent<P> {
         let told = self.store.append(&Message::Notice(format!(
             "Your Owner just gave you the secret named {name}. You do not see its value: use it by \
              its name, as {{{{{name}}}}}. If you were waiting for it to go on with something, go on now; \
-             otherwise tell them in one short sentence that you can now use it."
+             otherwise reply with exactly [silent]: Orbite has told them it is kept."
         )));
-        if told.is_err() {
+        // Others written in the same message are put away first: the
+        // Agent goes on once, with all of them.
+        if told.is_err() || !self.held_secrets.is_empty() {
             return true;
         }
-        self.respond_on(channel, false).await
+        self.may_stay_silent = true;
+        let open = self.respond_on(channel, false).await;
+        self.may_stay_silent = false;
+        open
     }
 
     async fn turn_away_a_secret(&mut self, channel: &mut impl Channel, text: &str) -> Option<bool> {
@@ -3060,7 +3077,8 @@ impl<P: Provider + 'static> Agent<P> {
                                 .into();
                         }
                     };
-                    self.held_secret = Some((name.clone(), value.to_owned()));
+                    self.held_secrets.retain(|(named, _)| named != &name);
+                    self.held_secrets.push((name.clone(), value.to_owned()));
                     self.set_aside.push_front(format!("/secret {name}"));
                     return format!(
                         "It is kept as {name} right after your reply, and the message it was written \
