@@ -32,10 +32,19 @@
   </header>
   <section id="said" aria-live="polite"></section>
   <p id="doing" hidden></p>
+  <p id="note" role="status" hidden></p>
+  <div id="attached" hidden></div>
   <form id="say">
+    <label id="attach" class="round quiet" data-label="attach" aria-label="Attach" tabindex="0"><input id="files" type="file" multiple hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M20 11.5l-8 8a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5L10 17.5a2 2 0 0 1-3-3L14.5 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></label>
     <textarea id="text" rows="1" data-placeholder="write" enterkeyhint="send"></textarea>
-    <button aria-label="Send" data-label="send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 20l18-8L3 4l3 8-3 8zm3-8h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+    <button id="mic" type="button" class="round" aria-label="Record" data-label="record" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <button id="send" class="round" aria-label="Send" data-label="send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 20l18-8L3 4l3 8-3 8zm3-8h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
   </form>
+  <div id="recording" hidden>
+    <button id="recordStop" type="button" class="round quiet" aria-label="Cancel" data-label="cancel"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+    <span id="recordTime" aria-live="off">0:00</span>
+    <button id="recordSend" type="button" class="round" aria-label="Send" data-label="send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 20l18-8L3 4l3 8-3 8zm3-8h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+  </div>
 </main>
 <script src="/app.js"></script>
 </body>

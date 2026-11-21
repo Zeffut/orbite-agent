@@ -275,3 +275,74 @@ fn only_the_host_itself_and_networks_of_the_owners_own_count_as_private() {
         assert_eq!(orbite::is_private(&address.parse().unwrap()), private, "{address}");
     }
 }
+
+impl Browser {
+    /// Sends a file ahead of the message it goes with, as the page does.
+    async fn uploads(&self, name: &str, content: &'static [u8]) -> reqwest::Response {
+        let mut sending = self
+            .http
+            .post(format!("{}/api/upload?name={}", self.at, name.replace('/', "%2F")))
+            .header("x-orbite", "1")
+            .body(content);
+        if let Some(kept) = &self.kept {
+            sending = sending.header("cookie", kept);
+        }
+        sending.send().await.unwrap()
+    }
+}
+
+#[tokio::test]
+async fn a_file_sent_from_the_page_reaches_the_agent_with_the_words_it_goes_with() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::answering(["Read."]);
+    let browser = agent_with_a_paired_browser(home.path(), &provider).await;
+    let mut shown = browser.watches(None).await.unwrap();
+
+    let taken = browser.uploads("../../notes.txt", b"buy milk").await;
+    assert_eq!(taken.status(), 200);
+    let file = taken.json::<Value>().await.unwrap()["file"].clone();
+    let sent = browser.posts("/api/say", json!({ "text": "Read this", "files": [file] })).await;
+    assert_eq!(sent.status(), 200);
+
+    // Shown with its name, and fetched by a name nobody can guess.
+    let said = next(&mut shown, "owner").await;
+    assert_eq!(said["text"], "Read this");
+    assert_eq!(said["files"][0]["name"], "notes.txt");
+    assert_eq!(next(&mut shown, "agent").await["text"], "Read.");
+    // Saved inside the inbox whatever its name tried, and named to the Agent.
+    let saved = home.path().join("workspace/inbox/notes.txt");
+    assert_eq!(std::fs::read(&saved).unwrap(), b"buy milk");
+    let asked = format!("{:?}", provider.last_asked());
+    assert!(asked.contains(&format!("Read this\\n[attached: {}]", saved.display())), "{asked}");
+
+    // A file is sent once: its name is no longer good for another message.
+    let again = browser.posts("/api/say", json!({ "text": "Again", "files": [file] })).await;
+    assert_eq!(again.status(), 410);
+}
+
+#[tokio::test]
+async fn a_file_taken_back_or_sent_by_a_stranger_is_not_kept() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    let browser = agent_with_a_paired_browser(home.path(), &provider).await;
+    let stranger = Browser::at(browser.at.trim_start_matches("http://").parse().unwrap());
+
+    assert_eq!(stranger.uploads("virus.sh", b"rm -rf").await.status(), 401);
+    assert_eq!(browser.uploads("empty.txt", b"").await.status(), 400);
+
+    let taken = browser.uploads("draft.txt", b"not this one").await;
+    let file = taken.json::<Value>().await.unwrap()["file"].as_str().unwrap().to_owned();
+    let mut giving_up = browser
+        .http
+        .delete(format!("{}/api/upload?file={file}", browser.at))
+        .header("x-orbite", "1");
+    giving_up = giving_up.header("cookie", browser.kept.as_ref().unwrap());
+    assert_eq!(giving_up.send().await.unwrap().status(), 200);
+
+    // Nothing of it is left, in the inbox or among what the page can fetch.
+    let left = |folder: &str| {
+        std::fs::read_dir(home.path().join(folder)).map(|all| all.count()).unwrap_or(0)
+    };
+    assert_eq!(left("workspace/inbox"), 0);
+    assert_eq!(left("interface-files"), 0);
+}

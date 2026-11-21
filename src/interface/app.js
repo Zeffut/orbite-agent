@@ -12,6 +12,10 @@
       allowed: "Allowed", alwaysAllowed: "Always allowed", denied: "Denied", wrote: "Left out: you wrote instead",
       undone: "This cannot be undone.", critical: "Asked every time, whatever your settings.",
       working: "Working…", elsewhere: "From another place", browser: "Browser",
+      attach: "Attach a file", record: "Record a voice message", cancel: "Cancel", remove: "Remove",
+      voice: "Voice message", tooBig: "That file is too big: 50 MB at most.",
+      notSent: "That was not sent. Try again.", fileGone: "A file did not go through: attach it again.",
+      noMic: "I cannot reach the microphone: allow it for this page in your browser.",
     },
     fr: {
       pairTitle: "Autoriser cet appareil",
@@ -23,6 +27,10 @@
       allowed: "Autorisé", alwaysAllowed: "Toujours autorisé", denied: "Refusé", wrote: "Laissé de côté : tu as écrit à la place",
       undone: "Cela ne peut pas être annulé.", critical: "Demandé à chaque fois, quels que soient tes réglages.",
       working: "Au travail…", elsewhere: "Depuis un autre endroit", browser: "Navigateur",
+      attach: "Joindre un fichier", record: "Enregistrer un message vocal", cancel: "Annuler", remove: "Retirer",
+      voice: "Message vocal", tooBig: "Ce fichier est trop gros : 50 Mo au plus.",
+      notSent: "Ce n'est pas parti. Réessaie.", fileGone: "Un fichier n'est pas passé : joins-le à nouveau.",
+      noMic: "Je n'ai pas accès au micro : autorise-le pour cette page dans ton navigateur.",
     },
   };
   let words = WORDS.en;
@@ -92,7 +100,28 @@
     switch (event.kind) {
       case "owner": {
         const bubble = make("div", "said owner" + (event.elsewhere ? " elsewhere" : ""));
-        bubble.append(written(event.text));
+        if (event.files && event.files.length) {
+          const files = make("div", "files");
+          for (const file of event.files) {
+            const where = "/api/file?id=" + encodeURIComponent(file.file);
+            if (file.image) {
+              const picture = make("img");
+              picture.src = where;
+              picture.alt = file.name;
+              const follow = atTheEnd();
+              picture.addEventListener("load", () => { if (follow) said.scrollTop = said.scrollHeight; });
+              files.append(picture);
+            } else {
+              const spoken = /^voice-/.test(file.name);
+              const link = make("a", spoken ? "doc voice" : "doc", spoken ? words.voice : file.name);
+              link.href = where;
+              link.download = file.name;
+              files.append(link);
+            }
+          }
+          bubble.append(files);
+        }
+        if (event.text) bubble.append(written(event.text));
         if (event.elsewhere) bubble.title = words.elsewhere;
         add(bubble, event);
         break;
@@ -219,8 +248,93 @@
     };
   }
 
+  let noting;
+  function note(told) {
+    $("note").textContent = told;
+    $("note").hidden = false;
+    clearTimeout(noting);
+    noting = setTimeout(() => { $("note").hidden = true; }, 6000);
+  }
+
+  // Files go ahead of the message they are sent with, and wait under what is
+  // being written until it is sent or they are taken back.
+  const attached = [];
+  const canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
   const text = $("text");
-  const fit = () => { text.style.height = "auto"; text.style.height = Math.min(text.scrollHeight, window.innerHeight * 0.4) + "px"; };
+  function arrange() {
+    $("attached").hidden = attached.length === 0;
+    const nothing = !text.value.trim() && attached.length === 0;
+    $("mic").hidden = !(canRecord && nothing);
+    $("send").hidden = canRecord && nothing;
+  }
+  function sendAhead(file, name) {
+    return fetch("/api/upload?name=" + encodeURIComponent(name), { method: "POST", headers: { "x-orbite": "1" }, body: file })
+      .then((answer) => (answer.ok ? answer.json() : Promise.reject(answer.status)))
+      .then((taken) => taken.file);
+  }
+  const takeBack = (token) => fetch("/api/upload?file=" + encodeURIComponent(token), { method: "DELETE", headers: { "x-orbite": "1" } }).catch(() => {});
+  function attach(file) {
+    if (file.size > 50000000) return note(words.tooBig);
+    const chip = make("div", "chip sending");
+    if (/^image\//.test(file.type)) {
+      const thumb = make("img");
+      thumb.src = URL.createObjectURL(file);
+      thumb.alt = "";
+      thumb.addEventListener("load", () => URL.revokeObjectURL(thumb.src));
+      chip.append(thumb);
+    }
+    chip.append(make("span", "", file.name));
+    const remove = make("button", "", "✕");
+    remove.type = "button";
+    remove.setAttribute("aria-label", words.remove);
+    chip.append(remove);
+    const one = { chip, token: null, gone: false };
+    one.sent = sendAhead(file, file.name || "file").then(
+      (token) => { one.token = token; chip.classList.remove("sending"); if (one.gone) takeBack(token); },
+      () => { chip.classList.remove("sending"); chip.classList.add("failed"); },
+    );
+    remove.addEventListener("click", () => {
+      one.gone = true;
+      if (one.token) takeBack(one.token);
+      attached.splice(attached.indexOf(one), 1);
+      chip.remove();
+      arrange();
+    });
+    attached.push(one);
+    $("attached").append(chip);
+    arrange();
+  }
+  $("files").addEventListener("change", () => {
+    for (const file of $("files").files) attach(file);
+    $("files").value = "";
+    text.focus();
+  });
+  $("attach").addEventListener("keydown", (pressed) => {
+    if (pressed.key === "Enter" || pressed.key === " ") { pressed.preventDefault(); $("files").click(); }
+  });
+  text.addEventListener("paste", (pasted) => {
+    const files = [...(pasted.clipboardData ? pasted.clipboardData.files : [])];
+    if (!files.length) return;
+    pasted.preventDefault();
+    files.forEach(attach);
+  });
+  const carriesFiles = (moved) => moved.dataTransfer && [...moved.dataTransfer.types].includes("Files");
+  $("talk").addEventListener("dragover", (moved) => {
+    if (!carriesFiles(moved)) return;
+    moved.preventDefault();
+    $("talk").classList.add("dropping");
+  });
+  $("talk").addEventListener("dragleave", (moved) => {
+    if (!$("talk").contains(moved.relatedTarget)) $("talk").classList.remove("dropping");
+  });
+  $("talk").addEventListener("drop", (moved) => {
+    if (!carriesFiles(moved)) return;
+    moved.preventDefault();
+    $("talk").classList.remove("dropping");
+    [...moved.dataTransfer.files].forEach(attach);
+  });
+
+  const fit = () => { text.style.height = "auto"; text.style.height = Math.min(text.scrollHeight, window.innerHeight * 0.4) + "px"; arrange(); };
   text.addEventListener("input", fit);
   text.addEventListener("keydown", (pressed) => {
     if (pressed.key === "Enter" && !pressed.shiftKey && !pressed.isComposing) {
@@ -228,20 +342,91 @@
       $("say").requestSubmit();
     }
   });
+  let sending = false;
   $("say").addEventListener("submit", async (sent) => {
     sent.preventDefault();
+    if (sending) return;
     const saying = text.value.trim();
-    if (!saying) return;
+    const going = attached.slice();
+    if (!saying && !going.length) return;
+    sending = true;
+    $("send").disabled = true;
     text.value = "";
     fit();
-    said.scrollTop = said.scrollHeight;
-    const answer = await post("/api/say", { text: saying }).catch(() => null);
-    if (!answer || !answer.ok) {
-      // Not sent: what was written is given back to be sent again.
-      text.value = saying;
-      fit();
+    await Promise.all(going.map((one) => one.sent));
+    const files = going.filter((one) => one.token).map((one) => one.token);
+    const failed = going.some((one) => !one.token);
+    const answer = failed ? null : await post("/api/say", { text: saying, files }).catch(() => null);
+    sending = false;
+    $("send").disabled = false;
+    if (answer && answer.ok) {
+      for (const one of going) {
+        attached.splice(attached.indexOf(one), 1);
+        one.chip.remove();
+      }
+      said.scrollTop = said.scrollHeight;
+    } else {
+      // Not sent: what was written is given back to be sent again, with
+      // the files that did go through.
+      if (!text.value) text.value = saying;
+      const refused = answer && answer.status === 410;
+      for (const one of going) {
+        if (one.token && !refused) continue;
+        attached.splice(attached.indexOf(one), 1);
+        one.chip.remove();
+      }
+      note(failed || refused ? words.fileGone : words.notSent);
     }
+    fit();
   });
+
+  // A voice message: recorded here, sent as a file the Agent has written down.
+  let recorder, recorded, ticking, keeping;
+  function stopRecording(keep) {
+    keeping = keep;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }
+  $("mic").addEventListener("click", async () => {
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (refused) {
+      return note(words.noMic);
+    }
+    const kinds = [["audio/ogg;codecs=opus", "ogg"], ["audio/webm;codecs=opus", "webm"], ["audio/mp4", "m4a"]];
+    const [kind, ending] = kinds.find(([kind]) => MediaRecorder.isTypeSupported(kind)) || ["", "webm"];
+    recorder = new MediaRecorder(stream, kind ? { mimeType: kind } : undefined);
+    recorded = [];
+    const began = Date.now();
+    recorder.addEventListener("dataavailable", (part) => { if (part.data.size) recorded.push(part.data); });
+    recorder.addEventListener("stop", async () => {
+      clearInterval(ticking);
+      for (const track of stream.getTracks()) track.stop();
+      $("recording").hidden = true;
+      $("say").hidden = false;
+      if (!keeping || !recorded.length) return;
+      const spoken = new Blob(recorded, { type: recorder.mimeType || kind });
+      try {
+        const token = await sendAhead(spoken, `voice-${began}.${ending}`);
+        const answer = await post("/api/say", { text: "", files: [token] });
+        if (!answer.ok) throw answer.status;
+        said.scrollTop = said.scrollHeight;
+      } catch (failed) {
+        note(words.notSent);
+      }
+    });
+    const shown = () => {
+      const seconds = Math.floor((Date.now() - began) / 1000);
+      $("recordTime").textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+    };
+    shown();
+    ticking = setInterval(shown, 500);
+    $("say").hidden = true;
+    $("recording").hidden = false;
+    recorder.start();
+  });
+  $("recordStop").addEventListener("click", () => stopRecording(false));
+  $("recordSend").addEventListener("click", () => stopRecording(true));
 
   $("pair").addEventListener("submit", async (sent) => {
     sent.preventDefault();
@@ -269,6 +454,7 @@
       said.replaceChildren();
       asks.clear();
       listen();
+      arrange();
       text.focus();
     } else {
       $("talk").hidden = true;
