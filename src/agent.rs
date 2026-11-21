@@ -816,8 +816,8 @@ impl<P: Provider + 'static> Agent<P> {
                     Err(problem) => format!(
                         "🔴 {problem}. {}",
                         self.language.say(
-                            "Start again with /providers connect chatgpt",
-                            "Recommence avec /providers connect chatgpt"
+                            "Start again: ask me to connect your ChatGPT plan.",
+                            "Recommence : demande-moi de connecter ton forfait ChatGPT."
                         )
                     ),
                 };
@@ -1524,6 +1524,10 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
         | ["/usage"]
         | ["/settings"]
         | ["/settings", _] => Changes::Nothing,
+        // A link to follow, or a list: the Owner does the signing in.
+        ["/providers", "connect", "chatgpt"] | ["/providers"] | ["/extensions"] => Changes::Nothing,
+        ["/extensions", "off" | "on", _] => Changes::Something,
+        ["/extensions", "remove", _] => Changes::ForGood,
         // With a value only when the Owner wrote it themselves, which is
         // checked when it is carried out.
         ["/secret", _, ..] => Changes::Nothing,
@@ -1535,7 +1539,8 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
         _ => {
             return Err("That is not a command you can give. You can give: /connect NAME \
                         https://ADDRESS, /mcp connect NAME, /connections [off|on|disconnect|remove \
-                        NAME], /secret NAME, /settings [NAME VALUE] (not \
+                        NAME], /secret NAME, /providers connect chatgpt, /extensions [off|on|remove NAME], \
+                        /settings [NAME VALUE] (not \
                         permission nor secrets), /usage. Anything else your Owner writes \
                         themselves: tell them which command."
                 .into());
@@ -1562,11 +1567,11 @@ fn permission_specs() -> Vec<ActionSpec> {
         spec(
             "command",
             "Does what your Owner asks in plain words about connectors, secrets or settings, as \
-             one of Orbite's commands. Orbite then answers them itself (a link, a question, a \
-             list): add nothing. /connect NAME ADDRESS adds a connector (notion: \
+             one of Orbite's commands. Orbite then answers them itself: add nothing. /connect NAME ADDRESS adds a connector (notion: \
              https://mcp.notion.com/mcp); /mcp connect NAME signs in to one; /connections [off|on|\
-             disconnect|remove NAME]; /secret NAME [VALUE] for a password or key; \
-             /settings [NAME VALUE] (secrets strict keeps passwords from the AI provider); /usage.",
+             disconnect|remove NAME]; /secret NAME [VALUE]; \
+             /settings [NAME VALUE] (secrets strict: none reach the AI); \
+             /providers connect chatgpt; /extensions [off|on|remove NAME]; /usage.",
             serde_json::json!({ "command": { "type": "string" } }),
         ),
         spec(
@@ -2002,27 +2007,27 @@ impl<P: Provider + 'static> Agent<P> {
             }
             match key {
                 "quiet" => text.push_str(&say(
-                    "\nOther hours: /settings quiet 21:30-06:45",
-                    "\nAutres heures : /settings quiet 21:30-06:45",
+                    "\nOther hours: just tell me, such as \"quiet from 21:30 to 6:45\".",
+                    "\nAutres heures : dis-les-moi, par exemple « silence de 21h30 à 6h45 ».",
                 )),
                 "wakeups" => text.push_str(&say(
-                    "\nAnother pace: /settings wakeups 90",
-                    "\nAutre rythme : /settings wakeups 90",
+                    "\nAnother pace: just tell me, such as \"a wake-up every 90 minutes\".",
+                    "\nAutre rythme : dis-le-moi, par exemple « un réveil toutes les 90 minutes ».",
                 )),
                 "name" => text.push_str(&say(
-                    "\nAnother name: /settings name NEW NAME",
-                    "\nAutre nom : /settings name NOUVEAU NOM",
+                    "\nAnother name: just tell me what to be called.",
+                    "\nAutre nom : dis-moi simplement comment m'appeler.",
                 )),
                 "light" => text.push_str(&say(
                     "\nA quicker, cheaper model of the same Provider for summaries and wake-ups: \
-                     /settings light NAME",
+                     just tell me which.",
                     "\nUn modèle plus rapide et moins cher du même fournisseur pour les résumés et les \
-                     réveils : /settings light NOM",
+                     réveils : dis-moi simplement lequel.",
                 )),
                 "model" => text.push_str(&say(
-                    "\nAnother model of the same Provider: /settings model NAME\nTo see what to expect of one \
+                    "\nAnother model of the same Provider: just tell me which.\nTo see what to expect of one \
                      first, on the machine: orbite tryout NAME",
-                    "\nAutre modèle du même fournisseur : /settings model NOM\nPour savoir d'abord à quoi \
+                    "\nAutre modèle du même fournisseur : dis-moi simplement lequel.\nPour savoir d'abord à quoi \
                      t'attendre, sur la machine : orbite tryout NOM",
                 )),
                 _ => {}
@@ -2069,7 +2074,10 @@ impl<P: Provider + 'static> Agent<P> {
                     listed.push_str(&format!("\n🔴 **{name}**: {}", clip(&problem, 200)));
                     // One that wants to be signed in to is connected by a link.
                     if problem.contains("signed in to") {
-                        listed.push_str(&format!(" → /mcp connect {name}"));
+                        listed.push_str(&say(
+                            " → ask me to sign in to it",
+                            " → demande-moi de m'y connecter",
+                        ));
                     }
                 }
             }
@@ -2125,8 +2133,8 @@ impl<P: Provider + 'static> Agent<P> {
         let (Some(home), [name, address]) = (&self.home, &words[..]) else {
             return (
                 say(
-                    "To add a connector: /connect NAME ADDRESS, such as /connect notion https://mcp.notion.com/mcp",
-                    "Pour ajouter un connecteur : /connect NAME ADDRESS, par exemple /connect notion https://mcp.notion.com/mcp",
+                    "To add a connector, give me its name and its address, such as: add the Notion connector, https://mcp.notion.com/mcp",
+                    "Pour ajouter un connecteur, donne-moi son nom et son adresse, par exemple : ajoute le connecteur Notion, https://mcp.notion.com/mcp",
                 ),
                 false,
             );
@@ -2255,10 +2263,7 @@ impl<P: Provider + 'static> Agent<P> {
                             say("Sign in to ChatGPT", "Se connecter à ChatGPT"),
                             "/providers connect chatgpt".into(),
                         ));
-                        format!(
-                            "🟡 {} → /providers connect chatgpt",
-                            say("to sign in to", "à connecter")
-                        )
+                        format!("🟡 {}", say("to sign in to", "à connecter"))
                     }
                 }
             } else if !needs_key {
@@ -2319,10 +2324,8 @@ impl<P: Provider + 'static> Agent<P> {
                     }
                 }
                 Err(problem) if problem.contains("signed in to") => {
-                    shown.push_str(&format!(
-                        "🟡 {name}: {} → /mcp connect {name}\n",
-                        say("to sign in to", "à connecter")
-                    ));
+                    shown
+                        .push_str(&format!("🟡 {name}: {}\n", say("to sign in to", "à connecter")));
                     choices.push((
                         format!("{} {name}", say("Connect", "Connecter")),
                         format!("/mcp connect {name}"),
@@ -2340,10 +2343,7 @@ impl<P: Provider + 'static> Agent<P> {
             ));
         }
         for name in off {
-            shown.push_str(&format!(
-                "⚪️ {name}: {} → /connections on {name}\n",
-                say("turned off", "désactivé")
-            ));
+            shown.push_str(&format!("⚪️ {name}: {}\n", say("turned off", "désactivé")));
             choices.push((
                 format!("{} {name}", say("Turn on", "Activer")),
                 format!("/connections on {name}"),
@@ -2356,8 +2356,8 @@ impl<P: Provider + 'static> Agent<P> {
         shown.push_str(&format!(
             "\n{}",
             say(
-                "Add a connector: /connect NAME ADDRESS\nAdd an AI, on the machine: orbite providers add · their order and limits: /providers",
-                "Ajouter un connecteur : /connect NAME ADDRESS\nAjouter une IA, sur la machine : orbite providers add · leur ordre et leurs limites : /providers",
+                "To add a connector, sign in to one or turn one off, just ask me.\nTo add an AI, on the machine: orbite providers add.",
+                "Pour ajouter un connecteur, t'y connecter ou en désactiver un, demande-le-moi simplement.\nPour ajouter une IA, sur la machine : orbite providers add.",
             )
         ));
         (shown, choices, false)
@@ -2398,8 +2398,8 @@ impl<P: Provider + 'static> Agent<P> {
                     listed.push_str(&format!("\n{state} **{}**: {description}", extension.name));
                 }
                 listed.push_str(&say(
-                    "\n\n/extensions off NAME, /extensions on NAME, /extensions remove NAME",
-                    "\n\n/extensions off NOM, /extensions on NOM, /extensions remove NOM",
+                    "\n\nTo turn one off or on, or to remove one, just ask me.",
+                    "\n\nPour en désactiver, en réactiver ou en supprimer une, demande-le-moi simplement.",
                 ));
                 listed
             }
@@ -2419,10 +2419,10 @@ impl<P: Provider + 'static> Agent<P> {
                 ),
                 Err(Unremovable::Unknown) => unknown(name),
                 Err(Unremovable::Official) => format!(
-                    "{name} {} /extensions off {name}",
+                    "{name} {}",
                     say(
-                        "comes with Orbite and cannot be removed. To turn it off:",
-                        "fait partie d'Orbite et ne peut pas être supprimée. Pour la désactiver :"
+                        "comes with Orbite and cannot be removed. It can be turned off: just ask me.",
+                        "fait partie d'Orbite et ne peut pas être supprimée. Elle peut être désactivée : demande-le-moi."
                     )
                 ),
             },

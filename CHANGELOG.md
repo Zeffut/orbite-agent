@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.7
+
+Released on 2026-11-21.
+
+- **The lists no longer show commands.** Connections, settings and extensions say what to ask ("to add a connector, just ask me", "another pace: tell me, such as a wake-up every 90 minutes") and keep their buttons. Your agent can also start the sign-in to a ChatGPT plan and turn an extension off, on or remove it when you ask.
+
 ## 0.5.6
 
 Released on 2026-11-21.

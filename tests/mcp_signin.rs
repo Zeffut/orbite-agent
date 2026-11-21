@@ -453,7 +453,7 @@ async fn the_owner_sees_every_connection_in_one_place_with_what_to_do_about_each
     // The connectors, and the one to sign in to.
     assert!(shown.contains("far") && shown.contains("/mcp connect far"), "{shown}");
     // And how to add one, with nothing to edit by hand.
-    assert!(shown.contains("/connect NAME ADDRESS"), "{shown}");
+    assert!(shown.contains("To add a connector") && shown.contains("just ask me"), "{shown}");
     assert_eq!(provider.times_asked(), 0, "none of this is sent to a model");
 }
 
@@ -511,7 +511,7 @@ async fn what_cannot_be_a_connector_is_refused_and_nothing_is_written() {
         ("/connect docs ftp://docs.example/mcp", "address"),
         ("/connect far https://other.example/mcp", "already"),
         ("/connect computer https://other.example/mcp", "name"),
-        ("/connect docs", "/connect NAME ADDRESS"),
+        ("/connect docs", "its name and its address"),
     ] {
         owner.says(asked);
         let said = owner.hears().await;
