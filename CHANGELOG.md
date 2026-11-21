@@ -2,6 +2,15 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.13
+
+Released on 2026-11-21. A third independent check of the secrets code; update from any 0.5 version.
+
+- **With Anthropic, a secret your agent had put away was still sent back to the provider on every turn**, inside what Claude needs returned as it wrote it. It is now cleared there too, and from every older entry of the conversation, which a search could still read.
+- **Only what you write after being asked answers the question.** Something you wrote while your agent was working, before Orbite asked you for a secret, could be taken for the secret, or cancel the question so that your real answer went to the model. In the terminal, a line typed ahead could do the same.
+- What Orbite awaits from you is taken up before anything else when it starts again, written down before it is asked, and given up when you reset the conversation.
+- What your agent may keep as a secret is looked for in your last few messages only.
+
 ## 0.5.12
 
 Released on 2026-11-21. A second independent review found the fixes of 0.5.11 incomplete; update from any 0.5 version.

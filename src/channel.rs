@@ -78,6 +78,12 @@ pub trait Channel: Send {
         async {}
     }
 
+    /// What the Owner wrote that was not received yet, where a Channel
+    /// keeps such: typed ahead of a question, it must not answer it.
+    fn written_before(&mut self) -> impl Future<Output = Vec<String>> + Send {
+        async { Vec::new() }
+    }
+
     /// Removes from where the Conversation is shown what the Owner last
     /// wrote, when it should not stay there. Does nothing where that is not
     /// possible.

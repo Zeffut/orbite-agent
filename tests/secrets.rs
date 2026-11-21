@@ -995,3 +995,105 @@ async fn at_the_strict_setting_the_value_of_a_held_back_message_is_still_awaited
     );
     assert!(!shown_to_the_model(&provider).contains("Mimosa"));
 }
+
+#[tokio::test]
+async fn a_secret_put_away_is_not_sent_back_to_a_provider_that_wants_its_own_words_again() {
+    // Anthropic is sent back exactly what it wrote, the Action that named the
+    // secret included: the value must be gone from that too.
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let answering = |content: serde_json::Value| {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "id": "msg_1", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+            "content": content, "stop_reason": "end_turn",
+            "usage": { "input_tokens": 10, "output_tokens": 5 },
+        }))
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(answering(json!([
+            { "type": "text", "text": "I put it away." },
+            { "type": "tool_use", "id": "toolu_1", "name": "command",
+              "input": { "command": "/secret DOOR_CODE 7731-abcd" } },
+        ])))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(answering(json!([{ "type": "text", "text": "Yes." }])))
+        .mount(&server)
+        .await;
+    let home = tempfile::tempdir().unwrap();
+    let (mut channel, mut owner) = memory_channel();
+    let (folder, provider) = (
+        home.path().to_owned(),
+        orbite::Anthropic::new("sk-ant-test", "claude-opus-5-5").at(server.uri()),
+    );
+    tokio::spawn(async move {
+        Agent::new(provider, Store::in_memory())
+            .keeping_secrets_in(&folder)
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("The door code is 7731-abcd");
+    owner.is_asked().await;
+    owner.allows();
+    // Among what is said next comes Orbite's word that it is kept.
+    let mut heard = Vec::new();
+    while !heard.iter().any(|said: &String| said.contains("DOOR_CODE")) {
+        assert!(heard.len() < 5, "it was never said to be kept: {heard:?}");
+        heard.push(owner.hears().await);
+    }
+    owner.says("Still there?");
+    owner.hears().await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    assert_eq!(
+        Secrets::kept_in(home.path()).get("DOOR_CODE").unwrap().as_deref(),
+        Some("7731-abcd")
+    );
+    // Once kept, nothing sent to the provider holds it any more.
+    let sent = server.received_requests().await.unwrap();
+    let last = String::from_utf8_lossy(&sent.last().unwrap().body).into_owned();
+    assert!(!last.contains("7731-abcd"), "{last}");
+    assert!(last.contains("[the secret DOOR_CODE]"), "{last}");
+}
+
+#[tokio::test]
+async fn what_the_owner_wrote_before_being_asked_for_a_secret_neither_answers_nor_cancels_it() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("command", json!({ "command": "/secret BANK_PASSWORD" }))])
+        .then_never_answers()
+        .then(Ok("[silent]".into()))
+        .then(Ok("[silent]".into()));
+    let mut owner = agent_in(home.path(), &provider);
+    owner.says("I want to give you my bank password.");
+    // The Agent has asked for the secret and is still at work...
+    while provider.times_asked() < 2 {
+        tokio::task::yield_now().await;
+    }
+    // ...when the Owner writes something else, before any question is shown.
+    owner.says("/usage");
+
+    let asked = owner.hears().await;
+    assert!(asked.contains("BANK_PASSWORD"), "the value is asked for: {asked}");
+    let used = owner.hears().await;
+    assert!(
+        used.contains("seven days") || used.contains("Today"),
+        "what was written is carried out: {used}"
+    );
+    // The question still stands, and what is sent now answers it.
+    owner.says("correct-horse-battery");
+    assert!(owner.hears().await.contains("is kept"));
+
+    assert_eq!(
+        Secrets::kept_in(home.path()).get("BANK_PASSWORD").unwrap().as_deref(),
+        Some("correct-horse-battery")
+    );
+    assert!(!shown_to_the_model(&provider).contains("correct-horse"));
+}

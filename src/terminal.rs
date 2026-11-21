@@ -65,6 +65,10 @@ impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Channel for T
         }
     }
 
+    async fn written_before(&mut self) -> Vec<String> {
+        self.typed_ahead.drain(..).collect()
+    }
+
     async fn send(&mut self, text: &str) -> io::Result<()> {
         // Said on its own initiative, it starts on a line of its own.
         let start = if std::mem::take(&mut self.prompted) { "\n" } else { "" };

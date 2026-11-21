@@ -64,6 +64,12 @@ impl<A: Channel, B: Channel> Channel for Both<A, B> {
         }
     }
 
+    async fn written_before(&mut self) -> Vec<String> {
+        let mut written = self.first.written_before().await;
+        written.extend(self.second.written_before().await);
+        written
+    }
+
     async fn erase_last_received(&mut self) {
         self.first.erase_last_received().await;
         self.second.erase_last_received().await;

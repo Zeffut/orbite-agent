@@ -438,14 +438,70 @@ impl Store {
             }
             holds
         };
-        for (id, mut message) in self.shown()? {
+        // What a Provider needs back as it was is its own answer again: what
+        // it said, and what it gave its Actions. Those are cleared there
+        // too, and nothing else of it is touched.
+        fn kept_back(kept: &mut serde_json::Value, value: &str, with: &str) -> bool {
+            match kept {
+                serde_json::Value::Array(all) => {
+                    let mut any = false;
+                    for one in all.iter_mut() {
+                        any |= kept_back(one, value, with);
+                    }
+                    any
+                }
+                serde_json::Value::Object(block) => {
+                    let kind = block.get("type").and_then(|kind| kind.as_str()).map(str::to_owned);
+                    match kind.as_deref() {
+                        Some("text") => match block.get_mut("text") {
+                            Some(serde_json::Value::String(text)) if holds_whole(text, value) => {
+                                *text = without_whole(text, value, with);
+                                true
+                            }
+                            _ => false,
+                        },
+                        Some("tool_use") => {
+                            block.get_mut("input").is_some_and(|input| given(input, value, with))
+                        }
+                        // Kept under a Provider's name, or wrapped: looked into.
+                        None => {
+                            let mut any = false;
+                            for one in block.values_mut() {
+                                any |= kept_back(one, value, with);
+                            }
+                            any
+                        }
+                        // Reasoning only its Provider can read, and the like.
+                        Some(_) => false,
+                    }
+                }
+                _ => false,
+            }
+        }
+        // Every entry, the ones the model is no longer shown as well: a
+        // search of the Conversation still reads them.
+        let all: Vec<(i64, String)> = {
+            let database = self.database.lock().expect("the Store is not poisoned");
+            let mut reading = database.prepare("SELECT id, body FROM messages ORDER BY id")?;
+            let read = reading.query_map((), |row| Ok((row.get(0)?, row.get(1)?)))?;
+            read.filter_map(Result::ok).collect()
+        };
+        for (id, body) in all {
+            // Looked into only where it could be: most entries are not.
+            if !body.contains(value) && !body.contains(&value.replace('"', "\\\"")) {
+                continue;
+            }
+            let Ok(mut message) = read(&body) else { continue };
             let changed = match &mut message {
                 Message::Owner(text) | Message::Notice(text) => said(text),
                 Message::Outcome { text, .. } => said(text),
-                Message::Agent { text, actions, .. } => {
+                Message::Agent { text, actions, kept } => {
                     let mut any = said(text);
                     for action in actions.iter_mut() {
                         any |= given(&mut action.input, value, with);
+                    }
+                    if let Some(kept) = kept {
+                        any |= kept_back(kept, value, with);
                     }
                     any
                 }
