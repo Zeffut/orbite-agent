@@ -51,9 +51,10 @@ with exactly [silent]. What you write on your own initiative during your \
 Owner's quiet hours is kept until they end; start it with [urgent] only when \
 it truly cannot wait.
 
-A password or key your Owner writes in a message, you put away at once \
-yourself with `command`: /secret NAME VALUE. One you need and do not have: \
-/secret NAME. Never send them to the machine for it.
+A password or key your Owner writes, put away at once with `command`: \
+/secret NAME VALUE (its existing name when it replaces one); one you lack: \
+/secret NAME. Never tell your Owner to type a command or go to the machine: \
+do it yourself.
 
 Answer in the language your Owner writes in. Be direct and brief.";
 
@@ -498,14 +499,14 @@ impl<P: Provider + 'static> Agent<P> {
                         channel
                             .send(say(
                                 "Send me the value alone: I seal it, and my AI provider never sees it. \
-                                 /cancel to give up.",
+                                 Say \"cancel\" to give up.",
                                 "Envoie-moi la valeur seule : je la scelle, et mon fournisseur d'IA ne la \
-                                 voit jamais. /cancel pour renoncer.",
+                                 voit jamais. Dis « annule » pour renoncer.",
                             ))
                             .await
                             .is_ok()
                     }
-                    "/cancel" => {
+                    given_up if gives_up(given_up) => {
                         channel.send(say("Nothing was kept.", "Rien n'a été gardé.")).await.is_ok()
                     }
                     value if awaiting_value && !value.starts_with('/') => {
@@ -535,9 +536,9 @@ impl<P: Provider + 'static> Agent<P> {
                         channel
                             .send(say(
                                 "First tell me about the message I am holding back: answer above, or \
-                                 /cancel.",
+                                 say \"cancel\".",
                                 "Dis-moi d'abord quoi faire du message que je retiens : réponds \
-                                 au-dessus, ou /cancel.",
+                                 au-dessus, ou dis « annule ».",
                             ))
                             .await
                             .is_ok()
@@ -553,7 +554,7 @@ impl<P: Provider + 'static> Agent<P> {
             // The value of the secret named just before: kept, and never
             // shown to a model. Another command instead means a change of mind.
             if let Some(name) = self.awaiting_secret.take() {
-                if text.trim() == "/cancel" {
+                if gives_up(&text) {
                     let said = self.language.say("Nothing was kept.", "Rien n'a été gardé.");
                     if channel.send(said).await.is_err() {
                         return;
@@ -592,9 +593,9 @@ impl<P: Provider + 'static> Agent<P> {
                                 self.language.say("Send me the value of", "Envoie-moi la valeur de"),
                                 self.language.say(
                                     "I seal it and remove your message; my AI provider never sees it. \
-                                     /cancel to give up.",
+                                     Say \"cancel\" to give up.",
                                     "Je la scelle et supprime ton message ; mon fournisseur d'IA ne la \
-                                     voit jamais. /cancel pour renoncer.",
+                                     voit jamais. Dis « annule » pour renoncer.",
                                 )
                             );
                             self.awaiting_secret = Some(name);
@@ -610,9 +611,9 @@ impl<P: Provider + 'static> Agent<P> {
                     }
                     _ => {
                         let said = self.language.say(
-                            "To give me a secret (a password, a key): /secret NAME, then its value in your \
+                            "To give me a secret (a password, a key), just tell me you have one: I then ask for its value in your \
                              next message. I keep it sealed and never show it to my AI provider.",
-                            "Pour me confier un secret (un mot de passe, une clé) : /secret NOM, puis sa valeur \
+                            "Pour me confier un secret (un mot de passe, une clé), dis-le-moi simplement : je te demande ensuite sa valeur \
                              dans ton message suivant. Je le garde scellé et ne le montre jamais à mon \
                              fournisseur d'IA.",
                         );
@@ -633,27 +634,25 @@ impl<P: Provider + 'static> Agent<P> {
                     "strict" => self.store.set_setting("secrets_in_conversation", None).map(|()| {
                         self.language.say(
                             "Strict: a message that speaks of a password or a code is held back from my \
-                             AI provider until you tell me whether it holds one. /secrets off to go back.",
+                             AI provider until you tell me whether it holds one.",
                             "Strict : un message qui parle d'un mot de passe ou d'un code n'est pas montré \
-                             à mon fournisseur d'IA tant que tu ne m'as pas dit s'il en contient un. \
-                             /secrets off pour revenir en arrière.",
+                             à mon fournisseur d'IA tant que tu ne m'as pas dit s'il en contient un.",
                         )
                     }),
                     "on" => self.store.set_setting("secrets_in_conversation", Some("on")).map(|()| {
                         self.language.say(
                             "Secrets in the conversation are on: what you paste here is shown to my \
-                             AI provider and stays in this conversation. /secrets off to go back.",
+                             AI provider and stays in this conversation.",
                             "Les secrets dans la discussion sont autorisés : ce que tu colles ici \
-                             est montré à mon fournisseur d'IA et reste dans cette discussion. \
-                             /secrets off pour revenir en arrière.",
+                             est montré à mon fournisseur d'IA et reste dans cette discussion.",
                         )
                     }),
                     "off" => self.store.set_setting("secrets_in_conversation", None).map(|()| {
                         self.language.say(
                             "Secrets written in the conversation are turned away again. To give me \
-                             one safely: /secret NAME.",
+                             one safely, just tell me you have one.",
                             "Les secrets écrits dans la discussion sont de nouveau refusés. Pour m'en \
-                             confier un en sécurité : /secret NOM.",
+                             confier un en sécurité, dis-le-moi simplement.",
                         )
                     }),
                     _ => Ok(self.language.say(
@@ -2639,11 +2638,11 @@ impl<P: Provider + 'static> Agent<P> {
         let said = self.language.say(
             "That looks like a secret (a key, a token or a password). I did not keep it or show it \
              to my AI provider, and removed it from here where I could. To give it to me \
-             safely, send /secret NAME, then its value: I keep it sealed and use it by its name, and \
+             safely, just tell me you have a secret to give me: I keep it sealed and use it by its name, and \
              my AI provider never sees it.",
             "Cela ressemble à un secret (une clé, un jeton ou un mot de passe). Je ne l'ai ni gardé ni \
              montré à mon fournisseur d'IA, et je l'ai retiré d'ici quand c'était possible. \
-             Pour me le confier en sécurité, envoie /secret NOM, puis sa valeur : je le garde scellé \
+             Pour me le confier en sécurité, dis-moi simplement que tu as un secret à me confier : je le garde scellé \
              et l'utilise par son nom, et mon fournisseur d'IA ne le voit jamais.",
         );
         Some(channel.send(said).await.is_ok())
@@ -3642,6 +3641,13 @@ async fn attending<T>(
 }
 
 /// True when what the Owner wrote is the order to stop.
+/// True when what the Owner wrote means they give up what was asked of them.
+fn gives_up(text: &str) -> bool {
+    let word = text.trim().trim_end_matches(['!', '.']).to_lowercase();
+    ["/cancel", "cancel", "annule", "annuler", "laisse tomber", "never mind"]
+        .contains(&word.as_str())
+}
+
 pub(crate) fn means_stop(text: &str) -> bool {
     let word = text.trim().trim_end_matches(['!', '.']).to_lowercase();
     word == "stop" || word == "/stop" || word == "/reset"

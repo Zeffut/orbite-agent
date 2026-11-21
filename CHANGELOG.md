@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.6
+
+Released on 2026-11-21.
+
+- **Neither your agent nor Orbite sends you to a command for a secret any more.** Your agent is told never to ask you to type a command or to go to the machine: it does the thing itself, and a new password replaces the old one under the name it already had. Orbite's own messages say what to say ("just tell me you have a secret to give me", "say cancel to give up") instead of naming commands.
+
 ## 0.5.5
 
 Released on 2026-11-21.

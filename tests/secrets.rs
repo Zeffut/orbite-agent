@@ -126,7 +126,10 @@ async fn a_secret_pasted_in_the_conversation_is_neither_kept_nor_shown_to_the_mo
     owner.says(&format!("Here is my token: {TOKEN}"));
     let refused = owner.hears().await;
 
-    assert!(refused.contains("/secret NAME"), "the Owner is told where secrets go: {refused}");
+    assert!(
+        refused.contains("tell me you have a secret"),
+        "the Owner is told where secrets go: {refused}"
+    );
     assert!(!refused.contains(TOKEN));
     assert_eq!(provider.times_asked(), 0, "the model was shown the secret");
     assert!(
@@ -165,7 +168,10 @@ async fn the_usual_kinds_of_secrets_are_recognised_and_ordinary_words_are_not() 
         let provider = ScriptedProvider::default();
         let mut owner = agent_in(home.path(), &provider);
         owner.says(&format!("use this {secret} please"));
-        assert!(owner.hears().await.contains("/secret NAME"), "{secret} was not recognised");
+        assert!(
+            owner.hears().await.contains("tell me you have a secret"),
+            "{secret} was not recognised"
+        );
         assert_eq!(provider.times_asked(), 0);
     }
     for ordinary in [
@@ -194,7 +200,7 @@ async fn an_owner_who_says_so_may_give_secrets_in_the_conversation() {
     owner.says("/secrets off");
     assert!(owner.hears().await.contains("turned away again"));
     owner.says(&format!("Again: {TOKEN}"));
-    assert!(owner.hears().await.contains("/secret NAME"));
+    assert!(owner.hears().await.contains("tell me you have a secret"));
     assert_eq!(provider.times_asked(), 1, "/secrets is not sent to the model");
 }
 
@@ -413,7 +419,8 @@ async fn a_secret_named_wrongly_or_given_up_is_not_kept() {
 
     owner.says("/secret DOOR_CODE");
     owner.hears().await;
-    owner.says("/cancel");
+    // Given up in plain words.
+    owner.says("Cancel.");
     assert!(owner.hears().await.contains("Nothing was kept"));
     // What comes after is an ordinary message again.
     owner.says("Hello");
