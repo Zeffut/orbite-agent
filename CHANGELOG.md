@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.8
+
+Released on 2026-11-21.
+
+- The agent's browser no longer offers to save each password it types: the question covered the page it was working on. Passwords are Orbite's to keep, sealed, not the browser's. This applies to a browser profile from its first start.
+
 ## 0.5.7
 
 Released on 2026-11-21.

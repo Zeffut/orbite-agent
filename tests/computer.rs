@@ -283,6 +283,17 @@ mod browser {
         let scratch = home.path().join("profile.tmp");
         assert!(scratch.is_dir(), "the browser was given no folder of its own to write in");
 
+        // It was told, before its first start, not to offer to keep passwords:
+        // the question would cover the page the Agent is working on.
+        let told = ["Default/Preferences", "user.js"]
+            .iter()
+            .filter_map(|file| std::fs::read_to_string(home.path().join("profile").join(file)).ok())
+            .collect::<String>();
+        assert!(
+            told.contains("password_manager_enabled") || told.contains("signon.rememberSignons"),
+            "{told}"
+        );
+
         computer.close_browser();
 
         assert!(!scratch.exists(), "what the browser wrote while running was left behind");

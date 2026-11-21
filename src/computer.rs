@@ -361,7 +361,13 @@ const BROWSERS: [(&str, bool); 5] = [
 
 /// Settings a person would choose on Firefox's first day, chosen for the
 /// Agent: no welcome pages, no question about being the default browser.
-const FIREFOX_FIRST_DAY: &str = r#"user_pref("browser.aboutwelcome.enabled", false);
+/// The same for a browser of Chrome's family: it keeps no password and does
+/// not ask to.
+const CHROME_FIRST_DAY: &str =
+    r#"{"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}"#;
+
+const FIREFOX_FIRST_DAY: &str = r#"user_pref("signon.rememberSignons", false);
+user_pref("browser.aboutwelcome.enabled", false);
 user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("browser.startup.homepage_override.mstone", "ignore");
 user_pref("startup.homepage_welcome_url", "");
@@ -511,6 +517,13 @@ impl Computer {
             }
         }
         if *chrome {
+            // A browser that offers to keep each password covers the page
+            // with the question: the Agent's passwords are Orbite's to keep.
+            let settled = self.profile.join("Default").join("Preferences");
+            if !running && !settled.exists() {
+                std::fs::create_dir_all(self.profile.join("Default"))?;
+                std::fs::write(&settled, CHROME_FIRST_DAY)?;
+            }
             starting
                 .arg(format!("--user-data-dir={}", self.profile.display()))
                 .args([
