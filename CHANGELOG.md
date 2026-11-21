@@ -2,6 +2,16 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.14
+
+Released on 2026-11-21. A fourth independent check of the secrets code; update from any 0.5 version.
+
+- **A secret holding a backslash, a quote or a new line was kept but not cleared from the conversation**, so it still went to the provider. It is cleared like any other now, and Orbite tells you if clearing ever fails.
+- **At the strict setting, a second message written before you settled the first is no longer lost or sent in its place.** Orbite says it takes it up afterwards, and does: each message held back gets its own question.
+- On Telegram, what you wrote while your agent was working is no longer taken for the answer to a question asked afterwards.
+- A secret your agent asks you for while Orbite already awaits something from you waits its turn instead of replacing the question.
+- Resetting the conversation gives up what was awaited and what your agent was about to ask you, even while it works. Before, a secret it had asked for was still asked after the reset.
+
 ## 0.5.13
 
 Released on 2026-11-21. A third independent check of the secrets code; update from any 0.5 version.

@@ -590,6 +590,28 @@ impl Channel for Telegram {
         self.close_approval(answer, elsewhere).await;
     }
 
+    async fn written_before(&mut self) -> Vec<String> {
+        // What already arrived and was not read yet: written before
+        // whatever Orbite is about to ask.
+        let mut written: Vec<String> = self.waiting.drain(..).collect();
+        while let Some(received) =
+            self.listening.as_mut().and_then(|(sent, _)| sent.try_recv().ok())
+        {
+            match received {
+                Sent::Text(text, message) => {
+                    self.last_received = Some(message);
+                    self.lately.push_back((message, text.clone()));
+                    if self.lately.len() > 40 {
+                        self.lately.pop_front();
+                    }
+                    written.push(text);
+                }
+                Sent::Tap(tap) => self.taps.push_back(tap),
+            }
+        }
+        written
+    }
+
     async fn erase_last_received(&mut self) {
         if let Some(message) = self.last_received.take() {
             let body = json!({ "chat_id": self.bot.owner, "message_id": message });

@@ -478,6 +478,11 @@ impl Store {
                 _ => false,
             }
         }
+        // The value as it is written inside an entry, whatever it holds: a
+        // quote, a new line, a backslash are all written another way there.
+        let as_kept = serde_json::to_string(value)
+            .map(|quoted| quoted[1..quoted.len() - 1].to_owned())
+            .unwrap_or_else(|_| value.to_owned());
         // Every entry, the ones the model is no longer shown as well: a
         // search of the Conversation still reads them.
         let all: Vec<(i64, String)> = {
@@ -488,7 +493,7 @@ impl Store {
         };
         for (id, body) in all {
             // Looked into only where it could be: most entries are not.
-            if !body.contains(value) && !body.contains(&value.replace('"', "\\\"")) {
+            if !body.contains(&as_kept) {
                 continue;
             }
             let Ok(mut message) = read(&body) else { continue };

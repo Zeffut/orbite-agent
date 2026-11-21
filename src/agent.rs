@@ -204,6 +204,9 @@ pub struct Agent<P> {
     unnamed_secret: Option<String>,
     /// What is written down of what Orbite awaits from its Owner.
     awaited_kept: Option<String>,
+    /// What came while Orbite was waiting for an answer and was not it:
+    /// taken up once nothing is awaited any more.
+    after_the_wait: Vec<(String, From)>,
     /// A Provider being added, by name and model, whose API Key the Owner
     /// is about to send.
     pending_provider: Option<(String, String)>,
@@ -262,6 +265,7 @@ impl<P: Provider + 'static> Agent<P> {
             withheld: None,
             unnamed_secret: None,
             awaited_kept: None,
+            after_the_wait: Vec::new(),
             pending_provider: None,
             wake_up_pace: 0,
             last_active: 0,
@@ -461,6 +465,10 @@ impl<P: Provider + 'static> Agent<P> {
             // What is set aside is taken first: a command the Agent gave for
             // its Owner, or one they wrote while it worked.
             self.keep_what_is_awaited();
+            // Nothing is awaited any more: what was put off for it is due.
+            if !self.waits() {
+                self.set_aside.extend(self.after_the_wait.drain(..));
+            }
             let asked_meanwhile = !self.set_aside.is_empty();
             // Just received, or set aside: by whom, and as what.
             let mut origin: Option<From> = None;
@@ -570,15 +578,17 @@ impl<P: Provider + 'static> Agent<P> {
                             Err(error) => channel.send(&explain_storage(&error)).await.is_ok(),
                         }
                     }
-                    // Something else: the question stands.
+                    // Something else: the question stands, and what was
+                    // written is taken up once it is settled.
                     _ => {
+                        self.after_the_wait.push((text.clone(), From::Owner));
                         self.withheld = Some((held, awaiting_value));
                         channel
                             .send(say(
                                 "First tell me about the message I am holding back: answer above, or \
-                                 say \"cancel\".",
+                                 say \"cancel\". I take up what you just wrote after that.",
                                 "Dis-moi d'abord quoi faire du message que je retiens : réponds \
-                                 au-dessus, ou dis « annule ».",
+                                 au-dessus, ou dis « annule ». Je reprends ensuite ce que tu viens d'écrire.",
                             ))
                             .await
                             .is_ok()
@@ -699,6 +709,12 @@ impl<P: Provider + 'static> Agent<P> {
                                 self.language.say("Nothing was kept.", "Rien n'a été gardé.");
                             channel.send(said).await.is_ok()
                         }
+                    }
+                    // One question at a time: what the Agent asks for while
+                    // its Owner is answering another waits for that one.
+                    [_, _] if by_the_agent && self.waits() => {
+                        self.after_the_wait.push((text.clone(), From::Agent));
+                        true
                     }
                     [_, name] => match self.secret_may_be_named(name) {
                         Ok(name) => {
@@ -1054,6 +1070,7 @@ impl<P: Provider + 'static> Agent<P> {
             }
             if text.trim() == "/reset" {
                 self.await_nothing();
+                self.set_aside.retain(|(_, from)| !matches!(from, From::Agent));
                 let said = match self.store.reset() {
                     Ok(()) => self
                         .language
@@ -1081,6 +1098,11 @@ impl<P: Provider + 'static> Agent<P> {
                 && matches!(self.store.setting("secrets_strict"), Ok(Some(_)))
                 && crate::secrets::speaks_of_a_secret(&text)
             {
+                // One question at a time: the next waits for this one.
+                if self.withheld.is_some() {
+                    self.after_the_wait.push((text, From::Owner));
+                    continue;
+                }
                 let language = self.language;
                 let say = |english: &str, french: &str| language.say(english, french).to_owned();
                 self.withheld = Some((text, false));
@@ -1899,6 +1921,9 @@ impl<P: Provider + 'static> Agent<P> {
     ) -> Result<bool, StoreError> {
         // Asking to start afresh stops the work too, then does as asked.
         if said.iter().any(|word| word.trim() == "/reset") {
+            self.await_nothing();
+            // What the Agent asked for belonged to the conversation left behind.
+            self.set_aside.retain(|(_, from)| !matches!(from, From::Agent));
             self.store.reset()?;
             return Ok(channel
                 .send(self.language.say(
@@ -2863,6 +2888,11 @@ impl<P: Provider + 'static> Agent<P> {
         self.keep_what_is_awaited();
     }
 
+    /// True while Orbite waits for an answer from its Owner.
+    fn waits(&self) -> bool {
+        self.awaiting_secret.is_some() || self.pending_provider.is_some() || self.withheld.is_some()
+    }
+
     /// Gives up everything Orbite was waiting for from its Owner.
     fn await_nothing(&mut self) {
         self.awaiting_secret = None;
@@ -2870,6 +2900,7 @@ impl<P: Provider + 'static> Agent<P> {
         self.withheld = None;
         self.unnamed_secret = None;
         self.held_secrets.clear();
+        self.after_the_wait.clear();
         self.keep_what_is_awaited();
     }
 
@@ -2932,9 +2963,10 @@ impl<P: Provider + 'static> Agent<P> {
             Ok(name) => name,
             Err(problem) => return channel.send(&format!("🔴 {problem}")).await.is_ok(),
         };
-        if written_earlier {
-            let _ = self.store.redact(value, &format!("[the secret {name}]"));
-        }
+        // Said plainly when it could not be: the Owner is not told that
+        // something is gone which is still there.
+        let cleared =
+            !written_earlier || self.store.redact(value, &format!("[the secret {name}]")).is_ok();
         // A few words: it is said every time a secret is given.
         let said = format!(
             "✅ **{name}** {}",
@@ -2950,6 +2982,16 @@ impl<P: Provider + 'static> Agent<P> {
                 )
             }
         );
+        let said = match cleared {
+            true => said,
+            false => format!(
+                "{said} {}",
+                self.language.say(
+                    "I could not clear it from what I keep of our conversation: start afresh to be sure.",
+                    "Je n'ai pas pu le retirer de ce que je garde de notre discussion : repars de zéro pour en être sûr.",
+                )
+            ),
+        };
         if channel.send(&said).await.is_err() {
             return false;
         }
