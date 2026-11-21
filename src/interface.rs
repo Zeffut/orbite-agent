@@ -683,7 +683,9 @@ impl Channel for Interface {
                 .filter(|(_, body)| {
                     serde_json::from_str::<Value>(body).is_ok_and(|shown| {
                         shown["kind"] == "owner"
-                            && shown["text"].as_str().is_some_and(|said| said.contains(text))
+                            && shown["text"]
+                                .as_str()
+                                .is_some_and(|said| crate::secrets::holds_whole(said, text))
                     })
                 })
                 .map(|(id, _)| id)
