@@ -502,14 +502,12 @@ impl<P: Provider + 'static> Agent<P> {
                         Ok(name) => {
                             let said = format!(
                                 "{} **{name}**. {}",
-                                self.language.say("Send me now the value of", "Envoyez-moi maintenant la valeur de"),
+                                self.language.say("Send me the value of", "Envoyez-moi la valeur de"),
                                 self.language.say(
-                                    "I keep it sealed on the machine, remove your message from here where I \
-                                     can, and never show it to my AI provider: I use it by its name. \
+                                    "I seal it and remove your message; my AI provider never sees it. \
                                      /cancel to give up.",
-                                    "Je la garde scellée sur la machine, je retire votre message d'ici \
-                                     quand c'est possible, et je ne la montre jamais à mon fournisseur \
-                                     d'IA : je l'utilise par son nom. /cancel pour renoncer.",
+                                    "Je la scelle et supprime votre message ; mon fournisseur d'IA ne la \
+                                     voit jamais. /cancel pour renoncer.",
                                 )
                             );
                             self.awaiting_secret = Some(name);
@@ -2456,24 +2454,18 @@ impl<P: Provider + 'static> Agent<P> {
         if written_earlier {
             let _ = self.store.redact(value, &format!("[the secret {name}]"));
         }
+        // A few words: it is said every time a secret is given.
         let said = format!(
             "✅ **{name}** {}",
             if written_earlier {
                 self.language.say(
-                    "is kept, sealed on the machine, and I removed from here the message it was \
-                     written in, where I could. Written in plain words, it was seen by my AI provider \
-                     this once: to avoid that, tell me first that you have a secret to give me.",
-                    "est gardé, scellé sur la machine, et j'ai retiré d'ici le message où il était \
-                     écrit, quand c'était possible. Écrit en clair, il a été vu cette fois par mon \
-                     fournisseur d'IA : pour l'éviter, dites-moi d'abord que vous avez un secret à me \
-                     confier.",
+                    "is kept, and your message removed. (My AI provider saw it this once.)",
+                    "est gardé, et votre message supprimé. (Mon fournisseur d'IA l'a vu cette fois.)",
                 )
             } else {
                 self.language.say(
-                    "is kept, sealed on the machine. My AI provider did not see it, and I removed your \
-                     message from here where I could.",
-                    "est gardé, scellé sur la machine. Mon fournisseur d'IA ne l'a pas vu, et j'ai retiré \
-                     votre message d'ici quand c'était possible.",
+                    "is kept, and your message removed.",
+                    "est gardé, et votre message supprimé.",
                 )
             }
         );
@@ -3080,10 +3072,12 @@ impl<P: Provider + 'static> Agent<P> {
                     self.held_secrets.retain(|(named, _)| named != &name);
                     self.held_secrets.push((name.clone(), value.to_owned()));
                     self.set_aside.push_front(format!("/secret {name}"));
+                    self.may_stay_silent = true;
                     return format!(
                         "It is kept as {name} right after your reply, and the message it was written \
-                         in is removed from the conversation; Orbite tells your Owner. From now on \
-                         use it by its name only, as {{{{{name}}}}}: never write its value again."
+                         in is removed; Orbite tells your Owner so itself. Use it by its name only, as \
+                         {{{{{name}}}}}, and never write its value again. Unless you have something \
+                         else to tell them, reply with exactly [silent]."
                     );
                 }
                 return match command_for_the_agent(command) {
@@ -3109,9 +3103,10 @@ impl<P: Provider + 'static> Agent<P> {
                             self.set_aside.iter().position(restarts).unwrap_or(self.set_aside.len())
                         };
                         self.set_aside.insert(before, command.to_owned());
+                        self.may_stay_silent = true;
                         "It is carried out right after your reply, and Orbite itself tells your \
-                         Owner what comes of it. Reply with a few words at most, or nothing: do \
-                         not describe, promise or repeat it."
+                         Owner what comes of it: do not describe, promise or repeat it. Unless you \
+                         have something else to tell them, reply with exactly [silent]."
                             .into()
                     }
                 };

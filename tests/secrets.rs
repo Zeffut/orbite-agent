@@ -372,11 +372,11 @@ async fn a_secret_given_with_the_secret_command_is_kept_and_never_shown_to_the_m
     // Named first, then given in the next message, spaces and all.
     owner.says("/secret shop_password");
     let asked = owner.hears().await;
-    assert!(asked.contains("SHOP_PASSWORD") && asked.contains("never show"), "{asked}");
+    assert!(asked.contains("SHOP_PASSWORD") && asked.contains("never sees"), "{asked}");
     assert_eq!(provider.times_asked(), 0, "naming a secret is not for the model");
     owner.says("correct horse battery staple");
     let kept = owner.hears().await;
-    assert!(kept.contains("SHOP_PASSWORD") && kept.contains("sealed"), "{kept}");
+    assert!(kept.contains("SHOP_PASSWORD") && kept.contains("is kept"), "{kept}");
     assert!(!kept.contains("horse"), "{kept}");
     assert_eq!(owner.hears().await, "Noted.");
 
@@ -435,9 +435,9 @@ async fn asked_in_plain_words_the_agent_has_its_owner_send_a_secret_it_never_see
     assert_eq!(owner.hears().await, "Go ahead.");
     // Orbite itself then asks for the value, as if the Owner had written the command.
     let asked = owner.hears().await;
-    assert!(asked.contains("SHOP_PASSWORD") && asked.contains("never show"), "{asked}");
+    assert!(asked.contains("SHOP_PASSWORD") && asked.contains("never sees"), "{asked}");
     owner.says("tr0ub4dor&3");
-    assert!(owner.hears().await.contains("sealed"));
+    assert!(owner.hears().await.contains("is kept"));
     assert_eq!(owner.hears().await, "Thanks, I have it.");
 
     assert_eq!(
@@ -551,8 +551,8 @@ async fn several_secrets_written_in_one_message_are_each_kept_under_their_name()
 
     owner.says("My shop password is Tournesol-88! and the PIN is 4921.");
     assert_eq!(owner.hears().await, "Both are put away.");
-    assert!(owner.hears().await.contains("sealed"));
-    assert!(owner.hears().await.contains("sealed"));
+    assert!(owner.hears().await.contains("is kept"));
+    assert!(owner.hears().await.contains("is kept"));
 
     let secrets = Secrets::kept_in(home.path());
     assert_eq!(secrets.get("SHOP_PASSWORD").unwrap().as_deref(), Some("Tournesol-88!"));

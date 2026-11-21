@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.2
+
+Released on 2026-11-21.
+
+- **Fewer words when a secret is put away or a command carried out for you.** Orbite confirms in one short line ("SHOP_PASSWORD is kept, and your message removed."), and your agent no longer adds a paragraph of its own saying the same.
+
 ## 0.5.1
 
 Released on 2026-11-21.
