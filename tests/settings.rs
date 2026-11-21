@@ -353,3 +353,54 @@ async fn asked_in_plain_words_the_agent_adds_an_ai_and_its_key_is_given_in_the_c
         Some("mk-a-key-made-up-for-this-test")
     );
 }
+
+#[tokio::test]
+async fn a_key_and_a_secret_the_agent_asks_for_together_are_asked_one_after_the_other() {
+    let home = tempfile::tempdir().unwrap();
+    let chosen = orbite::ProviderChoice {
+        name: "groq".into(),
+        model: "first-model".into(),
+        ..Default::default()
+    };
+    Config { provider: Some(chosen), ..Config::default() }.save(home.path()).unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([
+            ("command", serde_json::json!({ "command": "/secret BANK_PASSWORD" })),
+            ("command", serde_json::json!({ "command": "/providers add mistral mistral-large" })),
+        ])
+        .then(Ok("[silent]".into()))
+        // Told that the secret is kept, the model has nothing to add.
+        .then(Ok("[silent]".into()));
+    let (mut channel, mut owner) = memory_channel();
+    let store = Store::open(home.path().join("orbite.db")).unwrap();
+    let (folder, model) = (home.path().to_owned(), provider.clone());
+    let _running = tokio::spawn(async move {
+        Agent::new(model, store)
+            .configured_in(&folder)
+            .keeping_secrets_in(&folder)
+            .restarted_by_its_service()
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("Keep my bank password, and add Mistral as a backup AI.");
+    owner.is_asked().await;
+    owner.allows();
+    // One question at a time: the secret first, and what is sent answers it.
+    assert!(owner.hears().await.contains("BANK_PASSWORD"));
+    owner.says("correct-horse-battery");
+    assert!(owner.hears().await.contains("is kept"));
+    // Only then the key, under its own name.
+    let wanted = owner.hears().await;
+    assert!(wanted.contains("API key") && wanted.contains("Mistral"), "{wanted}");
+    owner.says("mk-a-key-made-up-for-this-test");
+    assert!(owner.hears().await.contains("mistral is added"));
+
+    let kept = orbite::Secrets::kept_in(home.path());
+    assert_eq!(kept.get("BANK_PASSWORD").unwrap().as_deref(), Some("correct-horse-battery"));
+    assert_eq!(
+        kept.get("ORBITE_KEY_MISTRAL").unwrap().as_deref(),
+        Some("mk-a-key-made-up-for-this-test")
+    );
+}

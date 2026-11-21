@@ -2,6 +2,17 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.15
+
+Released on 2026-11-21. More independent checks of the secrets code, this time before release; update from any 0.5 version.
+
+- **Orbite asks you one thing at a time.** When your agent asked for a secret and for the key of a new AI together, what you sent for the first could be stored as the second. Whatever would open a second question now waits for the first to be settled.
+- **A secret taken out of your message is never filed under another name.** At the strict setting, a value your agent failed to name could later be kept under the next name it asked for. It is now dropped, and you are told, unless it is named in the turn that follows.
+- **Your agent cannot have a secret replaced by your next message.** Asked twice for the same secret, or for one already kept, Orbite used to say that what you sent next would replace it. A repeat is now ignored, and replacing one your agent asks about takes a tap on a button first.
+- On Telegram, a button left under an earlier question, or tapped twice, no longer answers the next one.
+- A key written while Orbite waits for your answer is removed from the chat at once, and resetting the conversation removes the answers it gives up.
+- After a restart, Orbite says when a message it was holding back, or something written or asked just before, was lost.
+
 ## 0.5.14
 
 Released on 2026-11-21. A fourth independent check of the secrets code; update from any 0.5 version.
