@@ -609,6 +609,14 @@ impl Channel for Telegram {
                 Sent::Tap(tap) => self.taps.push_back(tap),
             }
         }
+        // A choice tapped before the question is no answer to it either.
+        let (chosen, others): (Vec<Tap>, Vec<Tap>) =
+            self.taps.drain(..).partition(|tap| tap.choice.starts_with('/'));
+        self.taps = others.into();
+        for tap in chosen {
+            self.acknowledge(&tap, "").await;
+            written.push(tap.choice);
+        }
         written
     }
 

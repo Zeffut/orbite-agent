@@ -916,6 +916,19 @@ async fn what_arrived_before_a_question_is_handed_over_as_written_before_it() {
 }
 
 #[tokio::test]
+async fn a_choice_tapped_before_a_question_is_handed_over_as_written_before_it() {
+    let server =
+        telegram_asking(vec![text_from(1, OWNER, "first"), tap(2, OWNER, 7, "/withheld send")])
+            .await;
+    let mut channel = telegram(&server);
+    assert_eq!(received(&mut channel).await, "first");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_eq!(channel.written_before().await, ["/withheld send"]);
+    assert!(channel.written_before().await.is_empty());
+}
+
+#[tokio::test]
 async fn a_bot_telegram_refuses_is_asked_about_less_and_less_often() {
     let server = MockServer::start().await;
     Mock::given(path("/botTOKEN/getUpdates"))
