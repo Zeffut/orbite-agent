@@ -605,7 +605,7 @@ impl Channel for Telegram {
         let holding: Vec<i64> = self
             .lately
             .iter()
-            .filter(|(_, said)| said.contains(text))
+            .filter(|(_, said)| crate::secrets::holds_whole(said, text))
             .map(|(message, _)| *message)
             .collect();
         for message in holding {

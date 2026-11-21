@@ -286,6 +286,43 @@ fn write_privately(path: &Path, content: &[u8]) -> Result<(), SecretsError> {
 
 /// True when `text` holds what looks like a secret: a key or token of a kind
 /// that is recognisable by its shape.
+/// Where `value` stands in `text` as a whole: not as a part of a longer
+/// word. A secret is never looked for inside other words, or any short one
+/// would be found everywhere.
+fn stands_whole(text: &str, value: &str) -> Vec<usize> {
+    if value.is_empty() {
+        return Vec::new();
+    }
+    let apart = |near: Option<char>| near.is_none_or(|near| !near.is_alphanumeric());
+    text.match_indices(value)
+        .filter(|(at, _)| {
+            apart(text[..*at].chars().next_back()) && apart(text[at + value.len()..].chars().next())
+        })
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// True when `text` holds `value` as a whole.
+pub(crate) fn holds_whole(text: &str, value: &str) -> bool {
+    !stands_whole(text, value).is_empty()
+}
+
+/// `text` with `with` wherever `value` stands as a whole.
+pub(crate) fn without_whole(text: &str, value: &str, with: &str) -> String {
+    let mut cleared = String::with_capacity(text.len());
+    let mut from = 0;
+    for at in stands_whole(text, value) {
+        if at < from {
+            continue;
+        }
+        cleared.push_str(&text[from..at]);
+        cleared.push_str(with);
+        from = at + value.len();
+    }
+    cleared.push_str(&text[from..]);
+    cleared
+}
+
 /// True when `text` speaks of a password, a code or a key: it may hold one
 /// written in plain words, which nothing can tell from any other word.
 pub(crate) fn speaks_of_a_secret(text: &str) -> bool {

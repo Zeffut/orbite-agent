@@ -397,28 +397,64 @@ impl Store {
         Ok(())
     }
 
-    /// Replaces `value` by `with` wherever the Conversation kept it: a
-    /// secret that was written in it, which must not be shown again.
+    /// Replaces `value` by `with` where the latest of the Conversation kept
+    /// it: a secret that was written in it, which must not be shown again.
+    /// Only what was said or answered is changed, never how an entry is
+    /// built, and only where the value stands as a whole.
     pub(crate) fn redact(&self, value: &str, with: &str) -> Result<(), StoreError> {
         if value.is_empty() {
             return Ok(());
         }
-        // As it is written inside the JSON each entry is kept as.
-        let inside = |text: &str| {
-            let quoted = serde_json::to_string(text).unwrap_or_default();
-            quoted[1..quoted.len().saturating_sub(1)].to_owned()
-        };
+        fn cleared(entry: &mut serde_json::Value, value: &str, with: &str) -> bool {
+            match entry {
+                serde_json::Value::String(text) if crate::secrets::holds_whole(text, value) => {
+                    *text = crate::secrets::without_whole(text, value, with);
+                    true
+                }
+                // Every one of them is gone through: the value may be in several.
+                serde_json::Value::Array(all) => {
+                    let mut any = false;
+                    for one in all.iter_mut() {
+                        any |= cleared(one, value, with);
+                    }
+                    any
+                }
+                serde_json::Value::Object(all) => {
+                    let mut any = false;
+                    for one in all.values_mut() {
+                        any |= cleared(one, value, with);
+                    }
+                    any
+                }
+                _ => false,
+            }
+        }
         let database = self.database.lock().expect("the Store is not poisoned");
-        let holding: Vec<(i64, String)> = {
-            let mut reading = database.prepare("SELECT id, body FROM messages")?;
+        let latest: Vec<(i64, String)> = {
+            let mut reading =
+                database.prepare("SELECT id, body FROM messages ORDER BY id DESC LIMIT 40")?;
             let read = reading.query_map((), |row| Ok((row.get(0)?, row.get(1)?)))?;
-            read.filter_map(Result::ok)
-                .filter(|(_, body): &(i64, String)| body.contains(&inside(value)))
-                .collect()
+            read.filter_map(Result::ok).collect()
         };
-        for (id, body) in holding {
-            let cleared = body.replace(&inside(value), &inside(with));
-            database.execute("UPDATE messages SET body = ?1 WHERE id = ?2", (cleared, id))?;
+        for (id, body) in latest {
+            let Ok(mut entry) = serde_json::from_str::<serde_json::Value>(&body) else { continue };
+            if cleared(&mut entry, value, with) {
+                database.execute(
+                    "UPDATE messages SET body = ?1 WHERE id = ?2",
+                    (entry.to_string(), id),
+                )?;
+            }
+        }
+        // The summary of what came before is shown to the model on every turn.
+        let summary: Option<String> = database
+            .query_row("SELECT value FROM settings WHERE key = 'summary'", (), |row| row.get(0))
+            .ok();
+        if let Some(summary) = summary.filter(|summary| crate::secrets::holds_whole(summary, value))
+        {
+            database.execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'summary'",
+                [crate::secrets::without_whole(&summary, value, with)],
+            )?;
         }
         Ok(())
     }

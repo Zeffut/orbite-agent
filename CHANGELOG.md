@@ -2,6 +2,19 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.11
+
+Released on 2026-11-21. Fixes found by an independent review of versions 0.5.0 to 0.5.10; update from any of them.
+
+- **A model talked into it could wipe words from your conversation.** When your agent put away "a password you wrote", any piece of text passed for one: a single letter would have been removed from every recent message, breaking the conversation until it was reset, and your Telegram messages holding it deleted. A secret is now only what you wrote as a whole word, in the message being answered, at least four characters long; it is cleared field by field, never inside other words; and replacing a secret already kept asks you first.
+- **A secret you were asked for could reach the AI provider.** If your agent asked for another thing right after asking you for a secret, or if Orbite restarted meanwhile, your reply was taken for an ordinary message. Only what you write answers what Orbite asked you, and what it is waiting for survives a restart.
+- A command your agent gives is carried out exactly as it was checked, and one Orbite does not know is dropped, never taken for something you said.
+- At the strict setting, a password written while your agent is working is held back as well.
+- In the terminal, what was typed before an approval was shown no longer answers it.
+- A secret that begins with a slash is kept, not mistaken for a command; the message removed is the one that held it, not the latest.
+- Sub-agents and routines under way are held to your permission level as it is now, not as it was when they started.
+- Removing Orbite on Debian and Ubuntu only removes the packages its own removals leave unneeded.
+
 ## 0.5.10
 
 Released on 2026-11-21.

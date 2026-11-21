@@ -185,7 +185,8 @@ pub struct Agent<P> {
     owed: bool,
     /// Commands the Owner wrote while the Agent worked: carried out as
     /// commands once it is done, not handed to the model as something said.
-    set_aside: std::collections::VecDeque<String>,
+    /// With each, whether the Agent gave it (true) or the Owner wrote it.
+    set_aside: std::collections::VecDeque<(String, bool)>,
     /// The name of the secret whose value the Owner is about to send:
     /// what they write next is kept under it, and shown to no model.
     awaiting_secret: Option<String>,
@@ -201,6 +202,8 @@ pub struct Agent<P> {
     withheld: Option<(String, bool)>,
     /// A secret taken out of such a message, waiting for the Agent to name it.
     unnamed_secret: Option<String>,
+    /// What is written down of what Orbite awaits from its Owner.
+    awaited_kept: Option<String>,
     /// A Provider being added, by name and model, whose API Key the Owner
     /// is about to send.
     pending_provider: Option<(String, String)>,
@@ -258,6 +261,7 @@ impl<P: Provider + 'static> Agent<P> {
             may_stay_silent: false,
             withheld: None,
             unnamed_secret: None,
+            awaited_kept: None,
             pending_provider: None,
             wake_up_pace: 0,
             last_active: 0,
@@ -436,6 +440,7 @@ impl<P: Provider + 'static> Agent<P> {
         if self.unfinished().unwrap_or(false) && !self.respond_on(channel, false).await {
             return;
         }
+        self.recall_what_was_awaited();
         // A connector added just before Orbite started again is gone on
         // with: connected, or the link to sign in to it.
         if let Ok(Some(name)) = self.store.setting("connect_after_restart") {
@@ -451,10 +456,18 @@ impl<P: Provider + 'static> Agent<P> {
         loop {
             // What is set aside is taken first: a command the Agent gave for
             // its Owner, or one they wrote while it worked.
+            self.keep_what_is_awaited();
             let asked_meanwhile = !self.set_aside.is_empty();
+            // True for a command the Agent gave: it is carried out as a
+            // command and nothing else. It answers nothing Orbite asked the
+            // Owner, and is never kept as something the Owner said.
+            let mut by_the_agent = false;
             let mut text = tokio::select! {
                 biased;
-                Some(text) = std::future::ready(self.set_aside.pop_front()) => text,
+                Some((text, agent)) = std::future::ready(self.set_aside.pop_front()) => {
+                    by_the_agent = agent;
+                    text
+                }
                 written = channel.receive() => match written {
                     Some(text) => text,
                     None => return,
@@ -466,6 +479,9 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
                 _ = time_check.tick() => {
+                    // Those at work for the Agent are held to what it is
+                    // held to now, not to what it was when they started.
+                    self.subagents.allow(self.allowance());
                     let _ = self.run_due_routines();
                     self.take_notices();
                     self.count_what_others_spent();
@@ -487,7 +503,7 @@ impl<P: Provider + 'static> Agent<P> {
             // A message held back at the strict setting: sent on as it is,
             // or its secret taken out first, as the Owner says.
             let mut looked_at = false;
-            if let Some((held, awaiting_value)) = self.withheld.take() {
+            if !by_the_agent && let Some((held, awaiting_value)) = self.withheld.take() {
                 let say = |english: &'static str, french: &'static str| {
                     self.language.say(english, french)
                 };
@@ -513,7 +529,7 @@ impl<P: Provider + 'static> Agent<P> {
                     given_up if gives_up(given_up) => {
                         channel.send(say("Nothing was kept.", "Rien n'a été gardé.")).await.is_ok()
                     }
-                    value if awaiting_value && !value.starts_with('/') => {
+                    value if awaiting_value && !is_a_command(value) => {
                         channel.erase_last_received().await;
                         // What the model reads has the value taken out.
                         let said = held.replace(value, "[secret]");
@@ -557,7 +573,7 @@ impl<P: Provider + 'static> Agent<P> {
             }
             // The key of the Provider being added: sealed, removed from the
             // Channel, and the Provider is then added.
-            if let Some((name, model)) = self.pending_provider.take() {
+            if !by_the_agent && let Some((name, model)) = self.pending_provider.take() {
                 if gives_up(&text) {
                     let said = self.language.say("Nothing was kept.", "Rien n'a été gardé.");
                     if channel.send(said).await.is_err() {
@@ -565,8 +581,11 @@ impl<P: Provider + 'static> Agent<P> {
                     }
                     continue;
                 }
-                if !text.trim_start().starts_with('/') {
-                    channel.erase_last_received().await;
+                if !is_a_command(&text) {
+                    channel.erase_received_holding(text.trim()).await;
+                    if !asked_meanwhile {
+                        channel.erase_last_received().await;
+                    }
                     let kept = match self.host.secrets.as_ref() {
                         Some(secrets) => secrets
                             .set(&crate::providers::key_of(&name), text.trim())
@@ -586,7 +605,7 @@ impl<P: Provider + 'static> Agent<P> {
             }
             // The value of the secret named just before: kept, and never
             // shown to a model. Another command instead means a change of mind.
-            if let Some(name) = self.awaiting_secret.take() {
+            if !by_the_agent && let Some(name) = self.awaiting_secret.take() {
                 if gives_up(&text) {
                     let said = self.language.say("Nothing was kept.", "Rien n'a été gardé.");
                     if channel.send(said).await.is_err() {
@@ -594,8 +613,9 @@ impl<P: Provider + 'static> Agent<P> {
                     }
                     continue;
                 }
-                if !text.trim_start().starts_with('/') {
-                    if !self.keep_secret(channel, &name, text.trim(), false).await {
+                if !is_a_command(&text) {
+                    if !self.keep_secret(channel, &name, text.trim(), false, !asked_meanwhile).await
+                    {
                         return;
                     }
                     continue;
@@ -612,12 +632,13 @@ impl<P: Provider + 'static> Agent<P> {
                     // The one the Owner wrote in passing, named by the Agent.
                     [_, name] if held.is_some() => {
                         let value = held.map(|(_, value)| value).unwrap_or_default();
-                        self.keep_secret(channel, name, &value, true).await
+                        self.keep_secret(channel, name, &value, true, false).await
                     }
-                    // The one taken out of a message before any model saw it.
-                    [_, name] if self.unnamed_secret.is_some() => {
+                    // The one taken out of a message before any model saw it,
+                    // which the Agent alone is asked to name.
+                    [_, name] if by_the_agent && self.unnamed_secret.is_some() => {
                         let value = self.unnamed_secret.take().unwrap_or_default();
-                        self.keep_secret(channel, name, &value, false).await
+                        self.keep_secret(channel, name, &value, false, false).await
                     }
                     [_, name] => match self.secret_may_be_named(name) {
                         Ok(name) => {
@@ -640,7 +661,12 @@ impl<P: Provider + 'static> Agent<P> {
                     [_, name, ..] => {
                         let value =
                             text.trim_start()["/secret".len()..].trim_start()[name.len()..].trim();
-                        self.keep_secret(channel, name, value, false).await
+                        // A value is the Owner's to give: the Agent's own is
+                        // kept only from what they wrote, which is done above.
+                        if by_the_agent {
+                            continue;
+                        }
+                        self.keep_secret(channel, name, value, false, !asked_meanwhile).await
                     }
                     _ => {
                         let said = self.language.say(
@@ -964,6 +990,11 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 continue;
             }
+            // A command of the Agent's that Orbite does not know is dropped: it
+            // is never taken for something its Owner said.
+            if by_the_agent {
+                continue;
+            }
             // At the strict setting, what speaks of a password is not shown to
             // a model before the Owner has said whether it holds one.
             if !looked_at
@@ -1189,8 +1220,11 @@ impl<P: Provider + 'static> Agent<P> {
                 Attended::Interrupted => {
                     // The Owner added something: think again with it.
                     for text in said {
-                        if text.trim_start().starts_with('/') || self.expects_a_secret() {
-                            self.set_aside.push_back(text);
+                        if text.trim_start().starts_with('/')
+                            || self.expects_a_secret()
+                            || self.is_to_be_held_back(&text)
+                        {
+                            self.set_aside.push_back((text, false));
                             continue;
                         }
                         let text = self.heard(self.fit_to_keep(text)).await;
@@ -1288,7 +1322,7 @@ impl<P: Provider + 'static> Agent<P> {
                 let named = |field: &str| action.input[field].as_str().unwrap_or_default();
                 let own = match action.name.as_str() {
                     "delegate" => Some({
-                        self.subagents.allowed = self.allowance();
+                        self.subagents.allow(self.allowance());
                         self.subagents.start(
                             named("name"),
                             named("task"),
@@ -1415,8 +1449,11 @@ impl<P: Provider + 'static> Agent<P> {
                 return self.stopped(channel, &said).await;
             }
             for text in said {
-                if text.trim_start().starts_with('/') || self.expects_a_secret() {
-                    self.set_aside.push_back(text);
+                if text.trim_start().starts_with('/')
+                    || self.expects_a_secret()
+                    || self.is_to_be_held_back(&text)
+                {
+                    self.set_aside.push_back((text, false));
                     continue;
                 }
                 let text = self.heard(self.fit_to_keep(text)).await;
@@ -1576,6 +1613,11 @@ enum Changes {
 /// Owner's own to write.
 fn command_for_the_agent(command: &str) -> Result<Changes, String> {
     let words: Vec<&str> = command.split_whitespace().collect();
+    // Written plainly, a word and a space at a time: what is carried out is
+    // then exactly what was looked at here.
+    if words.join(" ") != command {
+        return Err("Write the command plainly: its words, one space between them.".into());
+    }
     Ok(match words[..] {
         ["/connect", _, address] if address.starts_with("https://") => Changes::Something,
         ["/mcp", "connect", _]
@@ -2555,7 +2597,7 @@ impl<P: Provider + 'static> Agent<P> {
                 routine.name,
                 now.format(routines::MOMENT)
             );
-            self.subagents.allowed = self.allowance();
+            self.subagents.allow(self.allowance());
             let started = self.subagents.run_routine(
                 &routine.name,
                 who,
@@ -2591,14 +2633,53 @@ impl<P: Provider + 'static> Agent<P> {
     /// True when what the Owner writes next is the value of a secret they
     /// named: it is for Orbite alone, whatever the Agent is doing.
     fn expects_a_secret(&self) -> bool {
-        let named = |command: &String| {
+        // Asked for by Orbite already, or about to be because the Owner
+        // themselves named it. What the Agent set aside changes nothing here:
+        // the Owner has not been asked anything yet.
+        let named_by_the_owner = self.set_aside.back().is_some_and(|(command, by_the_agent)| {
             let words: Vec<&str> = command.split_whitespace().collect();
-            words.len() == 2 && words[0] == "/secret"
+            !by_the_agent && words.len() == 2 && words[0] == "/secret"
+        });
+        self.awaiting_secret.is_some()
+            || self.pending_provider.is_some()
+            || self.withheld.is_some()
+            || named_by_the_owner
+    }
+
+    /// True when `text` is not to be shown to a model yet: at the strict
+    /// setting, what speaks of a password waits for the Owner to say what
+    /// it is, whenever it was written.
+    fn is_to_be_held_back(&self, text: &str) -> bool {
+        matches!(self.store.setting("secrets_strict"), Ok(Some(_)))
+            && crate::secrets::speaks_of_a_secret(text)
+    }
+
+    /// Writes down what Orbite is waiting for from its Owner, so that a
+    /// restart does not turn the secret they then send into a message.
+    fn keep_what_is_awaited(&mut self) {
+        let awaited = match (&self.awaiting_secret, &self.pending_provider) {
+            (Some(name), _) => Some(format!("secret {name}")),
+            (None, Some((name, model))) => Some(format!("provider {name} {model}")),
+            (None, None) => None,
         };
-        match self.set_aside.back() {
-            Some(last) => named(last),
-            None => self.awaiting_secret.is_some() || self.pending_provider.is_some(),
+        if awaited != self.awaited_kept {
+            let _ = self.store.set_setting("awaited", awaited.as_deref());
+            self.awaited_kept = awaited;
         }
+    }
+
+    /// Takes up again what Orbite was waiting for when it last stopped.
+    fn recall_what_was_awaited(&mut self) {
+        let Ok(Some(awaited)) = self.store.setting("awaited") else { return };
+        let words: Vec<&str> = awaited.split_whitespace().collect();
+        match words[..] {
+            ["secret", name] => self.awaiting_secret = Some(name.to_owned()),
+            ["provider", name, model] => {
+                self.pending_provider = Some((name.to_owned(), model.to_owned()))
+            }
+            _ => {}
+        }
+        self.awaited_kept = Some(awaited);
     }
 
     /// `name` as a secret of the Owner's may be called, or why it may not.
@@ -2632,10 +2713,12 @@ impl<P: Provider + 'static> Agent<P> {
         name: &str,
         value: &str,
         written_earlier: bool,
+        just_received: bool,
     ) -> bool {
-        if written_earlier {
-            channel.erase_received_holding(value).await;
-        } else {
+        // The messages that hold it, and the one it just came in when it is
+        // the latest: never another one that came since.
+        channel.erase_received_holding(value).await;
+        if just_received {
             channel.erase_last_received().await;
         }
         let kept = match (self.secret_may_be_named(name), self.host.secrets.as_ref()) {
@@ -3112,6 +3195,31 @@ impl<P: Provider + 'static> Agent<P> {
             "list_always_allowed" | "revoke_always_allowed" => Review::Free,
             "command" => {
                 let command = request.input["command"].as_str().unwrap_or_default().trim();
+                // A secret that is already kept is replaced only with the
+                // Owner's say: its name, never its value, is what they see.
+                let words: Vec<&str> = command.split_whitespace().collect();
+                if let ["/secret", name, _, ..] = words[..]
+                    && self.host.secrets.as_ref().is_some_and(|secrets| {
+                        matches!(secrets.get(&name.to_uppercase()), Ok(Some(_)))
+                    })
+                {
+                    return Some(Review::Ask(Approval {
+                        summary: format!(
+                            "{} {}",
+                            self.language.say("Replace the secret", "Remplacer le secret"),
+                            name.to_uppercase()
+                        ),
+                        detail: self
+                            .language
+                            .say(
+                                "By what you just wrote. The one kept until now is lost.",
+                                "Par ce que tu viens d'écrire. Celui gardé jusqu'ici est perdu.",
+                            )
+                            .into(),
+                        irreversible: true,
+                        ..Approval::default()
+                    }));
+                }
                 match command_for_the_agent(command) {
                     // Refused when carried out, with what may be asked.
                     Err(_) | Ok(Changes::Nothing) => Review::Free,
@@ -3283,11 +3391,22 @@ impl<P: Provider + 'static> Agent<P> {
                 let words: Vec<&str> = command.split_whitespace().collect();
                 if let ["/secret", name, _, ..] = words[..] {
                     let value = command["/secret".len()..].trim_start()[name.len()..].trim();
-                    let written = self.store.conversation().is_ok_and(|conversation| {
-                        conversation.iter().any(
-                            |message| matches!(message, Message::Owner(text) if text.contains(value)),
-                        )
-                    });
+                    // Only what the Owner wrote in what is being answered now,
+                    // as a whole, and long enough to be a secret: nothing a
+                    // model picks out of an old message or out of a word.
+                    let written = value.chars().count() >= 4
+                        && self.store.conversation().is_ok_and(|conversation| {
+                            conversation
+                                .iter()
+                                .rev()
+                                .take_while(|message| {
+                                    !matches!(message, Message::Agent { actions, .. } if actions.is_empty())
+                                })
+                                .any(|message| {
+                                    matches!(message, Message::Owner(text)
+                                        if crate::secrets::holds_whole(text, value))
+                                })
+                        });
                     if !written {
                         return "That value is not something your Owner wrote in the conversation: \
                                 nothing was kept. To have them send it unseen, give /secret NAME."
@@ -3303,7 +3422,7 @@ impl<P: Provider + 'static> Agent<P> {
                     };
                     self.held_secrets.retain(|(named, _)| named != &name);
                     self.held_secrets.push((name.clone(), value.to_owned()));
-                    self.set_aside.push_front(format!("/secret {name}"));
+                    self.set_aside.push_front((format!("/secret {name}"), true));
                     self.may_stay_silent = true;
                     return format!(
                         "It is kept as {name} right after your reply, and the message it was written \
@@ -3319,7 +3438,7 @@ impl<P: Provider + 'static> Agent<P> {
                         // Owner had written it: Orbite answers it itself.
                         // What makes Orbite start again goes last: the
                         // others would be lost with it.
-                        let restarts = |command: &String| {
+                        let restarts = |(command, _): &(String, bool)| {
                             let words: Vec<&str> = command.split_whitespace().collect();
                             match words[..] {
                                 ["/connect", ..] | ["/connections", _, _] => true,
@@ -3330,12 +3449,12 @@ impl<P: Provider + 'static> Agent<P> {
                                 _ => false,
                             }
                         };
-                        let before = if restarts(&command.to_owned()) {
+                        let before = if restarts(&(command.to_owned(), true)) {
                             self.set_aside.len()
                         } else {
                             self.set_aside.iter().position(restarts).unwrap_or(self.set_aside.len())
                         };
-                        self.set_aside.insert(before, command.to_owned());
+                        self.set_aside.insert(before, (command.to_owned(), true));
                         self.may_stay_silent = true;
                         "It is carried out right after your reply, and Orbite itself tells your \
                          Owner what comes of it: do not describe, promise or repeat it. Unless you \
@@ -3429,7 +3548,7 @@ impl<P: Provider + 'static> Agent<P> {
                             routine.name,
                             now.format(routines::MOMENT)
                         );
-                        self.subagents.allowed = self.allowance();
+                        self.subagents.allow(self.allowance());
                         let started = self.subagents.run_routine(
                             &routine.name,
                             who,
@@ -3738,6 +3857,29 @@ fn gives_up(text: &str) -> bool {
     let word = text.trim().trim_end_matches(['!', '.']).to_lowercase();
     ["/cancel", "cancel", "annule", "annuler", "laisse tomber", "never mind"]
         .contains(&word.as_str())
+}
+
+/// True when `text` is one of Orbite's commands rather than something said.
+/// A password may well begin with a slash; a command is known by its word.
+fn is_a_command(text: &str) -> bool {
+    const COMMANDS: &[&str] = &[
+        "/secret",
+        "/secrets",
+        "/settings",
+        "/connections",
+        "/connect",
+        "/mcp",
+        "/providers",
+        "/usage",
+        "/extensions",
+        "/reset",
+        "/stop",
+        "/cancel",
+        "/withheld",
+        "/start",
+        "/help",
+    ];
+    text.split_whitespace().next().is_some_and(|word| COMMANDS.contains(&word))
 }
 
 pub(crate) fn means_stop(text: &str) -> bool {

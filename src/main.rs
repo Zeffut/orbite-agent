@@ -796,26 +796,56 @@ impl Brought {
         }
     }
 
-    /// Removes `packages` and what came with them that nothing needs any more.
+    /// Removes `packages` and what came with them that nothing needs any
+    /// more: only what their removal leaves unneeded, never what the machine
+    /// already had lying unneeded before.
     fn remove(&self, packages: &[String]) -> bool {
-        let (program, arguments): (&str, &[&str]) = match self.manager.as_str() {
-            "apt-get" => (
-                "apt-get",
-                &["-o", "DPkg::Lock::Timeout=600", "purge", "-y", "-qq", "--auto-remove"],
-            ),
-            "dnf" => ("dnf", &["remove", "-y", "-q"]),
-            "pacman" => ("pacman", &["-Rns", "--noconfirm"]),
-            "zypper" => ("zypper", &["--non-interactive", "remove", "--clean-deps"]),
-            _ => return false,
+        let run = |program: &str, arguments: &[&str], more: &[String]| {
+            std::process::Command::new(program)
+                .args(arguments)
+                .args(more)
+                .env("DEBIAN_FRONTEND", "noninteractive")
+                .env("LC_ALL", "C")
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
         };
-        std::process::Command::new(program)
-            .args(arguments)
-            .args(packages)
-            .env("DEBIAN_FRONTEND", "noninteractive")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success())
+        let done =
+            |ran: std::io::Result<std::process::Output>| ran.is_ok_and(|ran| ran.status.success());
+        match self.manager.as_str() {
+            "apt-get" => {
+                // What apt would clear away by itself, before and after.
+                let unneeded = || -> Vec<String> {
+                    run("apt-get", &["-s", "autoremove"], &[])
+                        .map(|tried| {
+                            String::from_utf8_lossy(&tried.stdout)
+                                .lines()
+                                .filter_map(|line| line.strip_prefix("Remv "))
+                                .filter_map(|line| line.split_whitespace().next())
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                let before = unneeded();
+                let waits = ["-o", "DPkg::Lock::Timeout=600", "purge", "-y", "-qq"];
+                if !done(run("apt-get", &waits, packages)) {
+                    return false;
+                }
+                let left: Vec<String> =
+                    unneeded().into_iter().filter(|package| !before.contains(package)).collect();
+                if !left.is_empty() {
+                    let _ = run("apt-get", &waits, &left);
+                }
+                true
+            }
+            "dnf" => done(run("dnf", &["remove", "-y", "-q"], packages)),
+            "pacman" => done(run("pacman", &["-Rns", "--noconfirm"], packages)),
+            "zypper" => {
+                done(run("zypper", &["--non-interactive", "remove", "--clean-deps"], packages))
+            }
+            _ => false,
+        }
     }
 }
 

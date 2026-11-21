@@ -266,15 +266,34 @@ async fn stopping_orbite_closes_its_browser_and_its_screen() {
         .env("ORBITE_MODEL", "pretend")
         .env("ORBITE_API_KEY", "none")
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut typed = orbite.stdin.take().unwrap();
-    // The request, then yes to going to the site.
-    typed.write_all(b"Open the site.\ny\n").await.unwrap();
+    let mut shown = orbite.stdout.take().unwrap();
+    typed.write_all(b"Open the site.\n").await.unwrap();
     typed.flush().await.unwrap();
+    // Yes to going to the site, once that is asked: what is typed before a
+    // question is shown is no answer to it.
+    let mut read = String::new();
+    let mut part = [0u8; 1024];
+    while !read.contains("Allow?") {
+        let got = tokio::time::timeout(Duration::from_secs(20), shown.read(&mut part))
+            .await
+            .expect("going to the site was not asked about")
+            .unwrap();
+        assert!(got > 0, "Orbite ended before asking: {read}");
+        read.push_str(&String::from_utf8_lossy(&part[..got]));
+    }
+    typed.write_all(b"y\n").await.unwrap();
+    typed.flush().await.unwrap();
+    // What it shows from here on is read, so that it is never held up writing.
+    tokio::spawn(async move {
+        let mut rest = [0u8; 1024];
+        while matches!(shown.read(&mut rest).await, Ok(got) if got > 0) {}
+    });
 
     // Its screen and its browser are running.
     let noted = home.path().join("computer/profile.running");

@@ -89,10 +89,11 @@ impl<R: AsyncBufRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Channel for T
             approval.summary, approval.detail
         ))
         .await?;
-        let typed = match self.typed_ahead.pop_front() {
-            Some(ahead) => ahead,
-            None => self.typed.next_line().await?.unwrap_or_default(),
-        };
+        // What was typed before the question was shown is no answer to it.
+        if let Some(ahead) = self.typed_ahead.pop_front() {
+            return Ok(Answer::Wrote(ahead));
+        }
+        let typed = self.typed.next_line().await?.unwrap_or_default();
         Ok(match typed.trim() {
             "y" | "Y" | "yes" => Answer::Allowed,
             "a" | "A" | "always" if !approval.critical => Answer::AlwaysAllowed,

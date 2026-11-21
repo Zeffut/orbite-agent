@@ -59,7 +59,9 @@ pub(crate) struct Subagents {
     pub(crate) steps: usize,
     /// What the Owner lets be done without asking, as it stood when the
     /// Agent last looked: those it starts are held to the same.
-    pub(crate) allowed: Allowance,
+    /// Shared with those at work: what the Owner tightens holds for them
+    /// at once.
+    allowed: Arc<std::sync::RwLock<Allowance>>,
 }
 
 /// What the Owner lets be done without asking them.
@@ -104,9 +106,19 @@ impl Subagents {
     pub(crate) fn new() -> (Self, mpsc::UnboundedReceiver<Report>) {
         let (reports, arriving) = mpsc::unbounded_channel();
         (
-            Self { running: HashMap::new(), reports, steps: 25, allowed: Allowance::default() },
+            Self {
+                running: HashMap::new(),
+                reports,
+                steps: 25,
+                allowed: Arc::new(std::sync::RwLock::new(Allowance::default())),
+            },
             arriving,
         )
+    }
+
+    /// What those at work for the Agent may do without asking, from now on.
+    pub(crate) fn allow(&self, allowance: Allowance) {
+        *self.allowed.write().expect("not poisoned") = allowance;
     }
 
     pub(crate) fn specs() -> Vec<ActionSpec> {
@@ -258,7 +270,7 @@ async fn work(
     host: &Host,
     task: &str,
     steps: usize,
-    allowed: &Allowance,
+    allowed: &std::sync::RwLock<Allowance>,
 ) -> String {
     let actions: Vec<ActionSpec> = host
         .specs()
@@ -295,7 +307,9 @@ async fn work(
                     Review::Free => host.carry_out(action).await,
                     Review::Refuse(problem) => problem,
                     // What the Agent would do without asking, so does it.
-                    Review::Ask(approval) if allowed.lets(&approval, action) => {
+                    Review::Ask(approval)
+                        if allowed.read().expect("not poisoned").lets(&approval, action) =>
+                    {
                         host.carry_out(action).await
                     }
                     Review::Ask(_) => "This needs the Owner's approval, which a sub-agent cannot \

@@ -17,26 +17,45 @@ async fn a_conversation_typed_in_a_terminal_is_answered_line_by_line() {
 
 #[tokio::test]
 async fn an_approval_is_asked_and_answered_in_the_terminal() {
-    for (typed, created) in
-        [("Create it\ny\n", true), ("Create it\nn\n", false), ("Create it\n", false)]
-    {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Answered once it is shown: yes, no, or the terminal closed on it.
+    for (answered, created) in [(Some("y"), true), (Some("n"), false), (None, false)] {
         let workspace = tempfile::tempdir().unwrap();
         let provider = ScriptedProvider::default();
         provider
             .then_acts([("run_command", serde_json::json!({ "command": "touch made.txt" }))])
             .then(Ok("Done.".into()));
-        let mut shown = Vec::new();
+        let (mut typing, typed) = tokio::io::duplex(1024);
+        let (shown, mut reading) = tokio::io::duplex(65536);
+        let folder = workspace.path().to_owned();
+        let running = tokio::spawn(async move {
+            let mut terminal = Terminal::new(tokio::io::BufReader::new(typed), shown);
+            Agent::new(provider, Store::in_memory())
+                .working_in(folder)
+                .converse(&mut terminal)
+                .await;
+        });
 
-        let mut terminal = Terminal::new(typed.as_bytes(), &mut shown);
-        Agent::new(provider, Store::in_memory())
-            .working_in(workspace.path())
-            .converse(&mut terminal)
-            .await;
+        typing.write_all(b"Create it\n").await.unwrap();
+        let mut shown = String::new();
+        let mut part = [0u8; 512];
+        while !shown.contains("Allow?") {
+            let got =
+                tokio::time::timeout(std::time::Duration::from_secs(10), reading.read(&mut part))
+                    .await
+                    .expect("nothing was asked")
+                    .unwrap();
+            shown.push_str(&String::from_utf8_lossy(&part[..got]));
+        }
+        if let Some(answered) = answered {
+            typing.write_all(format!("{answered}\n").as_bytes()).await.unwrap();
+        }
+        drop(typing);
+        tokio::time::timeout(std::time::Duration::from_secs(10), running).await.unwrap().unwrap();
 
-        let shown = String::from_utf8(shown).unwrap();
         assert!(shown.contains("touch made.txt"), "{shown}");
         assert!(shown.contains("cannot be undone"), "{shown}");
-        assert_eq!(workspace.path().join("made.txt").exists(), created, "typed {typed:?}");
+        assert_eq!(workspace.path().join("made.txt").exists(), created, "answered {answered:?}");
     }
 }
 
@@ -103,8 +122,21 @@ async fn stop_typed_while_a_command_runs_halts_it_and_what_else_was_typed_waits_
         Agent::new(provider, Store::in_memory()).working_in(folder).converse(&mut terminal).await;
     });
 
-    // Allowed at once; then, while it runs, a question and the order to stop.
-    typing.write_all(b"Run the long job.\ny\n").await.unwrap();
+    // Allowed once asked; then, while it runs, a question and the order to stop.
+    typing.write_all(b"Run the long job.\n").await.unwrap();
+    let mut seen = String::new();
+    let mut part = [0u8; 512];
+    while !seen.contains("Allow?") {
+        let got = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tokio::io::AsyncReadExt::read(&mut reading, &mut part),
+        )
+        .await
+        .expect("the command was not asked about")
+        .unwrap();
+        seen.push_str(&String::from_utf8_lossy(&part[..got]));
+    }
+    typing.write_all(b"y\n").await.unwrap();
     let started = workspace.path().join("started.txt");
     for _ in 0..200 {
         if started.exists() {
@@ -123,8 +155,39 @@ async fn stop_typed_while_a_command_runs_halts_it_and_what_else_was_typed_waits_
 
     assert!(asked.elapsed() < std::time::Duration::from_secs(8));
     assert!(!workspace.path().join("finished.txt").exists());
-    let mut shown = String::new();
+    let mut shown = seen;
     tokio::io::AsyncReadExt::read_to_string(&mut reading, &mut shown).await.unwrap();
     // What was typed before the order waited, and was answered after it.
     assert!(shown.contains("Four."), "{shown}");
+}
+
+#[tokio::test]
+async fn what_is_typed_before_an_approval_is_shown_does_not_answer_it() {
+    use tokio::io::AsyncWriteExt;
+    let workspace = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    // A first command, during which the Owner types ahead; then one that asks.
+    provider
+        .then_acts([("run_command", serde_json::json!({ "command": "sleep 1; ls" }))])
+        .then_acts([("run_command", serde_json::json!({ "command": "touch made.txt" }))])
+        .then(Ok("Left out.".into()));
+    let (mut typing, typed) = tokio::io::duplex(1024);
+    let (shown, mut reading) = tokio::io::duplex(65536);
+    let folder = workspace.path().to_owned();
+    let running = tokio::spawn(async move {
+        let mut terminal = Terminal::new(tokio::io::BufReader::new(typed), shown);
+        Agent::new(provider, Store::in_memory()).working_in(folder).converse(&mut terminal).await;
+    });
+
+    typing.write_all(b"Go on.\n").await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    // Typed while the first command runs, before anything is asked.
+    typing.write_all(b"a\n").await.unwrap();
+    drop(typing);
+    tokio::time::timeout(std::time::Duration::from_secs(10), running).await.unwrap().unwrap();
+
+    let mut shown = String::new();
+    tokio::io::AsyncReadExt::read_to_string(&mut reading, &mut shown).await.unwrap();
+    assert!(shown.contains("touch made.txt"), "the second command was asked about: {shown}");
+    assert!(!workspace.path().join("made.txt").exists(), "it was allowed by what was typed ahead");
 }
