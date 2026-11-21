@@ -275,3 +275,61 @@ async fn the_agents_name_and_its_model_for_light_work_are_changed_from_the_conve
     let listed = orbite(home.path(), &["settings"]);
     assert!(listed.contains("name = Marie Curie") && listed.contains("light = off"), "{listed}");
 }
+
+#[tokio::test]
+async fn asked_in_plain_words_the_agent_adds_an_ai_and_its_key_is_given_in_the_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let chosen = orbite::ProviderChoice {
+        name: "groq".into(),
+        model: "first-model".into(),
+        ..Default::default()
+    };
+    Config { provider: Some(chosen), ..Config::default() }.save(home.path()).unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([(
+            "command",
+            serde_json::json!({ "command": "/providers add mistral mistral-large" }),
+        )])
+        .then(Ok("[silent]".into()));
+    let (mut channel, mut owner) = memory_channel();
+    let store = Store::open(home.path().join("orbite.db")).unwrap();
+    let (folder, model) = (home.path().to_owned(), provider.clone());
+    let running = tokio::spawn(async move {
+        Agent::new(model, store)
+            .configured_in(&folder)
+            .keeping_secrets_in(&folder)
+            .restarted_by_its_service()
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("Add Mistral as a backup AI, with its large model.");
+    // Who the Agent thinks with is the Owner's to agree to.
+    let asked = owner.is_asked().await;
+    assert!(asked.summary.contains("Add the AI mistral"), "{}", asked.summary);
+    owner.allows();
+    // Its key is asked for in the conversation, and never shown to a model.
+    let wanted = owner.hears().await;
+    assert!(wanted.contains("API key") && wanted.contains("Mistral"), "{wanted}");
+    owner.says("mk-a-key-made-up-for-this-test");
+    let added = owner.hears().await;
+    assert!(added.contains("mistral is added"), "{added}");
+    assert!(!added.contains("mk-a-key"), "{added}");
+    // Orbite starts again to think with it too.
+    tokio::time::timeout(std::time::Duration::from_secs(2), running)
+        .await
+        .expect("it kept running")
+        .unwrap();
+
+    let all = Config::load(home.path()).unwrap().providers();
+    assert_eq!(all.len(), 2);
+    assert_eq!((all[1].name.as_str(), all[1].model.as_str()), ("mistral", "mistral-large"));
+    let key = all[1].key.clone().expect("it has a key of its own");
+    assert_eq!(
+        orbite::Secrets::kept_in(home.path()).get(&key).unwrap().as_deref(),
+        Some("mk-a-key-made-up-for-this-test")
+    );
+    let shown = format!("{:?}", provider.every_call());
+    assert!(!shown.contains("mk-a-key"), "the key was shown to a model: {shown}");
+}

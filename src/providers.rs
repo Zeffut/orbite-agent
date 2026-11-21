@@ -131,6 +131,42 @@ pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, Str
             removed = Some(gone);
             done
         }
+        // One more, asked after the others: its key was given beforehand.
+        ["add", name, model] => {
+            let name = name.to_lowercase();
+            let Some(known) = crate::known_providers().iter().find(|known| known.name == name)
+            else {
+                let names: Vec<&str> =
+                    crate::known_providers().iter().map(|known| known.name).collect();
+                return Err(format!(
+                    "No provider is known as \"{name}\". Known: {}.",
+                    names.join(", ")
+                ));
+            };
+            if name == "chatgpt" {
+                return Err("A ChatGPT plan is connected by signing in to it, not added.".into());
+            }
+            if all.iter().any(|provider| provider.name == name) {
+                return Err(format!("{name} is already set up."));
+            }
+            let secrets = Secrets::kept_in(home);
+            let key = key_of(&name);
+            if known.needs_key && secrets.get(&key).map_err(|error| error.to_string())?.is_none() {
+                return Err(format!("{name} needs its API key first."));
+            }
+            give_each_its_key(&mut config, &secrets)?;
+            let mut all = config.providers();
+            all.push(ProviderChoice {
+                name: name.clone(),
+                model: (*model).to_owned(),
+                key: known.needs_key.then_some(key),
+                ..ProviderChoice::default()
+            });
+            config.set_providers(all);
+            format!(
+                "{name} is added, with the model {model}: it is asked when those before it cannot answer."
+            )
+        }
         ["limit", name, tokens] => {
             let at = place(name)?;
             let limit = match *tokens {
@@ -150,9 +186,11 @@ pub async fn change_providers(home: &Path, asked: &[&str]) -> Result<String, Str
             }
         }
         _ => {
-            return Err("Usage: providers first NAME | providers remove NAME | providers limit \
-                        NAME TOKENS (or none)"
-                .into());
+            return Err(
+                "Usage: providers add NAME MODEL | providers first NAME | providers remove \
+                        NAME | providers limit NAME TOKENS (or none)"
+                    .into(),
+            );
         }
     };
     // The lighter model was one of the Provider that came first: it is not

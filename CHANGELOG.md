@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.9
+
+Released on 2026-11-21.
+
+- **Add an AI by asking.** "Add Mistral as a backup, with its large model": your agent adds it once you agree, Orbite asks for its API key in the conversation, seals it, removes your message, and never shows it to a model. Changing which AI is asked first, setting a daily limit or removing one is asked the same way. Until now, adding one took the terminal.
+
 ## 0.5.8
 
 Released on 2026-11-21.

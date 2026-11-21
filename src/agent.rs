@@ -201,6 +201,9 @@ pub struct Agent<P> {
     withheld: Option<(String, bool)>,
     /// A secret taken out of such a message, waiting for the Agent to name it.
     unnamed_secret: Option<String>,
+    /// A Provider being added, by name and model, whose API Key the Owner
+    /// is about to send.
+    pending_provider: Option<(String, String)>,
     /// How often the Agent wakes up when its Owner has set no pace, in
     /// minutes; zero for never.
     wake_up_pace: u32,
@@ -255,6 +258,7 @@ impl<P: Provider + 'static> Agent<P> {
             may_stay_silent: false,
             withheld: None,
             unnamed_secret: None,
+            pending_provider: None,
             wake_up_pace: 0,
             last_active: 0,
             sees_images: true,
@@ -549,6 +553,35 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 if !looked_at {
                     continue;
+                }
+            }
+            // The key of the Provider being added: sealed, removed from the
+            // Channel, and the Provider is then added.
+            if let Some((name, model)) = self.pending_provider.take() {
+                if gives_up(&text) {
+                    let said = self.language.say("Nothing was kept.", "Rien n'a été gardé.");
+                    if channel.send(said).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                if !text.trim_start().starts_with('/') {
+                    channel.erase_last_received().await;
+                    let kept = match self.host.secrets.as_ref() {
+                        Some(secrets) => secrets
+                            .set(&crate::providers::key_of(&name), text.trim())
+                            .map(|_| ())
+                            .map_err(|error| error.to_string()),
+                        None => Err("There is nowhere to keep secrets.".to_owned()),
+                    };
+                    if let Err(problem) = kept {
+                        if channel.send(&format!("🔴 {problem}")).await.is_err() {
+                            return;
+                        }
+                        continue;
+                    }
+                    // Carried on as the command it was waiting for.
+                    text = format!("/providers add {name} {model}");
                 }
             }
             // The value of the secret named just before: kept, and never
@@ -846,6 +879,32 @@ impl<P: Provider + 'static> Agent<P> {
                 && let Some(home) = self.home.clone()
             {
                 let asked: Vec<&str> = asked.split_whitespace().collect();
+                // One that takes a key is added once the Owner has sent it.
+                if let ["add", name, model] = asked[..]
+                    && let Some(known) = crate::known_providers()
+                        .iter()
+                        .find(|known| known.name == name.to_lowercase() && known.needs_key)
+                    && !self.host.secrets.as_ref().is_some_and(|secrets| {
+                        matches!(secrets.get(&crate::providers::key_of(known.name)), Ok(Some(_)))
+                    })
+                {
+                    self.pending_provider = Some((known.name.to_owned(), model.to_owned()));
+                    let said = format!(
+                        "{} **{}**. {}",
+                        self.language.say("Send me the API key of", "Envoie-moi la clé d'API de"),
+                        known.label,
+                        self.language.say(
+                            "I seal it and remove your message; it is used to reach that provider and \
+                             nothing else. Say \"cancel\" to give up.",
+                            "Je la scelle et supprime ton message ; elle ne sert qu'à joindre ce \
+                             fournisseur. Dis « annule » pour renoncer.",
+                        )
+                    );
+                    if channel.send(&said).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
                 let today = (self.clock)().format("%Y-%m-%d").to_string();
                 let used = self.store.tokens_used_on(&today).unwrap_or_default();
                 let changed = match asked.is_empty() {
@@ -870,12 +929,9 @@ impl<P: Provider + 'static> Agent<P> {
                         "Ce sera appliqué au prochain démarrage d'Orbite.",
                     ),
                     (false, _) => self.language.say(
-                        "Change them: /providers first NAME · /providers limit NAME 200000 (or \
-                         none) · /providers remove NAME\nAdd one, on the machine: orbite providers \
-                         add",
-                        "Les changer : /providers first NOM · /providers limit NOM 200000 (ou \
-                         none) · /providers remove NOM\nEn ajouter un, sur la machine : orbite \
-                         providers add",
+                        "To add one, change their order, set a daily limit or remove one, just ask me.",
+                        "Pour en ajouter une, changer leur ordre, fixer une limite par jour ou en retirer \
+                         une, demande-le-moi simplement.",
                     ),
                 });
                 if channel.send(&said).await.is_err() || (restart && self.restarted) {
@@ -1526,6 +1582,11 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
         | ["/settings", _] => Changes::Nothing,
         // A link to follow, or a list: the Owner does the signing in.
         ["/providers", "connect", "chatgpt"] | ["/providers"] | ["/extensions"] => Changes::Nothing,
+        // Who the Agent thinks with: changed for the Owner once they agree.
+        ["/providers", "add", _, _]
+        | ["/providers", "first", _]
+        | ["/providers", "limit", _, _] => Changes::Something,
+        ["/providers", "remove", _] => Changes::ForGood,
         ["/extensions", "off" | "on", _] => Changes::Something,
         ["/extensions", "remove", _] => Changes::ForGood,
         // With a value only when the Owner wrote it themselves, which is
@@ -1539,7 +1600,8 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
         _ => {
             return Err("That is not a command you can give. You can give: /connect NAME \
                         https://ADDRESS, /mcp connect NAME, /connections [off|on|disconnect|remove \
-                        NAME], /secret NAME, /providers connect chatgpt, /extensions [off|on|remove NAME], \
+                        NAME], /secret NAME, /providers [add NAME MODEL|first NAME|remove NAME|limit NAME \
+                        TOKENS|connect chatgpt], /extensions [off|on|remove NAME], \
                         /settings [NAME VALUE] (not \
                         permission nor secrets), /usage. Anything else your Owner writes \
                         themselves: tell them which command."
@@ -1571,7 +1633,8 @@ fn permission_specs() -> Vec<ActionSpec> {
              https://mcp.notion.com/mcp); /mcp connect NAME signs in to one; /connections [off|on|\
              disconnect|remove NAME]; /secret NAME [VALUE]; \
              /settings [NAME VALUE] (secrets strict: none reach the AI); \
-             /providers connect chatgpt; /extensions [off|on|remove NAME]; /usage.",
+             /providers [add NAME MODEL|first NAME|remove NAME|limit NAME TOKENS|connect chatgpt] \
+             for the AIs you think with; /extensions [off|on|remove NAME]; /usage.",
             serde_json::json!({ "command": { "type": "string" } }),
         ),
         spec(
@@ -2531,7 +2594,7 @@ impl<P: Provider + 'static> Agent<P> {
         };
         match self.set_aside.back() {
             Some(last) => named(last),
-            None => self.awaiting_secret.is_some(),
+            None => self.awaiting_secret.is_some() || self.pending_provider.is_some(),
         }
     }
 
@@ -3092,6 +3155,31 @@ impl<P: Provider + 'static> Agent<P> {
                                 say("Change a setting", "Modifier un réglage").to_owned(),
                                 format!("{name} → {}", words[2..].join(" ")),
                             ),
+                            ["/providers", "add", name, model] => (
+                                format!("{} {name}", say("Add the AI", "Ajouter l'IA")),
+                                format!(
+                                    "{model}\n\n{}",
+                                    say(
+                                        "You are then asked for its key, unless it is already kept.",
+                                        "Sa clé t'est ensuite demandée, sauf si elle est déjà gardée."
+                                    )
+                                ),
+                            ),
+                            ["/providers", "first", name] => (
+                                format!(
+                                    "{} {name}",
+                                    say("Think first with", "Réfléchir d'abord avec")
+                                ),
+                                String::new(),
+                            ),
+                            ["/providers", "remove", name] => (
+                                format!("{} {name}", say("Remove the AI", "Retirer l'IA")),
+                                String::new(),
+                            ),
+                            ["/providers", "limit", name, tokens] => (
+                                format!("{} {name}", say("Limit the AI", "Limiter l'IA")),
+                                format!("{tokens} {}", say("tokens a day", "jetons par jour")),
+                            ),
                             _ => (
                                 say("Carry out a command", "Exécuter une commande").to_owned(),
                                 command.to_owned(),
@@ -3232,6 +3320,7 @@ impl<P: Provider + 'static> Agent<P> {
                             let words: Vec<&str> = command.split_whitespace().collect();
                             match words[..] {
                                 ["/connect", ..] | ["/connections", _, _] => true,
+                                ["/providers", _, _, ..] => true,
                                 ["/settings", name, _, ..] => {
                                     crate::TAKES_A_RESTART.contains(&name)
                                 }

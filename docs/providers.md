@@ -1,5 +1,7 @@
 # Providers
 
+Once Orbite is set up, you can also just ask your agent: "add Groq as a backup AI", "think with OpenAI first", "limit Mistral to 200,000 tokens a day". It asks for your agreement, then for the API key when one is needed, in the conversation; the key is sealed and never shown to a model.
+
 A provider runs the AI model your agent thinks with. You choose one during setup, with `orbite setup provider` later, and Orbite talks to it directly from your machine: nothing passes through anyone else.
 
 ## With an API key
