@@ -444,6 +444,9 @@ impl<P: Provider + 'static> Agent<P> {
         let mut time_check = tokio::time::interval(self.time_check);
         time_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            // What is set aside is taken first: a command the Agent gave for
+            // its Owner, or one they wrote while it worked.
+            let asked_meanwhile = !self.set_aside.is_empty();
             let mut text = tokio::select! {
                 biased;
                 Some(text) = std::future::ready(self.set_aside.pop_front()) => text,
@@ -514,10 +517,13 @@ impl<P: Provider + 'static> Agent<P> {
                             self.store.append(&Message::Notice(
                                 "The secret your Owner wrote there was taken out before you saw it, \
                                  and is held. Name it now with the `command` action, /secret NAME: it \
-                                 is then kept under that name, and you never see its value."
+                                 is then kept under that name, and you never see its value. Orbite \
+                                 tells them it is kept: unless their message asks for something \
+                                 else, reply with exactly [silent]."
                                     .into(),
                             ))
                         });
+                        self.may_stay_silent = true;
                         match kept {
                             Ok(()) => self.respond_on(channel, false).await,
                             Err(error) => channel.send(&explain_storage(&error)).await.is_ok(),
@@ -668,6 +674,15 @@ impl<P: Provider + 'static> Agent<P> {
             }
             if let Some(asked) = text.trim().strip_prefix("/settings") {
                 let (mut said, mut choices) = self.settings(asked);
+                // Changed without the menu having been opened: the change
+                // is confirmed in a line, without the whole menu after it.
+                if asked_meanwhile
+                    && said.starts_with('✅')
+                    && let Some(end) = said.find("\n\n")
+                {
+                    said.truncate(end);
+                    choices.clear();
+                }
                 // A plan signed in to says which models it offers.
                 if asked.trim() == "model" {
                     let offered = self.models_of_the_plan().await;

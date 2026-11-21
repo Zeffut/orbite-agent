@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.5
+
+Released on 2026-11-21.
+
+- A setting your agent changes for you is confirmed in one line, without the whole menu after it, and at the strict setting your agent adds nothing once a secret is put away.
+
 ## 0.5.4
 
 Released on 2026-11-21.

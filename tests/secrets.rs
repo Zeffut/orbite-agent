@@ -643,7 +643,9 @@ async fn asked_in_plain_words_the_agent_turns_the_strict_setting_on_but_never_le
     owner.says("Be strict with my secrets.");
     owner.is_asked().await;
     owner.allows();
-    assert!(owner.hears().await.contains("strict"), "Orbite says the setting changed");
+    let changed = owner.hears().await;
+    assert!(changed.contains("strict"), "Orbite says the setting changed: {changed}");
+    assert!(!changed.contains("Permission level"), "in a line, not the whole menu: {changed}");
     // From then on, what speaks of a password is held back.
     owner.says("My password is hunter2");
     assert!(owner.hears().await.contains("not shown it to my AI provider"));
