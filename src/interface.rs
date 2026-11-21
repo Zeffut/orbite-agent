@@ -345,6 +345,26 @@ impl Shared {
     }
 }
 
+impl Shared {
+    /// True while the device that sent `headers` is let in.
+    fn is_let_in(&self, headers: &HeaderMap) -> bool {
+        let token = headers.get(header::COOKIE).and_then(|cookies| cookies.to_str().ok()).and_then(
+            |cookies| {
+                cookies
+                    .split(';')
+                    .filter_map(|cookie| cookie.trim().strip_prefix("orbite_device="))
+                    .next()
+            },
+        );
+        let Some(token) = token else { return false };
+        self.database
+            .lock()
+            .expect("not poisoned")
+            .query_row("SELECT 1 FROM devices WHERE token = ?1", [hashed(token)], |_| Ok(()))
+            .is_ok()
+    }
+}
+
 impl Drop for Interface {
     fn drop(&mut self) {
         self.serving.abort();
@@ -482,7 +502,10 @@ async fn events(
         .or(asked.get("after").map(String::as_str))
         .and_then(|seen| seen.parse().ok());
     // Listening starts before what was kept is read: nothing falls between.
-    let live = BroadcastStream::new(shared.live.subscribe());
+    // A device turned away is told nothing more, even on a page left open.
+    let (still, kept) = (shared.clone(), headers.clone());
+    let live =
+        BroadcastStream::new(shared.live.subscribe()).take_while(move |_| still.is_let_in(&kept));
     let earlier: Vec<Told> = {
         let database = shared.database.lock().expect("not poisoned");
         let read = |sql: &str, bound: i64| -> Vec<Told> {

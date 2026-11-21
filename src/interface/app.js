@@ -460,6 +460,15 @@
       $("talk").hidden = true;
       $("pairing").hidden = false;
       if (!$("device").value) $("device").value = deviceName();
+      // Opened from the link Orbite gave: the code came with it, and is
+      // taken out of the address so that it stays in no history.
+      const given = decodeURIComponent(location.hash.slice(1));
+      if (/^[A-Za-z0-9]{4}-[A-Za-z0-9]{4}$/.test(given)) {
+        history.replaceState(null, "", location.pathname);
+        $("code").value = given.toUpperCase();
+        $("pair").requestSubmit();
+        return;
+      }
       $("code").focus();
     }
   }

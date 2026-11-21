@@ -346,3 +346,56 @@ async fn a_file_taken_back_or_sent_by_a_stranger_is_not_kept() {
     assert_eq!(left("workspace/inbox"), 0);
     assert_eq!(left("interface-files"), 0);
 }
+
+#[tokio::test]
+async fn asked_in_plain_words_the_agent_lets_a_device_in_once_its_owner_agrees() {
+    let home = tempfile::tempdir().unwrap();
+    let interface =
+        Interface::serving(home.path(), "127.0.0.1:0".parse().unwrap(), "en").await.unwrap();
+    let address = interface.address();
+    orbite::Config { interface: Some(address.to_string()), ..Default::default() }
+        .save(home.path())
+        .unwrap();
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("command", json!({ "command": "/pair" }))]).then(Ok("[silent]".into()));
+    let (mut channel, mut owner) = support::memory_channel();
+    let (model, folder) = (provider.clone(), home.path().to_owned());
+    tokio::spawn(async move {
+        Agent::new(model, Store::in_memory()).configured_in(&folder).converse(&mut channel).await
+    });
+
+    owner.says("Add my phone.");
+    // Who may open the conversation is asked at every level, with a button.
+    let asked = owner.is_asked().await;
+    assert!(asked.summary.contains("Let a new device in"), "{}", asked.summary);
+    assert!(asked.critical);
+    owner.allows();
+    let told = owner.hears().await;
+    let link = format!("http://{address}/#");
+    let code: String =
+        told[told.find(&link).expect("no link given") + link.len()..].chars().take(9).collect();
+
+    // The code works, and no model was shown it.
+    assert_eq!(Browser::at(address).pairs_with(&code).await, 200);
+    let shown = format!("{:?}", provider.every_call());
+    assert!(!shown.contains(&code), "{shown}");
+}
+
+#[tokio::test]
+async fn a_device_turned_away_is_told_nothing_more_even_on_a_page_left_open() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::answering(["Still here."]);
+    let first = agent_with_a_paired_browser(home.path(), &provider).await;
+    let mut seen_by_first = first.watches(None).await.unwrap();
+    let mut other = Browser::at(first.at.trim_start_matches("http://").parse().unwrap());
+    let code = orbite::pairing_code(home.path()).unwrap();
+    assert_eq!(other.pairs_with(&code).await, 200);
+
+    assert!(orbite::turn_away(home.path(), "laptop").unwrap());
+    // The page of the device turned away is closed at the next thing said.
+    assert_eq!(first.says("Am I still in?").await, 401);
+    // Another device, still let in, says something: the first is not shown it.
+    assert_eq!(other.says("Hello").await, 200);
+    let told = tokio::time::timeout(Duration::from_secs(2), seen_by_first.recv()).await;
+    assert!(matches!(told, Ok(None) | Err(_)), "{told:?}");
+}

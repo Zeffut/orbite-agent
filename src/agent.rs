@@ -1068,6 +1068,22 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 continue;
             }
+            if text.trim() == "/pair" {
+                if channel.send(&self.pair()).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            if let Some(asked) = text
+                .trim()
+                .strip_prefix("/devices")
+                .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                if channel.send(&self.devices(asked.trim())).await.is_err() {
+                    return;
+                }
+                continue;
+            }
             if text.trim() == "/reset" {
                 self.await_nothing();
                 self.set_aside.retain(|(_, from)| !matches!(from, From::Agent));
@@ -1744,6 +1760,7 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
         ["/connect", _, address] if address.starts_with("https://") => Changes::Something,
         ["/mcp", "connect", _]
         | ["/connections"]
+        | ["/devices"]
         | ["/usage"]
         | ["/settings"]
         | ["/settings", _] => Changes::Nothing,
@@ -1754,6 +1771,9 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
         | ["/providers", "first", _]
         | ["/providers", "limit", _, _] => Changes::Something,
         ["/providers", "remove", _] => Changes::ForGood,
+        // Who may open the Conversation: the Owner's to agree to, every time.
+        ["/pair"] => Changes::Something,
+        ["/devices", "remove", _, ..] => Changes::ForGood,
         ["/extensions", "off" | "on", _] => Changes::Something,
         ["/extensions", "remove", _] => Changes::ForGood,
         // With a value only when the Owner wrote it themselves, which is
@@ -1768,7 +1788,8 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
             return Err("That is not a command you can give. You can give: /connect NAME \
                         https://ADDRESS, /mcp connect NAME, /connections [off|on|disconnect|remove \
                         NAME], /secret NAME, /providers [add NAME MODEL|first NAME|remove NAME|limit NAME \
-                        TOKENS|connect chatgpt], /extensions [off|on|remove NAME], \
+                        TOKENS|connect chatgpt], /extensions [off|on|remove NAME], /pair, \
+                        /devices [remove NAME], \
                         /settings [NAME VALUE] (not \
                         permission nor secrets), /usage. Anything else your Owner writes \
                         themselves: tell them which command."
@@ -1801,7 +1822,8 @@ fn permission_specs() -> Vec<ActionSpec> {
              disconnect|remove NAME]; /secret NAME [VALUE]; \
              /settings [NAME VALUE] (secrets strict: none reach the AI); \
              /providers [add NAME MODEL|first NAME|remove NAME|limit NAME TOKENS|connect chatgpt] \
-             for the AIs you think with; /extensions [off|on|remove NAME]; /usage.",
+             for the AIs you think with; /extensions [off|on|remove NAME]; /usage; /pair lets a \
+             phone or browser into the web interface; /devices [remove NAME].",
             serde_json::json!({ "command": { "type": "string" } }),
         ),
         spec(
@@ -3072,6 +3094,86 @@ impl<P: Provider + 'static> Agent<P> {
         }
     }
 
+    /// Where the web interface is served, when it is on.
+    fn interface(&self) -> Option<(PathBuf, String)> {
+        let home = self.home.clone()?;
+        let address = crate::Config::load(&home).ok()?.interface?;
+        Some((home, address))
+    }
+
+    /// A code that lets one more device into the web interface, with where
+    /// to type it. It is shown to the Owner and kept nowhere a model reads.
+    fn pair(&self) -> String {
+        let say = |english: &'static str, french: &'static str| self.language.say(english, french);
+        let Some((home, address)) = self.interface() else {
+            return say(
+                "The web interface is not on yet, so there is nowhere to let a device in.",
+                "L'interface web n'est pas encore activée : il n'y a pas encore où autoriser un appareil.",
+            )
+            .to_owned();
+        };
+        match crate::pairing_code(&home) {
+            Ok(code) => format!(
+                "{} http://{address}/#{code}\n\n{} **{code}**. {}",
+                say("On the device, open", "Sur l'appareil, ouvre"),
+                say("If it asks for a code:", "S'il demande un code :"),
+                say("It works once, for ten minutes.", "Il sert une fois, pendant dix minutes."),
+            ),
+            Err(error) => format!("🔴 {error}"),
+        }
+    }
+
+    /// The devices let into the web interface, or one turned away.
+    fn devices(&self, asked: &str) -> String {
+        let say = |english: &'static str, french: &'static str| self.language.say(english, french);
+        let Some((home, _)) = self.interface() else {
+            return say("The web interface is not on.", "L'interface web n'est pas activée.")
+                .to_owned();
+        };
+        if let Some(name) =
+            asked.strip_prefix("remove").map(str::trim).filter(|name| !name.is_empty())
+        {
+            return match crate::turn_away(&home, name) {
+                Ok(true) => format!(
+                    "✅ **{name}** {}",
+                    say(
+                        "can no longer open the conversation.",
+                        "ne peut plus ouvrir la discussion."
+                    )
+                ),
+                Ok(false) => format!(
+                    "{} **{name}**.",
+                    say("No device is called", "Aucun appareil ne s'appelle")
+                ),
+                Err(error) => format!("🔴 {error}"),
+            };
+        }
+        match crate::interface_devices(&home) {
+            Ok(all) if all.is_empty() => {
+                say("No device was let in yet.", "Aucun appareil n'a encore été autorisé.")
+                    .to_owned()
+            }
+            Ok(all) => {
+                let mut said =
+                    say("Devices let into the conversation:", "Appareils autorisés :").to_owned();
+                for device in all {
+                    let seen = chrono::DateTime::from_timestamp(device.seen as i64, 0)
+                        .map(|seen| {
+                            seen.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string()
+                        })
+                        .unwrap_or_default();
+                    said.push_str(&format!(
+                        "\n• **{}** ({} {seen})",
+                        device.name,
+                        say("last seen", "vu le")
+                    ));
+                }
+                said
+            }
+            Err(error) => format!("🔴 {error}"),
+        }
+    }
+
     fn usage(&self) -> String {
         self.count_what_others_spent();
         let today = (self.clock)().date_naive();
@@ -3519,6 +3621,25 @@ impl<P: Provider + 'static> Agent<P> {
                                     )
                                 ),
                             ),
+                            ["/pair"] => (
+                                say("Let a new device in", "Autoriser un nouvel appareil")
+                                    .to_owned(),
+                                say(
+                                    "It will read this conversation and write in it as you. You \
+                                     get a code to type on it.",
+                                    "Il pourra lire cette discussion et y écrire comme toi. Tu \
+                                     reçois un code à saisir dessus.",
+                                )
+                                .to_owned(),
+                            ),
+                            ["/devices", "remove", ..] => (
+                                format!(
+                                    "{} {}",
+                                    say("Turn away the device", "Retirer l'appareil"),
+                                    words[2..].join(" ")
+                                ),
+                                String::new(),
+                            ),
                             ["/providers", "first", name] => (
                                 format!(
                                     "{} {name}",
@@ -3543,6 +3664,9 @@ impl<P: Provider + 'static> Agent<P> {
                             summary,
                             detail,
                             irreversible: changes == Changes::ForGood,
+                            // Letting a device in is asked at every level:
+                            // no model does it on its own.
+                            critical: command == "/pair",
                             ..Approval::default()
                         })
                     }
