@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.5.3
+
+Released on 2026-11-21.
+
+- In French, Orbite's own messages now say "tu", as your agent does, in the conversation and in setup.
+
 ## 0.5.2
 
 Released on 2026-11-21.

@@ -177,7 +177,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
     ) -> Result<(), SetupError> {
         self.say(language.say(
             "\nWhich AI should your agent think with?",
-            "\nAvec quelle IA votre agent doit-il réfléchir ?",
+            "\nAvec quelle IA ton agent doit-il réfléchir ?",
         ))?;
         for (place, known) in known_providers().iter().enumerate() {
             self.say(&format!("  {}. {} ({})", place + 1, known.label, known.name))?;
@@ -323,7 +323,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             // Nothing is blocked, but this choice is made knowingly.
             let insisted = self.ask(language.say(
                 "An Agent on this model can only talk. Choose it anyway? Type yes, or anything else to choose another > ",
-                "Un agent sur ce modèle ne peut que parler. Le choisir quand même ? Tapez oui, ou autre chose pour en choisir un autre > ",
+                "Un agent sur ce modèle ne peut que parler. Le choisir quand même ? Tape oui, ou autre chose pour en choisir un autre > ",
             ))?;
             if matches!(insisted.trim().to_lowercase().as_str(), "yes" | "oui") {
                 break model;
@@ -434,7 +434,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             "\nYour agent will think with the usage included in your ChatGPT plan (an eligible \
              Plus or Pro plan), through OpenAI's sign-in for open-source apps. That programme is \
              a preview: OpenAI may change it or end it.",
-            "\nVotre agent réfléchira avec l'utilisation comprise dans votre forfait ChatGPT \
+            "\nTon agent réfléchira avec l'utilisation comprise dans ton forfait ChatGPT \
              (un forfait Plus ou Pro éligible), par la connexion qu'OpenAI ouvre aux applications \
              libres. Ce programme est un aperçu : OpenAI peut le modifier ou l'arrêter.",
         ))?;
@@ -444,17 +444,17 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                 "\n{}\n  {}\n{}",
                 language.say(
                     "Continue with ChatGPT: open this link in a browser, on any device, and sign in.",
-                    "Continuer avec ChatGPT : ouvrez ce lien dans un navigateur, sur n'importe \
-                     quel appareil, et connectez-vous.",
+                    "Continuer avec ChatGPT : ouvre ce lien dans un navigateur, sur n'importe \
+                     quel appareil, et connecte-toi.",
                 ),
                 begun.link(),
                 language.say(
                     "Your browser then ends on a page that does not load, at an address starting \
                      with http://127.0.0.1:1455 . That is expected: copy that whole address and \
                      paste it here.",
-                    "Votre navigateur finit alors sur une page qui ne s'affiche pas, à une adresse \
-                     commençant par http://127.0.0.1:1455 . C'est normal : copiez cette adresse \
-                     entière et collez-la ici.",
+                    "Ton navigateur finit alors sur une page qui ne s'affiche pas, à une adresse \
+                     commençant par http://127.0.0.1:1455 . C'est normal : copie cette adresse \
+                     entière et colle-la ici.",
                 ),
             ))?;
             let ended_on = self.ask(language.say("Address > ", "Adresse > "))?;
@@ -468,7 +468,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         };
         self.say(&format!(
             "{}{} ✓\n{} {}",
-            language.say("You're using your ChatGPT plan", "Vous utilisez votre forfait ChatGPT"),
+            language.say("You're using your ChatGPT plan", "Tu utilises ton forfait ChatGPT"),
             if account.is_empty() { String::new() } else { format!(" ({account})") },
             language.say("Manage usage:", "Gérer l'utilisation :"),
             crate::chatgpt::MANAGE_USAGE,
@@ -537,10 +537,10 @@ impl<R: BufRead, W: Write> Setup<R, W> {
              1. In Telegram, open a chat with @BotFather.\n  \
              2. Send /newbot and follow its two questions (a name, then a username ending in \"bot\").\n  \
              3. BotFather gives you a token: paste it here.",
-            "\nVous parlerez à votre agent dans Telegram, par un bot qui vous appartient :\n  \
-             1. Dans Telegram, ouvrez une discussion avec @BotFather.\n  \
-             2. Envoyez /newbot et répondez à ses deux questions (un nom, puis un identifiant finissant par « bot »).\n  \
-             3. BotFather vous donne un jeton : collez-le ici.",
+            "\nTu parleras à ton agent dans Telegram, par un bot qui t'appartient :\n  \
+             1. Dans Telegram, ouvre une discussion avec @BotFather.\n  \
+             2. Envoie /newbot et réponds à ses deux questions (un nom, puis un identifiant finissant par « bot »).\n  \
+             3. BotFather te donne un jeton : colle-le ici.",
         ))?;
         let (token, username) = loop {
             let token = self.ask_hidden(
@@ -554,7 +554,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                     "{} ({reason})",
                     language.say(
                         "Telegram does not know this token. Copy it again from @BotFather",
-                        "Telegram ne connaît pas ce jeton. Recopiez-le depuis @BotFather",
+                        "Telegram ne connaît pas ce jeton. Recopie-le depuis @BotFather",
                     )
                 ))?,
             }
@@ -572,7 +572,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             language.say("Bot recognised:", "Bot reconnu :"),
             language.say(
                 "Now open its chat in Telegram and send it this code:",
-                "Ouvrez maintenant sa discussion dans Telegram et envoyez-lui ce code :",
+                "Ouvre maintenant sa discussion dans Telegram et envoie-lui ce code :",
             )
         ))?;
         let started = Instant::now();
@@ -583,7 +583,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                     language
                         .say(
                             "No code arrived. Run setup again when you are ready to send it.",
-                            "Aucun code n'est arrivé. Relancez la configuration quand vous serez prêt à l'envoyer.",
+                            "Aucun code n'est arrivé. Relance la configuration quand tu seras prêt à l'envoyer.",
                         )
                         .into(),
                 ));
@@ -613,25 +613,25 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         config.save(&self.home).map_err(stopped)?;
         let linked = language.say(
             "Linked: from now on I listen to you here, and to nobody else.",
-            "Lié : désormais je vous écoute ici, et personne d'autre.",
+            "Lié : désormais je t'écoute ici, et personne d'autre.",
         );
         let _ = self.bot(&token, "sendMessage", json!({ "chat_id": owner, "text": linked })).await;
         self.say(
-            language.say("Your Telegram account is linked. ✓", "Votre compte Telegram est lié. ✓"),
+            language.say("Your Telegram account is linked. ✓", "Ton compte Telegram est lié. ✓"),
         )
     }
 
     fn name(&mut self, config: &mut Config, language: Language) -> Result<(), SetupError> {
         self.say(language.say(
             "\nWhat will you call your agent? Some ideas:",
-            "\nComment appellerez-vous votre agent ? Quelques idées :",
+            "\nComment appelleras-tu ton agent ? Quelques idées :",
         ))?;
         for (place, name) in NAMES.iter().enumerate() {
             self.say(&format!("  {}. {name}", place + 1))?;
         }
         let name = loop {
             let answer = self.ask(
-                language.say("Number, or a name of your own > ", "Numéro, ou un nom à vous > "),
+                language.say("Number, or a name of your own > ", "Numéro, ou un nom à toi > "),
             )?;
             let picked =
                 answer.parse::<usize>().ok().and_then(|number| NAMES.get(number.wrapping_sub(1)));
@@ -662,9 +662,9 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         };
         let greeting = if language == Language::French {
             format!(
-                "Bonjour, je suis {name}, votre agent. Je vis sur votre machine, je me souviens de ce \
-                 qui compte et je vous demande avant tout ce qui change quelque chose. Dites-moi ce \
-                 dont vous avez besoin."
+                "Bonjour, je suis {name}, ton agent. Je vis sur ta machine, je me souviens de ce \
+                 qui compte et je te demande avant tout ce qui change quelque chose. Dis-moi ce \
+                 dont tu as besoin."
             )
         } else {
             format!(
@@ -677,7 +677,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         self.say(&format!(
             "\n{} {name} {}",
             language.say("All set.", "Tout est prêt."),
-            language.say("is waiting for you in Telegram.", "vous attend dans Telegram.")
+            language.say("is waiting for you in Telegram.", "t'attend dans Telegram.")
         ))
     }
 

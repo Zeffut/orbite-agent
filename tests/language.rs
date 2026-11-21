@@ -125,7 +125,7 @@ async fn telegram_shows_buttons_decisions_and_its_menu_in_the_owners_language() 
     let shown = shown(&server).await;
     let texts: Vec<String> = shown.iter().map(|(_, body)| body.to_string()).collect();
     let all = texts.join("\n");
-    assert!(all.contains("Vous, ailleurs"), "{all}");
+    assert!(all.contains("Toi, ailleurs"), "{all}");
     assert!(
         all.contains("Autoriser") && all.contains("Toujours") && all.contains("Refuser"),
         "{all}"

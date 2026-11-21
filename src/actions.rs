@@ -573,7 +573,7 @@ impl Host {
                         .language
                         .say(
                             "Read an address on your own network",
-                            "Lire une adresse de votre réseau",
+                            "Lire une adresse de ton réseau",
                         )
                         .into(),
                     detail: format!(

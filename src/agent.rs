@@ -502,11 +502,11 @@ impl<P: Provider + 'static> Agent<P> {
                         Ok(name) => {
                             let said = format!(
                                 "{} **{name}**. {}",
-                                self.language.say("Send me the value of", "Envoyez-moi la valeur de"),
+                                self.language.say("Send me the value of", "Envoie-moi la valeur de"),
                                 self.language.say(
                                     "I seal it and remove your message; my AI provider never sees it. \
                                      /cancel to give up.",
-                                    "Je la scelle et supprime votre message ; mon fournisseur d'IA ne la \
+                                    "Je la scelle et supprime ton message ; mon fournisseur d'IA ne la \
                                      voit jamais. /cancel pour renoncer.",
                                 )
                             );
@@ -526,7 +526,7 @@ impl<P: Provider + 'static> Agent<P> {
                             "To give me a secret (a password, a key): /secret NAME, then its value in your \
                              next message. I keep it sealed and never show it to my AI provider.",
                             "Pour me confier un secret (un mot de passe, une clé) : /secret NOM, puis sa valeur \
-                             dans votre message suivant. Je le garde scellé et ne le montre jamais à mon \
+                             dans ton message suivant. Je le garde scellé et ne le montre jamais à mon \
                              fournisseur d'IA.",
                         );
                         channel.send(said).await.is_ok()
@@ -543,7 +543,7 @@ impl<P: Provider + 'static> Agent<P> {
                         self.language.say(
                             "Secrets in the conversation are on: what you paste here is shown to my \
                              AI provider and stays in this conversation. /secrets off to go back.",
-                            "Les secrets dans la discussion sont autorisés : ce que vous collez ici \
+                            "Les secrets dans la discussion sont autorisés : ce que tu colles ici \
                              est montré à mon fournisseur d'IA et reste dans cette discussion. \
                              /secrets off pour revenir en arrière.",
                         )
@@ -556,7 +556,7 @@ impl<P: Provider + 'static> Agent<P> {
                              confier un en sécurité : /secret NOM.",
                         )
                     }),
-                    _ => Ok(self.language.say("Say /secrets on or /secrets off.", "Écrivez /secrets on ou /secrets off.")),
+                    _ => Ok(self.language.say("Say /secrets on or /secrets off.", "Écris /secrets on ou /secrets off.")),
                 };
                 let said = said.map(str::to_owned).unwrap_or_else(|error| explain_storage(&error));
                 if channel.send(&said).await.is_err() {
@@ -667,16 +667,16 @@ impl<P: Provider + 'static> Agent<P> {
                             "Continue with ChatGPT: open this link and sign in. (This uses the usage \
                              included in your plan, through OpenAI's sign-in for open-source apps: a \
                              preview, which OpenAI may change or end.)",
-                            "Continuer avec ChatGPT : ouvrez ce lien et connectez-vous. (Cela utilise \
-                             l'utilisation comprise dans votre forfait, par la connexion qu'OpenAI ouvre \
+                            "Continuer avec ChatGPT : ouvre ce lien et connecte-toi. (Cela utilise \
+                             l'utilisation comprise dans ton forfait, par la connexion qu'OpenAI ouvre \
                              aux applications libres : un aperçu, qu'OpenAI peut modifier ou arrêter.)"
                         ),
                         self.language.say(
                             "Your browser will then stop on a page that does not load, at an address starting with \
                              http://127.0.0.1:1455. That is expected: copy that whole address and send it to me here.",
-                            "Votre navigateur s'arrêtera ensuite sur une page qui ne se charge pas, à une adresse \
-                             commençant par http://127.0.0.1:1455. C'est normal : copiez cette adresse entière et \
-                             envoyez-la-moi ici."
+                            "Ton navigateur s'arrêtera ensuite sur une page qui ne se charge pas, à une adresse \
+                             commençant par http://127.0.0.1:1455. C'est normal : copie cette adresse entière et \
+                             envoie-la-moi ici."
                         )
                     ),
                     Err(problem) => format!("🔴 {problem}"),
@@ -696,7 +696,7 @@ impl<P: Provider + 'static> Agent<P> {
                         "✅ {}{}\n[{}]({})",
                         self.language.say(
                             "You're using your ChatGPT plan",
-                            "Vous utilisez votre forfait ChatGPT"
+                            "Tu utilises ton forfait ChatGPT"
                         ),
                         if account.is_empty() { String::new() } else { format!(" ({account})") },
                         self.language.say("Manage usage", "Gérer l'utilisation"),
@@ -706,7 +706,7 @@ impl<P: Provider + 'static> Agent<P> {
                         "🔴 {problem}. {}",
                         self.language.say(
                             "Start again with /providers connect chatgpt",
-                            "Recommencez avec /providers connect chatgpt"
+                            "Recommence avec /providers connect chatgpt"
                         )
                     ),
                 };
@@ -723,7 +723,7 @@ impl<P: Provider + 'static> Agent<P> {
                     "That is the address a sign-in ended on, but no sign-in is under way any more. I did not \
                      keep it. Start again: /providers connect chatgpt, or /mcp connect NAME.",
                     "C'est l'adresse sur laquelle une connexion s'est terminée, mais aucune connexion n'est \
-                     plus en cours. Je ne l'ai pas gardée. Recommencez : /providers connect chatgpt, ou \
+                     plus en cours. Je ne l'ai pas gardée. Recommence : /providers connect chatgpt, ou \
                      /mcp connect NOM.",
                 );
                 if channel.send(said).await.is_err() {
@@ -784,7 +784,7 @@ impl<P: Provider + 'static> Agent<P> {
                         .language
                         .say(
                             "Started afresh. What I remember about you is unchanged.",
-                            "Nouveau départ. Ce que je retiens de vous est inchangé.",
+                            "Nouveau départ. Ce que je retiens de toi est inchangé.",
                         )
                         .to_owned(),
                     Err(error) => explain_storage(&error),
@@ -1040,8 +1040,8 @@ impl<P: Provider + 'static> Agent<P> {
                                  can choose another with /settings model, and see what to expect of one \
                                  with `orbite tryout NAME` on the machine.",
                                 "Cela fait plusieurs fois de suite : le modèle lui-même semble en être la cause. \
-                                 Vous pouvez en choisir un autre avec /settings model, et voir à quoi vous \
-                                 attendre avec `orbite tryout NOM` sur la machine.",
+                                 Tu peux en choisir un autre avec /settings model, et voir à quoi \
+                                 t'attendre avec `orbite tryout NOM` sur la machine.",
                             ));
                         }
                     }
@@ -1549,7 +1549,7 @@ impl<P: Provider + 'static> Agent<P> {
             return Ok(channel
                 .send(self.language.say(
                     "Started afresh. What I remember about you is unchanged.",
-                    "Nouveau départ. Ce que je retiens de vous est inchangé.",
+                    "Nouveau départ. Ce que je retiens de toi est inchangé.",
                 ))
                 .await
                 .is_ok());
@@ -1881,8 +1881,8 @@ impl<P: Provider + 'static> Agent<P> {
                 "model" => text.push_str(&say(
                     "\nAnother model of the same Provider: /settings model NAME\nTo see what to expect of one \
                      first, on the machine: orbite tryout NAME",
-                    "\nAutre modèle du même fournisseur : /settings model NOM\nPour savoir d'abord à quoi vous \
-                     attendre, sur la machine : orbite tryout NOM",
+                    "\nAutre modèle du même fournisseur : /settings model NOM\nPour savoir d'abord à quoi \
+                     t'attendre, sur la machine : orbite tryout NOM",
                 )),
                 _ => {}
             }
@@ -1962,14 +1962,14 @@ impl<P: Provider + 'static> Agent<P> {
                 "**{name}**: {}\n\n{link}\n\n{}",
                 self.language.say(
                     "to connect it, open this link and sign in:",
-                    "pour le connecter, ouvrez ce lien et connectez-vous :"
+                    "pour le connecter, ouvre ce lien et connecte-toi :"
                 ),
                 self.language.say(
                     "Your browser will then stop on a page that does not load, at an address starting with \
                      http://127.0.0.1. That is expected: copy that whole address and send it to me here.",
-                    "Votre navigateur s'arrêtera ensuite sur une page qui ne se charge pas, à une adresse \
-                     commençant par http://127.0.0.1. C'est normal : copiez cette adresse entière et \
-                     envoyez-la-moi ici."
+                    "Ton navigateur s'arrêtera ensuite sur une page qui ne se charge pas, à une adresse \
+                     commençant par http://127.0.0.1. C'est normal : copie cette adresse entière et \
+                     envoie-la-moi ici."
                 )
             ),
             Err(problem) => format!("🔴 **{name}**: {problem}."),
@@ -2287,7 +2287,7 @@ impl<P: Provider + 'static> Agent<P> {
             },
             _ => say(
                 "Say /extensions, /extensions off NAME, /extensions on NAME or /extensions remove NAME.",
-                "Écrivez /extensions, /extensions off NOM, /extensions on NOM ou /extensions remove NOM.",
+                "Écris /extensions, /extensions off NOM, /extensions on NOM ou /extensions remove NOM.",
             ),
         }
     }
@@ -2460,12 +2460,12 @@ impl<P: Provider + 'static> Agent<P> {
             if written_earlier {
                 self.language.say(
                     "is kept, and your message removed. (My AI provider saw it this once.)",
-                    "est gardé, et votre message supprimé. (Mon fournisseur d'IA l'a vu cette fois.)",
+                    "est gardé, et ton message supprimé. (Mon fournisseur d'IA l'a vu cette fois.)",
                 )
             } else {
                 self.language.say(
                     "is kept, and your message removed.",
-                    "est gardé, et votre message supprimé.",
+                    "est gardé, et ton message supprimé.",
                 )
             }
         );
@@ -2501,7 +2501,7 @@ impl<P: Provider + 'static> Agent<P> {
              my AI provider never sees it.",
             "Cela ressemble à un secret (une clé, un jeton ou un mot de passe). Je ne l'ai ni gardé ni \
              montré à mon fournisseur d'IA, et je l'ai retiré d'ici quand c'était possible. \
-             Pour me le confier en sécurité, envoyez /secret NOM, puis sa valeur : je le garde scellé \
+             Pour me le confier en sécurité, envoie /secret NOM, puis sa valeur : je le garde scellé \
              et l'utilise par son nom, et mon fournisseur d'IA ne le voit jamais.",
         );
         Some(channel.send(said).await.is_ok())
@@ -2618,7 +2618,7 @@ impl<P: Provider + 'static> Agent<P> {
         if used.iter().any(|(_, _, usage)| usage.by == "chatgpt") {
             shown.push_str(&format!(
                 "{} · [{}]({})\n",
-                self.language.say("Using ChatGPT plan", "Avec votre forfait ChatGPT"),
+                self.language.say("Using ChatGPT plan", "Avec ton forfait ChatGPT"),
                 self.language.say("Manage usage", "Gérer l'utilisation"),
                 crate::chatgpt::MANAGE_USAGE
             ));
@@ -2729,7 +2729,7 @@ impl<P: Provider + 'static> Agent<P> {
                 .language
                 .say(
                     "No ChatGPT plan is set up. Add one on the machine: orbite providers add",
-                    "Aucun forfait ChatGPT n'est configuré. Ajoutez-en un sur la machine : orbite providers add",
+                    "Aucun forfait ChatGPT n'est configuré. Ajoutes-en un sur la machine : orbite providers add",
                 )
                 .into());
         };
@@ -2924,7 +2924,7 @@ impl<P: Provider + 'static> Agent<P> {
                                     "{address}\n\n{}",
                                     say(
                                         "Its tools become actions of your agent.",
-                                        "Ses outils deviennent des actions de votre agent."
+                                        "Ses outils deviennent des actions de ton agent."
                                     )
                                 ),
                             ),
@@ -3556,7 +3556,7 @@ pub(crate) fn explain(error: &ProviderError, language: Language) -> String {
         }
         ProviderError::Rejected(reason) if french => {
             format!(
-                "Mon fournisseur d'IA a refusé mon accès ({reason}). Vérifiez la clé d'API, puis réessayez."
+                "Mon fournisseur d'IA a refusé mon accès ({reason}). Vérifie la clé d'API, puis réessaie."
             )
         }
         ProviderError::Rejected(reason) => {
@@ -3566,7 +3566,7 @@ pub(crate) fn explain(error: &ProviderError, language: Language) -> String {
         }
         ProviderError::Unreachable(reason) if french => {
             format!(
-                "Je n'ai pas pu joindre mon fournisseur d'IA ({reason}). Réessayez dans un instant."
+                "Je n'ai pas pu joindre mon fournisseur d'IA ({reason}). Réessaie dans un instant."
             )
         }
         ProviderError::Unreachable(reason) => {
@@ -3577,14 +3577,14 @@ pub(crate) fn explain(error: &ProviderError, language: Language) -> String {
             let reason = clip(reason, 160);
             if french {
                 format!(
-                    "Mon fournisseur d'IA est trop occupé pour répondre ({reason}). Réessayez plus tard."
+                    "Mon fournisseur d'IA est trop occupé pour répondre ({reason}). Réessaie plus tard."
                 )
             } else {
                 format!("My AI provider is too busy to answer ({reason}). Try again later.")
             }
         }
         ProviderError::Declined(reason) if french => format!(
-            "Le modèle d'IA sur lequel je tourne a refusé cette demande ({reason}). Vous pouvez la \
+            "Le modèle d'IA sur lequel je tourne a refusé cette demande ({reason}). Tu peux la \
              formuler autrement, ou me faire tourner sur un autre modèle."
         ),
         ProviderError::Declined(reason) => format!(
@@ -3593,7 +3593,7 @@ pub(crate) fn explain(error: &ProviderError, language: Language) -> String {
         ),
         ProviderError::Failed(reason) if french => {
             format!(
-                "Mon fournisseur d'IA n'a pas réussi à répondre ({reason}). Réessayez dans un instant."
+                "Mon fournisseur d'IA n'a pas réussi à répondre ({reason}). Réessaie dans un instant."
             )
         }
         ProviderError::Failed(reason) => {

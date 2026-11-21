@@ -90,7 +90,7 @@ impl Verdict {
             Tools::Reliable => say("✅ Actions: reliable.", "✅ Actions : fiable."),
             Tools::Unreliable => say(
                 "⚠️ Actions: unreliable. It asked for some with the wrong input, so expect mistakes and retries.",
-                "⚠️ Actions : peu fiable. Certaines ont été demandées avec de mauvaises données : attendez-vous à \
+                "⚠️ Actions : peu fiable. Certaines ont été demandées avec de mauvaises données : attends-toi à \
                  des erreurs et des reprises.",
             ),
             Tools::None => say(
@@ -129,7 +129,7 @@ impl Verdict {
                 (declined, Language::French) => format!(
                     "⚠️ Sévérité : il n'a pas fait {declined} demande(s) ordinaire(s) sur {} portant sur les comptes \
                      de son propriétaire (créer un compte, envoyer un message), alors qu'il avait tout pour. Orbite \
-                     ne contourne pas un refus : pour un agent moins strict, choisissez un autre modèle.",
+                     ne contourne pas un refus : pour un agent moins strict, choisis un autre modèle.",
                     self.asked
                 ),
                 (declined, _) => format!(
@@ -482,7 +482,7 @@ pub fn advice(home: &std::path::Path, provider: &str, language: Language) -> Opt
         _ => None,
     };
     let mut advice = match (language, able.is_empty()) {
-        (Language::French, true) => "D'après de vrais essais, aucun des modèles essayés ici ne fait tout ce dont un agent a besoin (agir, voir les images, retenir) : voyez ce que chacun a montré.".to_owned(),
+        (Language::French, true) => "D'après de vrais essais, aucun des modèles essayés ici ne fait tout ce dont un agent a besoin (agir, voir les images, retenir) : vois ce que chacun a montré.".to_owned(),
         (Language::English, true) => "From real tryouts, none of the models tried here does all an agent needs (act, see images, remember): see what each one showed.".to_owned(),
         (Language::French, false) => format!("D'après de vrais essais, ces modèles font tout ce dont un agent a besoin (agir, voir les images, retenir) : {}.", able.join(", ")),
         (Language::English, false) => format!("From real tryouts, these models do all an agent needs (act, see images, remember): {}.", able.join(", ")),

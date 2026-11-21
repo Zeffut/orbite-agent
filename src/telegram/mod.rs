@@ -576,7 +576,7 @@ impl Channel for Telegram {
             "chat_id": self.bot.owner,
             "text": format!(
                 "🗣 <i>{}</i>\n{}",
-                self.bot.language.say("You, elsewhere:", "Vous, ailleurs :"),
+                self.bot.language.say("You, elsewhere:", "Toi, ailleurs :"),
                 formatting::escape(text)
             ),
             "parse_mode": "HTML",
