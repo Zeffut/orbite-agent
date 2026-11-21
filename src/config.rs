@@ -40,6 +40,10 @@ pub struct Config {
     /// What the Owner called their Agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// Where the web interface is served, when the Owner turned it on:
+    /// an address and a port, such as `127.0.0.1:8377`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
 }
 
 /// What writes down what the Owner says aloud.

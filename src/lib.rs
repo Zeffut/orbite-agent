@@ -13,6 +13,7 @@ mod computer;
 mod config;
 mod extensions;
 mod hearing;
+mod interface;
 mod language;
 mod mcp;
 mod memory;
@@ -50,6 +51,9 @@ pub use chatgpt::ChatGpt;
 pub use computer::{Computer, Screen};
 pub use config::{Config, ProviderChoice, Transcription};
 pub use hearing::{Advice, MODELS, Machine, Model, chosen as chosen_transcriber, transcription};
+pub use interface::{
+    Device, Interface, devices as interface_devices, is_private, pairing_code, turn_away,
+};
 pub use language::Language;
 pub use mcp::{
     add_server as add_connector, listed as connectors, remove_server as remove_connector,

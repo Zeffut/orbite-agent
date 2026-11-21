@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<title>Orbite</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<main id="pairing" hidden>
+  <form id="pair">
+    <img src="/icon.svg" alt="" width="56" height="56">
+    <h1 data-say="pairTitle"></h1>
+    <p data-say="pairHow"></p>
+    <code class="command">sudo orbite pair</code>
+    <label><span data-say="pairCode"></span>
+      <input id="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="ABCD-EFGH" maxlength="9" required></label>
+    <label><span data-say="pairName"></span>
+      <input id="device" maxlength="60" required></label>
+    <button data-say="pairGo"></button>
+    <p id="pairWrong" class="wrong" hidden data-say="pairWrong"></p>
+  </form>
+</main>
+<main id="talk" hidden>
+  <header>
+    <img src="/icon.svg" alt="" width="28" height="28">
+    <strong id="title">Orbite</strong>
+    <span id="link" data-say="offline" hidden></span>
+  </header>
+  <section id="said" aria-live="polite"></section>
+  <p id="doing" hidden></p>
+  <form id="say">
+    <textarea id="text" rows="1" data-placeholder="write" enterkeyhint="send"></textarea>
+    <button aria-label="Send" data-label="send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 20l18-8L3 4l3 8-3 8zm3-8h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+  </form>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

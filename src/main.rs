@@ -29,6 +29,9 @@ Commands:
   uninstall  remove Orbite from this machine (--keep-data keeps the Agent's data, --keep-computer what was installed for its computer)
   update     install the latest release now (on or off: let Orbite do it by itself, or not)
   secret     enter (set NAME), list or remove the secrets the Agent uses without seeing them
+  interface  the web interface: say where it is served, turn it on (on [ADDRESS]) or off
+  pair       show a code that lets one more device into the web interface
+  devices    list the devices let into the web interface (remove NAME turns one away)
 
 Read from the environment:
   ORBITE_PROVIDER        the Provider, by name (default: openai); see `orbite providers`
@@ -79,6 +82,9 @@ async fn main() -> ExitCode {
         Some("setup") => setup().await,
         Some("providers") => providers().await,
         Some("connections") => connections(),
+        Some("interface") => interface(),
+        Some("pair") => pair(),
+        Some("devices") => devices(),
         Some("transcription") => {
             let asked: Vec<String> = env::args().skip(2).collect();
             let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
@@ -111,39 +117,101 @@ async fn main() -> ExitCode {
 
 async fn run() -> Result<(), Failure> {
     let home = home()?;
+    let config = Config::load(&home)?;
+    let language = Language::of(config.language.as_deref());
+    // Telegram, when a bot was set up and an account linked.
     let token = match setting("ORBITE_TELEGRAM_TOKEN") {
-        Some(token) => token,
-        None => Secrets::kept_in(&home)
-            .get(TELEGRAM_TOKEN)?
-            .ok_or("No Telegram bot is set up yet. Run `orbite setup`.")?,
+        Some(token) => Some(token),
+        None => Secrets::kept_in(&home).get(TELEGRAM_TOKEN)?,
     };
-    let owner: i64 = match setting("ORBITE_TELEGRAM_OWNER") {
-        Some(owner) => owner
-            .parse()
-            .map_err(|_| "ORBITE_TELEGRAM_OWNER must be a numeric Telegram account id.")?,
-        None => Config::load(&home)?
-            .telegram_owner
-            .ok_or("No Telegram account is linked yet. Run `orbite setup`.")?,
+    let owner: Option<i64> = match setting("ORBITE_TELEGRAM_OWNER") {
+        Some(owner) => Some(
+            owner
+                .parse()
+                .map_err(|_| "ORBITE_TELEGRAM_OWNER must be a numeric Telegram account id.")?,
+        ),
+        None => config.telegram_owner,
     };
-    let mut agent = agent()?;
-    let language = Language::of(Config::load(&home)?.language.as_deref());
-    let mut telegram = Telegram::new(token, owner)
-        .saving_files_in(home.join("workspace/inbox"))
-        .speaking(language);
-    if let Some(address) = Config::load(&home)?.telegram_address {
-        telegram = telegram.at(address);
+    let telegram = match (token, owner) {
+        (Some(token), Some(owner)) => {
+            let telegram = Telegram::new(token, owner)
+                .saving_files_in(home.join("workspace/inbox"))
+                .speaking(language);
+            Some(match &config.telegram_address {
+                Some(address) => telegram.at(address),
+                None => telegram,
+            })
+        }
+        _ => None,
+    };
+    // The web interface, when the Owner turned it on.
+    let interface = match setting("ORBITE_INTERFACE").or(config.interface.clone()) {
+        Some(address) => Some(interface_at(&home, &address, &config).await?),
+        None => None,
+    };
+    let agent = agent()?;
+    let terminal = env::args()
+        .any(|argument| argument == "--terminal")
+        .then(|| Terminal::new(BufReader::new(stdin()), stdout()));
+    // One Conversation, in every place that was set up.
+    match (telegram, interface, terminal) {
+        (None, None, _) => {
+            Err("There is nowhere to talk to your agent yet. Run `orbite setup`, or \
+                                turn the web interface on with `orbite interface on`."
+                .into())
+        }
+        (Some(telegram), None, None) => hold(agent, telegram, true).await,
+        (None, Some(interface), None) => hold(agent, interface, true).await,
+        (Some(telegram), Some(interface), None) => {
+            hold(agent, Both::new(telegram, interface), true).await
+        }
+        (Some(telegram), None, Some(terminal)) => {
+            hold(agent, Both::new(telegram, terminal), false).await
+        }
+        (None, Some(interface), Some(terminal)) => {
+            hold(agent, Both::new(interface, terminal), false).await
+        }
+        (Some(telegram), Some(interface), Some(terminal)) => {
+            hold(agent, Both::new(Both::new(telegram, interface), terminal), false).await
+        }
     }
-    if env::args().any(|argument| argument == "--terminal") {
-        // The same Conversation, open in this terminal as well.
-        let terminal = Terminal::new(BufReader::new(stdin()), stdout());
-        until_asked_to_stop(agent.converse(&mut Both::new(telegram, terminal))).await;
-        agent.shut_down();
-    } else {
-        let mut agent = agent.restarted_by_its_service();
-        until_asked_to_stop(agent.converse(&mut telegram)).await;
-        agent.shut_down();
-    }
+}
+
+/// Holds the Conversation in `channel` until Orbite is asked to stop. As a
+/// service, Orbite ends when a change takes a restart, to be started again.
+async fn hold(
+    agent: Agent<Routed<Connected>>,
+    mut channel: impl orbite::Channel,
+    as_a_service: bool,
+) -> Result<(), Failure> {
+    let mut agent = if as_a_service { agent.restarted_by_its_service() } else { agent };
+    until_asked_to_stop(agent.converse(&mut channel)).await;
+    agent.shut_down();
     Ok(())
+}
+
+/// The web interface served at `address`, which must be one where nothing
+/// travels in the open.
+async fn interface_at(
+    home: &std::path::Path,
+    address: &str,
+    config: &Config,
+) -> Result<orbite::Interface, Failure> {
+    let address: std::net::SocketAddr = address.parse().map_err(|_| {
+        format!("{address} is not an address the interface can be served at: write one such as 127.0.0.1:8377.")
+    })?;
+    if !orbite::is_private(&address) && setting("ORBITE_INTERFACE_IN_THE_OPEN").is_none() {
+        return Err(format!(
+            "The interface is not served at {address}: it is reached from anywhere, and what travels \
+             there is not encrypted yet. Serve it on the machine itself (127.0.0.1) behind something \
+             that encrypts, or on an address of your own private network such as Tailscale's."
+        )
+        .into());
+    }
+    let language = config.language.as_deref().unwrap_or("en");
+    orbite::Interface::serving(home, address, language)
+        .await
+        .map_err(|error| format!("The interface could not be served at {address}: {error}").into())
 }
 
 async fn chat() -> Result<(), Failure> {
@@ -362,6 +430,97 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .speaking(Language::of(config.language.as_deref()))
         .keeping_context_under(context)
         .waking_up_every_minutes(wake_ups))
+}
+
+/// Where the web interface is served, or turns it on or off.
+fn interface() -> Result<(), Failure> {
+    let home = home()?;
+    let mut config = Config::load(&home)?;
+    let asked: Vec<String> = env::args().skip(2).collect();
+    match asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [] => match &config.interface {
+            Some(address) => println!(
+                "The web interface is served at http://{address}\nLet a device in: orbite pair"
+            ),
+            None => println!("The web interface is off. Turn it on: orbite interface on"),
+        },
+        ["on"] | ["on", _] => {
+            // On the machine itself unless told otherwise: nothing is open
+            // to anyone the Owner did not mean to reach it.
+            let address = asked.get(1).map_or("127.0.0.1:8377", String::as_str);
+            let parsed: std::net::SocketAddr = address.parse().map_err(|_| {
+                format!("{address} is not an address: write one such as 127.0.0.1:8377, or your machine's address on your private network and a port.")
+            })?;
+            if !orbite::is_private(&parsed) {
+                return Err(format!(
+                    "{address} is reached from anywhere, and what travels there is not encrypted yet. \
+                     Use 127.0.0.1 behind something that encrypts, or an address of your private network."
+                )
+                .into());
+            }
+            config.interface = Some(address.to_owned());
+            config.save(&home)?;
+            println!(
+                "The web interface will be served at http://{address}\nIt applies at the next start of Orbite (as a service: sudo systemctl restart orbite).\nThen let a device in: orbite pair"
+            );
+        }
+        ["off"] => {
+            config.interface = None;
+            config.save(&home)?;
+            println!("The web interface is off. It applies at the next start of Orbite.");
+        }
+        _ => {
+            return Err(
+                "Usage: orbite interface | interface on [ADDRESS:PORT] | interface off".into()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Shows a code that lets one more device into the web interface.
+fn pair() -> Result<(), Failure> {
+    let home = home()?;
+    let Some(address) = Config::load(&home)?.interface else {
+        return Err("The web interface is off. Turn it on first: orbite interface on".into());
+    };
+    let code = orbite::pairing_code(&home)?;
+    println!(
+        "Open http://{address} on the device, and type this code there:\n\n    {code}\n\nIt works once, for ten minutes."
+    );
+    Ok(())
+}
+
+/// Lists the devices let into the web interface, or turns one away.
+fn devices() -> Result<(), Failure> {
+    let home = home()?;
+    let asked: Vec<String> = env::args().skip(2).collect();
+    match asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        [] => {
+            let all = orbite::interface_devices(&home)?;
+            if all.is_empty() {
+                println!("No device was let in. Let one in: orbite pair");
+            }
+            for device in all {
+                let seen = chrono::DateTime::from_timestamp(device.seen as i64, 0)
+                    .map(|seen| {
+                        seen.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string()
+                    })
+                    .unwrap_or_default();
+                println!("{}   (last seen {seen})", device.name);
+            }
+        }
+        ["remove", ..] => {
+            let name = asked[1..].join(" ");
+            if orbite::turn_away(&home, &name)? {
+                println!("{name} is turned away: it is let in no more.");
+            } else {
+                return Err(format!("No device is called {name}.").into());
+            }
+        }
+        _ => return Err("Usage: orbite devices | devices remove NAME".into()),
+    }
+    Ok(())
 }
 
 /// Shows every connection of this installation, or adds or removes a connector.
