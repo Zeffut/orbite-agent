@@ -130,10 +130,11 @@ pub fn stays_in_the_app(to: &str, agent: Option<&str>) -> bool {
 }
 
 /// What the app's menu beside the clock offers, in order: open the window,
-/// point the app at another agent, quit.
-pub fn menu(language: Language) -> [&'static str; 3] {
+/// start with the session or not, point the app at another agent, quit.
+pub fn menu(language: Language) -> [&'static str; 4] {
     [
         language.say("Open Orbite", "Ouvrir Orbite"),
+        language.say("Start with my session", "Lancer à l'ouverture de ma session"),
         language.say("Use another agent…", "Utiliser un autre agent…"),
         language.say("Quit", "Quitter"),
     ]

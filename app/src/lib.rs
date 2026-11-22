@@ -148,6 +148,8 @@ fn tell(app: &AppHandle, title: &str) {
     if !unseen.agent.is_empty() {
         let _ = window.set_title(&unseen.agent);
     }
+    // How many, on the app's icon, where the system shows such a thing.
+    let _ = window.set_badge_count((unseen.count > 0).then_some(i64::from(unseen.count)));
     let looking = window.is_focused().unwrap_or(false) && window.is_visible().unwrap_or(false);
     if unseen.count > before && !looking {
         let body = match unseen.latest.is_empty() {
@@ -161,13 +163,18 @@ fn tell(app: &AppHandle, title: &str) {
 /// Beside the clock: the app stays at hand once its window is closed.
 #[cfg(desktop)]
 fn stay_at_hand(app: &AppHandle) -> tauri::Result<()> {
-    use tauri::menu::{Menu, MenuItem};
+    use tauri::menu::{CheckMenuItem, Menu, MenuItem};
     use tauri::tray::TrayIconBuilder;
-    let [open, other, quit] = orbite_app_core::menu(language());
+    use tauri_plugin_autostart::ManagerExt;
+    let [open, start, other, quit] = orbite_app_core::menu(language());
+    // Ticked when Orbite starts with the session, which the Owner decides here.
+    let starts = app.autolaunch().is_enabled().unwrap_or(false);
+    let starting = CheckMenuItem::with_id(app, "start", start, true, starts, None::<&str>)?;
     let offered = Menu::with_items(
         app,
         &[
             &MenuItem::with_id(app, "open", open, true, None::<&str>)?,
+            &starting,
             &MenuItem::with_id(app, "other", other, true, None::<&str>)?,
             &MenuItem::with_id(app, "quit", quit, true, None::<&str>)?,
         ],
@@ -176,8 +183,17 @@ fn stay_at_hand(app: &AppHandle) -> tauri::Result<()> {
     if let Some(icon) = app.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
-    tray.on_menu_event(|app, chosen| match chosen.id().as_ref() {
+    tray.on_menu_event(move |app, chosen| match chosen.id().as_ref() {
         "open" => come_forward(app),
+        "start" => {
+            let wanted = !app.autolaunch().is_enabled().unwrap_or(false);
+            let done = match wanted {
+                true => app.autolaunch().enable(),
+                false => app.autolaunch().disable(),
+            };
+            // The tick says what is, not what was asked.
+            let _ = starting.set_checked(if done.is_ok() { wanted } else { !wanted });
+        }
         "other" => {
             if let (Some(window), Ok(link)) =
                 (app.get_webview_window("main"), format!("{OWN_PAGES}link").parse())
@@ -202,7 +218,11 @@ pub fn run() {
     #[cfg(desktop)]
     let app = app
         .plugin(tauri_plugin_single_instance::init(|app, _, _| come_forward(app)))
-        .plugin(tauri_plugin_window_state::Builder::default().build());
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ));
     app.manage(Told(AtomicU32::new(0)))
         .register_asynchronous_uri_scheme_protocol("orbite", |context, request, responder| {
             let app = context.app_handle().clone();
