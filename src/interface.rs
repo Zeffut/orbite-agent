@@ -392,12 +392,16 @@ fn page(kind: &'static str, body: &'static str) -> Response {
 /// own page: another site a browser has open cannot send it.
 fn from_the_page(headers: &HeaderMap) -> bool {
     let own = headers.get("x-orbite").is_some();
-    let host = headers.get(header::HOST).and_then(|host| host.to_str().ok());
+    // The place the browser asked for: as it reached Orbite, or as it
+    // reached what serves Orbite to it encrypted.
+    let named = |name: &str| headers.get(name).and_then(|host| host.to_str().ok());
+    let places = [named("host"), named("x-forwarded-host")];
     let same_place = match headers.get(header::ORIGIN).and_then(|origin| origin.to_str().ok()) {
         None => true,
-        Some(origin) => host.is_some_and(|host| {
-            origin.strip_prefix("http://").or(origin.strip_prefix("https://")) == Some(host)
-        }),
+        Some(origin) => {
+            let from = origin.strip_prefix("http://").or(origin.strip_prefix("https://"));
+            from.is_some() && places.contains(&from)
+        }
     };
     own && same_place
 }

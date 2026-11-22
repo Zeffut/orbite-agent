@@ -239,8 +239,23 @@ async fn what_another_site_has_a_browser_send_is_refused() {
     assert_eq!(say(&[]).await, 401);
     // From a page of another place, though it adds it.
     assert_eq!(say(&[("x-orbite", "1"), ("origin", "http://elsewhere.example")]).await, 401);
+    // Nor one that claims to be where the interface is served encrypted.
+    const ELSEWHERE: &[(&str, &str)] = &[
+        ("x-orbite", "1"),
+        ("origin", "https://elsewhere.example"),
+        ("x-forwarded-host", "host.tail1234.ts.net:8377"),
+    ];
+    assert_eq!(say(ELSEWHERE).await, 401);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(provider.times_asked(), 0);
+
+    // The page itself, reached through what serves it encrypted, is heard.
+    const THROUGH: &[(&str, &str)] = &[
+        ("x-orbite", "1"),
+        ("origin", "https://host.tail1234.ts.net:8377"),
+        ("x-forwarded-host", "host.tail1234.ts.net:8377"),
+    ];
+    assert_eq!(say(THROUGH).await, 200);
 }
 
 #[tokio::test]

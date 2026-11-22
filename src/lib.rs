@@ -22,6 +22,7 @@ mod openai_compatible;
 mod png;
 mod provider;
 mod providers;
+mod reach;
 mod routed;
 mod routines;
 mod secrets;
@@ -65,6 +66,7 @@ pub use provider::{
     ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request, Usage,
 };
 pub use providers::{change_providers, change_providers_in, providers_shown};
+pub use reach::{close_on_tailscale, open_on_tailscale, tailscale};
 pub use routed::Routed;
 pub use secrets::{Secrets, SecretsError};
 pub use settings::{SETTINGS, Settings, TAKES_A_RESTART};

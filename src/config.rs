@@ -44,6 +44,10 @@ pub struct Config {
     /// an address and a port, such as `127.0.0.1:8377`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<String>,
+    /// The address the Owner's other devices reach the web interface at,
+    /// when something serves it to them encrypted: `https://…`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_reached_at: Option<String>,
 }
 
 /// What writes down what the Owner says aloud.

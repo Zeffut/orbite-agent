@@ -60,6 +60,9 @@ async fn main() -> ExitCode {
         "uninstall" | "export" | "restore" | "version" | "providers" => true,
         _ => false,
     };
+    // What Tailscale is asked takes whoever ran this, root or its operator:
+    // asked before going on as the Agent's account.
+    let reach = if command == "interface" { reach() } else { None };
     if !changes_the_machine && let Err(failure) = become_the_agents_account() {
         eprintln!("{failure}");
         return ExitCode::from(2);
@@ -82,7 +85,7 @@ async fn main() -> ExitCode {
         Some("setup") => setup().await,
         Some("providers") => providers().await,
         Some("connections") => connections(),
-        Some("interface") => interface(),
+        Some("interface") => interface(reach),
         Some("pair") => pair(),
         Some("devices") => devices(),
         Some("transcription") => {
@@ -433,21 +436,43 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
 }
 
 /// Where the web interface is served, or turns it on or off.
-fn interface() -> Result<(), Failure> {
+/// Has Tailscale, where this machine has it, serve the web interface to
+/// the Owner's other devices when it is turned on for this machine alone,
+/// or stop when it is turned off. `None` when Tailscale was not asked.
+fn reach() -> Option<Result<String, String>> {
+    let asked: Vec<String> = env::args().skip(2).collect();
+    let tailscale = orbite::tailscale()?;
+    match asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        ["on"] => Some(orbite::open_on_tailscale(&tailscale, DEFAULT_INTERFACE.parse().ok()?)),
+        ["off"] => {
+            let reached = Config::load(&home().ok()?).ok()?.interface_reached_at?;
+            let _ = orbite::close_on_tailscale(&tailscale, &reached);
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Where the web interface is served unless told otherwise: on the machine
+/// itself, where nothing is open to anyone.
+const DEFAULT_INTERFACE: &str = "127.0.0.1:8377";
+
+fn interface(reach: Option<Result<String, String>>) -> Result<(), Failure> {
     let home = home()?;
     let mut config = Config::load(&home)?;
     let asked: Vec<String> = env::args().skip(2).collect();
     match asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => match &config.interface {
             Some(address) => println!(
-                "The web interface is served at http://{address}\nLet a device in: orbite pair"
+                "The web interface is served at {}\nLet a device in: orbite pair",
+                config.interface_reached_at.clone().unwrap_or(format!("http://{address}"))
             ),
             None => println!("The web interface is off. Turn it on: orbite interface on"),
         },
         ["on"] | ["on", _] => {
             // On the machine itself unless told otherwise: nothing is open
             // to anyone the Owner did not mean to reach it.
-            let address = asked.get(1).map_or("127.0.0.1:8377", String::as_str);
+            let address = asked.get(1).map_or(DEFAULT_INTERFACE, String::as_str);
             let parsed: std::net::SocketAddr = address.parse().map_err(|_| {
                 format!("{address} is not an address: write one such as 127.0.0.1:8377, or your machine's address on your private network and a port.")
             })?;
@@ -459,13 +484,25 @@ fn interface() -> Result<(), Failure> {
                 .into());
             }
             config.interface = Some(address.to_owned());
+            config.interface_reached_at = reach.clone().and_then(Result::ok);
             config.save(&home)?;
-            println!(
-                "The web interface will be served at http://{address}\nIt applies at the next start of Orbite (as a service: sudo systemctl restart orbite).\nThen let a device in: orbite pair"
-            );
+            let applies = "It applies at the next start of Orbite (as a service: sudo systemctl \
+                           restart orbite).\nThen let a device in: orbite pair";
+            match reach {
+                Some(Ok(reached)) => println!(
+                    "The web interface will be reached at {reached}\nfrom the devices of your \
+                     Tailscale network, encrypted. Nobody else reaches it.\n{applies}"
+                ),
+                Some(Err(why)) => println!(
+                    "The web interface will be served on this machine only (http://{address}): \
+                     Tailscale could not serve it to your other devices.\n{why}.\n{applies}"
+                ),
+                None => println!("The web interface will be served at http://{address}\n{applies}"),
+            }
         }
         ["off"] => {
             config.interface = None;
+            config.interface_reached_at = None;
             config.save(&home)?;
             println!("The web interface is off. It applies at the next start of Orbite.");
         }
@@ -481,12 +518,14 @@ fn interface() -> Result<(), Failure> {
 /// Shows a code that lets one more device into the web interface.
 fn pair() -> Result<(), Failure> {
     let home = home()?;
-    let Some(address) = Config::load(&home)?.interface else {
+    let config = Config::load(&home)?;
+    let Some(address) = config.interface else {
         return Err("The web interface is off. Turn it on first: orbite interface on".into());
     };
+    let at = config.interface_reached_at.unwrap_or(format!("http://{address}"));
     let code = orbite::pairing_code(&home)?;
     println!(
-        "Open http://{address} on the device, and type this code there:\n\n    {code}\n\nIt works once, for ten minutes."
+        "Open {at} on the device, and type this code there:\n\n    {code}\n\nIt works once, for ten minutes."
     );
     Ok(())
 }
@@ -742,6 +781,12 @@ fn uninstall() -> Result<(), Failure> {
     };
     systemctl(&["disable", "--now", "orbite"]);
     systemctl(&["disable", "--now", "orbite-update.timer"]);
+    // What Tailscale serves for the web interface goes with it.
+    if let Ok(Config { interface_reached_at: Some(reached), .. }) = Config::load(&data)
+        && let Some(tailscale) = orbite::tailscale()
+    {
+        let _ = orbite::close_on_tailscale(&tailscale, &reached);
+    }
     // The data first: were it to fail, the program is still there to try again.
     if !keep && data.exists() {
         fs::remove_dir_all(&data)?;

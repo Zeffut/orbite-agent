@@ -3289,8 +3289,10 @@ impl<P: Provider + 'static> Agent<P> {
     /// Where the web interface is served, when it is on.
     fn interface(&self) -> Option<(PathBuf, String)> {
         let home = self.home.clone()?;
-        let address = crate::Config::load(&home).ok()?.interface?;
-        Some((home, address))
+        let config = crate::Config::load(&home).ok()?;
+        let served = config.interface?;
+        // Where the Owner's devices reach it, when that is not where it is served.
+        Some((home, config.interface_reached_at.unwrap_or(format!("http://{served}"))))
     }
 
     /// A code that lets one more device into the web interface, with where
@@ -3306,7 +3308,7 @@ impl<P: Provider + 'static> Agent<P> {
         };
         match crate::pairing_code(&home) {
             Ok(code) => format!(
-                "{} http://{address}/#{code}\n\n{} **{code}**. {}",
+                "{} {address}/#{code}\n\n{} **{code}**. {}",
                 say("On the device, open", "Sur l'appareil, ouvre"),
                 say("If it asks for a code:", "S'il demande un code :"),
                 say("It works once, for ten minutes.", "Il sert une fois, pendant dix minutes."),
