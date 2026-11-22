@@ -151,8 +151,10 @@ a.other{color:var(--accent);padding:10px 0;display:block}.wrong{color:var(--warn
 .where{font-family:ui-monospace,Menlo,monospace;font-size:14px;overflow-wrap:anywhere}";
 
 const ICON: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' width='64' height='64' aria-hidden='true'>\
-<rect width='64' height='64' rx='14' fill='#0f1115'/><circle cx='32' cy='32' r='9' fill='#f4f1ea'/>\
-<ellipse cx='32' cy='32' rx='24' ry='11' fill='none' stroke='#f4f1ea' stroke-width='3' transform='rotate(-28 32 32)'/></svg>";
+<rect width='64' height='64' rx='14' fill='#0d0d0d'/><g transform='translate(6 6) scale(0.52)'>\
+<g transform='rotate(-24 50 50)'><ellipse cx='50' cy='50' rx='44' ry='13' fill='none' stroke='#f2f2f0' stroke-width='5'/></g>\
+<circle cx='50' cy='50' r='27' fill='#f2f2f0'/><rect x='40' y='38' width='6' height='13' rx='3' fill='#0d0d0d'/>\
+<rect x='54' y='38' width='6' height='13' rx='3' fill='#0d0d0d'/></g></svg>";
 
 /// A page of the app's, around `inside`; `then` is where it leads on to by
 /// itself, at once, when it does.
