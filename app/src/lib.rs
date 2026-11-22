@@ -119,6 +119,8 @@ async fn answer(app: AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
 /// Opens `to` in the Owner's browser, when it is a page of the web; what
 /// could not be opened is said where the app's own words go.
 fn open_outside(app: &AppHandle, to: &tauri::Url) {
+    // For now: said each time, to find out where a link gets lost on Linux.
+    eprintln!("orbite: asked to open {to} outside");
     if !matches!(to.scheme(), "https" | "http") {
         return;
     }
