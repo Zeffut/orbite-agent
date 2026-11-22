@@ -116,6 +116,17 @@ async fn answer(app: AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
         .expect("a page of the app's own")
 }
 
+/// Opens `to` in the Owner's browser, when it is a page of the web; what
+/// could not be opened is said where the app's own words go.
+fn open_outside(app: &AppHandle, to: &tauri::Url) {
+    if !matches!(to.scheme(), "https" | "http") {
+        return;
+    }
+    if let Err(why) = app.opener().open_url(to.as_str(), None::<&str>) {
+        eprintln!("orbite: {to} could not be opened in a browser: {why}");
+    }
+}
+
 /// Shows the window again, in front.
 fn come_forward(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -209,9 +220,7 @@ pub fn run() {
                     if stays_in_the_app(to.as_str(), kept(&leaving).as_deref()) {
                         return true;
                     }
-                    if matches!(to.scheme(), "https" | "http") {
-                        let _ = leaving.opener().open_url(to.as_str(), None::<&str>);
-                    }
+                    open_outside(&leaving, to);
                     false
                 })
                 .on_document_title_changed(move |_, title| tell(&telling, &title));
@@ -224,9 +233,7 @@ pub fn run() {
                     .min_inner_size(340.0, 480.0)
                     // A link the agent's page opens apart is another site's.
                     .on_new_window(move |to, _| {
-                        if matches!(to.scheme(), "https" | "http") {
-                            let _ = opening.opener().open_url(to.as_str(), None::<&str>);
-                        }
+                        open_outside(&opening, &to);
                         tauri::webview::NewWindowResponse::Deny
                     })
             };
