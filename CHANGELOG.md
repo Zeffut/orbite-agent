@@ -2,6 +2,16 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.6.1
+
+Released on 2026-11-22. A new look for the conversation in a browser, and a face for Orbite.
+
+- **Orbite has a mark: a planet that looks back.** It sits beside your agent's name and shows what the agent is doing: it blinks at rest, a small moon travels its ring while the agent works, and a dot appears when an answer is awaited from you. The icons are redrawn from it.
+- **A quieter conversation**: near-black or white ground following your device, soft bubbles, the hour where the conversation picks up again, and one rounded bar to write in, with the files to the left and the microphone or the send button to the right.
+- A question and its answers come as one card with lettered choices. An approval you answered folds into a single line.
+- A tab left in the background counts in its title what came meanwhile, with the latest in a few words.
+- An arrow leads back to the latest messages when you read further up.
+
 ## 0.6.0
 
 Released on 2026-11-22. Your agent in a browser. Run the installer again when updating: it renews what the agent's account may do as root, which turning the interface on from the conversation needs.

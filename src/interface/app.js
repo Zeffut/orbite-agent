@@ -12,7 +12,8 @@
       allowed: "Allowed", alwaysAllowed: "Always allowed", denied: "Denied", wrote: "Left out: you wrote instead",
       undone: "This cannot be undone.", critical: "Asked every time, whatever your settings.",
       working: "Working…", elsewhere: "From another place", browser: "Browser",
-      screen: "Your agent's screen", close: "Close",
+      screen: "Your agent's screen", close: "Close", screenShort: "Screen", latest: "Latest messages",
+      writeTo: "Message {name}", today: "Today", yesterday: "Yesterday",
       attach: "Attach a file", record: "Record a voice message", cancel: "Cancel", remove: "Remove",
       voice: "Voice message", tooBig: "That file is too big: 50 MB at most.",
       notSent: "That was not sent. Try again.", fileGone: "A file did not go through: attach it again.",
@@ -28,7 +29,8 @@
       allowed: "Autorisé", alwaysAllowed: "Toujours autorisé", denied: "Refusé", wrote: "Laissé de côté : tu as écrit à la place",
       undone: "Cela ne peut pas être annulé.", critical: "Demandé à chaque fois, quels que soient tes réglages.",
       working: "Au travail…", elsewhere: "Depuis un autre endroit", browser: "Navigateur",
-      screen: "L'écran de ton agent", close: "Fermer",
+      screen: "L'écran de ton agent", close: "Fermer", screenShort: "Écran", latest: "Derniers messages",
+      writeTo: "Envoyer un message à {name}", today: "Aujourd'hui", yesterday: "Hier",
       attach: "Joindre un fichier", record: "Enregistrer un message vocal", cancel: "Annuler", remove: "Retirer",
       voice: "Message vocal", tooBig: "Ce fichier est trop gros : 50 Mo au plus.",
       notSent: "Ce n'est pas parti. Réessaie.", fileGone: "Un fichier n'est pas passé : joins-le à nouveau.",
@@ -90,15 +92,59 @@
 
   const said = $("said");
   const atTheEnd = () => said.scrollHeight - said.scrollTop - said.clientHeight < 120;
+  // The hour is marked where the Conversation picks up after a while, or on another day.
+  let lastAt = 0;
+  function hour(at) {
+    const then = new Date(at * 1000);
+    const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(then).setHours(0, 0, 0, 0)) / 86400000);
+    const day = days === 0 ? words.today : days === 1 ? words.yesterday
+      : then.toLocaleDateString([], { day: "numeric", month: "short" });
+    return `${day} ${then.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  }
   function add(element, event) {
     const follow = atTheEnd();
     if (event.id) element.dataset.event = event.id;
+    if (event.at && (event.at - lastAt > 900 || new Date(event.at * 1000).getDate() !== new Date(lastAt * 1000).getDate())) {
+      said.append(make("div", "when", hour(event.at)));
+    }
+    if (event.at) lastAt = event.at;
     said.append(element);
     if (follow) said.scrollTop = said.scrollHeight;
   }
+  // The Agent's mark stirs while it works, and a way back down shows when the Owner reads further up.
+  const mascot = document.querySelector("#who .mascot");
+  const working = (busy) => mascot.classList.toggle("working", busy);
+  const waiting = () => mascot.classList.toggle("waiting", asks.size > 0);
+  said.addEventListener("scroll", () => { $("down").hidden = atTheEnd(); });
+  $("down").addEventListener("click", () => { said.scrollTop = said.scrollHeight; });
+
+  // What came while the Owner was looking elsewhere is counted in the page's
+  // title, with the latest in a few words: a tab shows it, and Orbite's app
+  // reads it there to tell them.
+  let agentName = "Orbite";
+  let unseen = 0;
+  function name(latest) {
+    const few = (latest || "").replace(/\s+/g, " ").trim().slice(0, 90);
+    document.title = unseen ? `(${unseen}) ${agentName}${few ? " — " + few : ""}` : agentName;
+  }
+  function came(latest) {
+    if (document.hasFocus() && !document.hidden) return;
+    unseen += 1;
+    name(latest);
+  }
+  const looked = () => { if (unseen) { unseen = 0; name(); } };
+  window.addEventListener("focus", looked);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && document.hasFocus()) looked(); });
 
   const asks = new Map();
+  let replaying = true;
   function show(event) {
+    // Only what arrives now is new: not what a device finds again on opening.
+    if (!replaying && event.id) {
+      if (event.kind === "agent") came(event.text);
+      else if (event.kind === "ask") came(event.summary);
+      else if (event.kind === "file") came(event.caption || event.name);
+    }
     switch (event.kind) {
       case "owner": {
         const bubble = make("div", "said owner" + (event.elsewhere ? " elsewhere" : ""));
@@ -129,25 +175,32 @@
         break;
       }
       case "agent": {
-        if (event.text) {
-          const bubble = make("div", "said agent");
-          bubble.append(written(event.text));
-          add(bubble, event);
-        }
         if (event.choices && event.choices.length) {
+          // A question and what can be answered, as one card.
           const choices = make("div", "choices");
-          for (const choice of event.choices) {
-            const button = make("button", "", choice.label);
+          if (event.text) {
+            const asked = make("div", "asked");
+            asked.append(written(event.text));
+            choices.append(asked);
+          }
+          event.choices.forEach((choice, place) => {
+            const button = make("button");
             button.type = "button";
+            button.append(make("span", "letter", String.fromCharCode(65 + (place % 26))), make("span", "", choice.label));
             button.addEventListener("click", () => {
               for (const other of choices.querySelectorAll("button")) other.disabled = true;
               post("/api/say", { text: choice.command, tapped: true });
             });
             choices.append(button);
-          }
+          });
           add(choices, event);
+        } else if (event.text) {
+          const bubble = make("div", "said agent");
+          bubble.append(written(event.text));
+          add(bubble, event);
         }
         $("doing").hidden = true;
+        working(false);
         break;
       }
       case "ask": {
@@ -170,16 +223,23 @@
         card.append(answers);
         asks.set(event.ask, card);
         add(card, event);
+        waiting();
         break;
       }
       case "settled": {
         const card = asks.get(event.ask);
         if (!card) break;
-        const answers = card.querySelector(".answers");
-        if (answers) answers.remove();
+        // Once answered, the card gives way to a line: what was asked, and what was said of it.
         const told = { allow: words.allowed, always: words.alwaysAllowed, deny: words.denied, wrote: words.wrote }[event.answer];
         const how = event.answer === "allow" || event.answer === "always" ? " allowed" : "";
-        card.append(make("div", "answered" + how, told));
+        const line = make("div", "event answered" + how);
+        line.append(make("strong", "", card.querySelector("strong").textContent), ` · ${told}`);
+        const detail = card.querySelector(".detail");
+        if (detail) line.title = detail.textContent;
+        if (card.dataset.event) line.dataset.event = card.dataset.event;
+        card.replaceWith(line);
+        asks.delete(event.ask);
+        waiting();
         break;
       }
       case "file": {
@@ -214,21 +274,27 @@
           if (there) there.remove();
         }
         break;
+      case "caught-up":
+        replaying = false;
+        break;
       case "screen":
         sees(event.seen, true);
         break;
       case "step":
         $("doing").textContent = `${event.icon} ${event.text}`;
         $("doing").hidden = false;
+        working(true);
         break;
       case "working":
         if ($("doing").hidden) {
           $("doing").textContent = words.working;
           $("doing").hidden = false;
         }
+        working(true);
         break;
       case "idle":
         $("doing").hidden = true;
+        working(false);
         break;
     }
   }
@@ -490,6 +556,14 @@
       $("talk").hidden = false;
       said.replaceChildren();
       asks.clear();
+      waiting();
+      agentName = told.agent || "Orbite";
+      $("title").textContent = agentName;
+      unseen = 0;
+      name();
+      text.placeholder = words.writeTo.replace("{name}", agentName);
+      $("watch").setAttribute("aria-label", words.screen);
+      lastAt = 0;
       listen();
       arrange();
       sees(told.screen, false);
