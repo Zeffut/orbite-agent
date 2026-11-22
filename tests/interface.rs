@@ -418,6 +418,8 @@ async fn a_device_turned_away_is_told_nothing_more_even_on_a_page_left_open() {
     let provider = ScriptedProvider::answering(["Still here."]);
     let first = agent_with_a_paired_browser(home.path(), &provider).await;
     let mut seen_by_first = first.watches(None).await.unwrap();
+    // It has read all there was.
+    next(&mut seen_by_first, "caught-up").await;
     let mut other = Browser::at(first.at.trim_start_matches("http://").parse().unwrap());
     let code = orbite::pairing_code(home.path()).unwrap();
     assert_eq!(other.pairs_with(&code).await, 200);
@@ -615,4 +617,29 @@ async fn a_code_asked_for_in_the_page_is_shown_there_and_kept_nowhere() {
         let kept = std::fs::read(home.path().join(file)).unwrap_or_default();
         assert!(!String::from_utf8_lossy(&kept).contains("/#"), "{file} holds the link");
     }
+}
+
+#[tokio::test]
+async fn a_page_is_told_where_what_it_finds_again_ends_and_what_is_new_begins() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::answering(["One.", "Two."]);
+    let browser = agent_with_a_paired_browser(home.path(), &provider).await;
+    let mut first = browser.watches(None).await.unwrap();
+    browser.says("First").await;
+    next(&mut first, "agent").await;
+
+    // Opened again: what was said, then the mark, then only what comes after.
+    let mut again = browser.watches(None).await.unwrap();
+    let mut kinds = Vec::new();
+    loop {
+        let told =
+            tokio::time::timeout(Duration::from_secs(5), again.recv()).await.unwrap().unwrap();
+        kinds.push(told["kind"].as_str().unwrap().to_owned());
+        if told["kind"] == "caught-up" {
+            break;
+        }
+    }
+    assert_eq!(kinds.iter().filter(|kind| *kind == "agent").count(), 1, "{kinds:?}");
+    browser.says("Second").await;
+    assert_eq!(next(&mut again, "agent").await["text"], "Two.");
 }

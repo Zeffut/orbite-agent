@@ -651,16 +651,20 @@ async fn events(
         Ok::<_, Infallible>(if id > 0 { event.id(id.to_string()) } else { event })
     };
     let stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> = Box::pin(
-        tokio_stream::iter(earlier).map(told).chain(
-            live.filter_map(move |sent| match sent {
-                // What is kept is not told twice to a device that just read it.
-                Ok((id, _)) if id > 0 && id <= last => None,
-                Ok(sent) => Some(sent),
-                // The device fell behind: it reconnects and reads what it missed.
-                Err(_) => None,
-            })
-            .map(told),
-        ),
+        tokio_stream::iter(earlier)
+            // Then a word that this is all there was: what follows is new.
+            .chain(tokio_stream::iter([(0, json!({ "kind": "caught-up" }).to_string())]))
+            .map(told)
+            .chain(
+                live.filter_map(move |sent| match sent {
+                    // What is kept is not told twice to a device that just read it.
+                    Ok((id, _)) if id > 0 && id <= last => None,
+                    Ok(sent) => Some(sent),
+                    // The device fell behind: it reconnects and reads what it missed.
+                    Err(_) => None,
+                })
+                .map(told),
+            ),
     );
     Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }

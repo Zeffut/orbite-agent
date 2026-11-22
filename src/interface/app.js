@@ -118,8 +118,33 @@
   said.addEventListener("scroll", () => { $("down").hidden = atTheEnd(); });
   $("down").addEventListener("click", () => { said.scrollTop = said.scrollHeight; });
 
+  // What came while the Owner was looking elsewhere is counted in the page's
+  // title, with the latest in a few words: a tab shows it, and Orbite's app
+  // reads it there to tell them.
+  let agentName = "Orbite";
+  let unseen = 0;
+  function name(latest) {
+    const few = (latest || "").replace(/\s+/g, " ").trim().slice(0, 90);
+    document.title = unseen ? `(${unseen}) ${agentName}${few ? " — " + few : ""}` : agentName;
+  }
+  function came(latest) {
+    if (document.hasFocus() && !document.hidden) return;
+    unseen += 1;
+    name(latest);
+  }
+  const looked = () => { if (unseen) { unseen = 0; name(); } };
+  window.addEventListener("focus", looked);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && document.hasFocus()) looked(); });
+
   const asks = new Map();
+  let replaying = true;
   function show(event) {
+    // Only what arrives now is new: not what a device finds again on opening.
+    if (!replaying && event.id) {
+      if (event.kind === "agent") came(event.text);
+      else if (event.kind === "ask") came(event.summary);
+      else if (event.kind === "file") came(event.caption || event.name);
+    }
     switch (event.kind) {
       case "owner": {
         const bubble = make("div", "said owner" + (event.elsewhere ? " elsewhere" : ""));
@@ -248,6 +273,9 @@
           const there = said.querySelector(`[data-event="${Number(gone)}"]`);
           if (there) there.remove();
         }
+        break;
+      case "caught-up":
+        replaying = false;
         break;
       case "screen":
         sees(event.seen, true);
@@ -529,10 +557,11 @@
       said.replaceChildren();
       asks.clear();
       waiting();
-      const name = told.agent || "Orbite";
-      $("title").textContent = name;
-      document.title = name;
-      text.placeholder = words.writeTo.replace("{name}", name);
+      agentName = told.agent || "Orbite";
+      $("title").textContent = agentName;
+      unseen = 0;
+      name();
+      text.placeholder = words.writeTo.replace("{name}", agentName);
       $("watch").setAttribute("aria-label", words.screen);
       lastAt = 0;
       listen();
