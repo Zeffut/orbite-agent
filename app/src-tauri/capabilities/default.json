@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the app's own page may ask of the app: nothing a page of the agent's is given.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

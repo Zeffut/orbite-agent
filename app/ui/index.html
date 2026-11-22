@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Orbite</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <img src="icon.svg" alt="" width="64" height="64">
+  <section id="looking" hidden>
+    <h1 data-say="looking"></h1>
+    <p id="where"></p>
+  </section>
+  <section id="away" hidden>
+    <h1 data-say="away"></h1>
+    <p data-say="awayWhy"></p>
+    <button id="again" data-say="again"></button>
+    <button id="other" class="quiet" data-say="other"></button>
+  </section>
+  <form id="link" hidden>
+    <h1 data-say="title"></h1>
+    <p data-say="how"></p>
+    <label><span data-say="label"></span>
+      <input id="pasted" inputmode="url" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="https://…" required></label>
+    <button data-say="open"></button>
+    <p id="wrong" class="wrong" role="alert" hidden></p>
+  </form>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
