@@ -1313,13 +1313,17 @@ impl<P: Provider + 'static> Agent<P> {
         if let Some(desk) = &self.host.computer {
             // As the Owner set it, read each time: it may have just changed.
             desk.keep_to_its_own(matches!(self.store.setting("computer_own"), Ok(Some(_))));
-            if let crate::computer::Which::This(account) = desk.which() {
-                instructions.push_str(&format!(
+            // Said either way: the Agent is never left to guess where it acts.
+            instructions.push_str(&match desk.which() {
+                crate::computer::Which::This(account) => format!(
                     "\n\nYour Computer is this machine's own desktop, opened by {account}: they \
                      see what you do there, and their accounts are signed in. Leave their \
                      windows as you found them."
-                ));
-            }
+                ),
+                crate::computer::Which::ItsOwn => {
+                    "\n\nYour Computer is your own: nobody else looks at its screen.".to_owned()
+                }
+            });
         }
         if let Some(memory) = &self.host.memory {
             instructions.push_str(&format!("\n\n{MEMORY_INSTRUCTIONS}\n"));

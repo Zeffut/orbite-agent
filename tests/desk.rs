@@ -119,7 +119,9 @@ async fn a_desktop_offered_by_its_account_is_the_agents_computer_until_its_owner
     heard(&mut owner).await;
     owner.says("Look at your screen.");
     assert_eq!(heard(&mut owner).await, "Looked.");
-    assert!(!provider.last_instructions().contains("this machine's own desktop"));
+    let told = provider.last_instructions();
+    assert!(told.contains("Your Computer is your own"), "{told}");
+    assert!(!told.contains("this machine's own desktop"), "{told}");
 
     // Once Orbite stops, the helper has nothing to serve and ends with it.
     drop(owner);
