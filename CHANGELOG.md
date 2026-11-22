@@ -2,12 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## 0.5.16
+## 0.5.17
 
-Released on 2026-11-22. A security fix found by an independent review; update from any version, and run the installer again to renew what the agent's account may do as root.
+Released on 2026-11-22. A security fix found by an independent review (0.5.16 was never published: its own trials stopped it); update from any version, and run the installer again to renew what the agent's account may do as root.
 
 - **What Orbite runs as root is taken from the system's own folders.** The agent's account may run `orbite update` as root, which restarts the service with `systemctl`. On a system whose `sudo` keeps the caller's search path (Arch Linux as installed, for one), the agent's account could have had another program run as root in its place. Orbite now takes it from where the system keeps its programs, and the installer has `sudo` do the same for the agent's account. Debian, Ubuntu and Fedora as installed were not exposed.
-- For the same reason, settings put around a command (`ORBITE_…`) are no longer heard when Orbite is run as root through `sudo` by another account, and the installer has `sudo` drop them. This only mattered on a machine whose `sudo` was set to keep the caller's environment.
+- For the same reason, settings put around a command (`ORBITE_…`) are no longer heard when `sudo` itself runs Orbite as root for another account, and the installer has `sudo` drop them. This only mattered on a machine whose `sudo` was set to keep the caller's environment.
 
 ## 0.5.15
 

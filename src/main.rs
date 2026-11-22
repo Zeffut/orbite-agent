@@ -1064,13 +1064,16 @@ fn required(name: &str) -> Result<String, Failure> {
 }
 
 fn setting(name: &str) -> Option<String> {
-    // Run as root through sudo by an account that is not root: what that
+    // Run as root by sudo itself for an account that is not root: what that
     // account put around the command has no say in what root then does.
     #[cfg(unix)]
     {
-        let by_another = env::var("SUDO_UID").is_ok_and(|asked_by| asked_by.trim() != "0");
+        let (asked_by, ran) = (env::var("SUDO_UID").ok(), env::var("SUDO_COMMAND").ok());
+        let for_another = env::current_exe().is_ok_and(|program| {
+            orbite::run_by_sudo_for_another(asked_by.as_deref(), ran.as_deref(), &program)
+        });
         // SAFETY: a plain system call.
-        if by_another && unsafe { libc::geteuid() } == 0 {
+        if for_another && unsafe { libc::geteuid() } == 0 {
             return None;
         }
     }
