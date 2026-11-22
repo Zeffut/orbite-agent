@@ -41,6 +41,7 @@ The installer:
 - creates an account called `orbite`, which the agent runs as, and its folder `/var/lib/orbite`;
 - lets the agent's account, which is not root, do a named few things as root (update Orbite, restart its service, restart or stop the machine, turn the web interface on or off) and nothing else; whether it does them without asking you is the permission level's to say;
 - installs a service that starts with the machine and comes back by itself after a crash, and a daily check for updates;
+- where the machine has a desktop, has a helper start with your graphical session (yours only: the account that ran the installer), which lends that desktop to your agent as its computer; see [the agent's computer](first-day.md#the-agents-computer);
 - sets up the agent's own computer: a virtual screen (`xvfb`, `xdotool`), fonts, and Firefox from Mozilla's own package repository, which it adds to the machine's package sources. To install Orbite without it, put `ORBITE_WITHOUT_COMPUTER=1` before `sh`. If this part fails, Orbite is installed all the same, and running the installer again later adds it.
 
 **If the installer stops** on something it did not foresee, it prints a link to a new issue, filled in with what stopped and your system's name, processor and memory. Nothing is sent unless you open it and send it; what the terminal showed just before helps, if you paste it in.

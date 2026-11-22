@@ -11,6 +11,7 @@ mod channel;
 mod chatgpt;
 mod computer;
 mod config;
+mod desk;
 mod extensions;
 mod hearing;
 mod interface;
@@ -51,6 +52,10 @@ pub use channel::{Answer, Approval, Channel};
 pub use chatgpt::ChatGpt;
 pub use computer::{Computer, Screen};
 pub use config::{Config, ProviderChoice, Transcription};
+pub use desk::{
+    NotOffered, SOCKET as DESK_SOCKET, lending as lending_this_computer,
+    offer as offer_this_computer,
+};
 pub use hearing::{Advice, MODELS, Machine, Model, chosen as chosen_transcriber, transcription};
 pub use interface::{
     Device, Interface, devices as interface_devices, is_private, pairing_code, turn_away,

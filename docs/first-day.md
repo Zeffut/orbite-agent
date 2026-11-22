@@ -11,7 +11,7 @@ You talk to your agent in a browser ([the web interface](interface.md)) or in Te
 - **Work in the background.** It can hand a long piece of work to a sub-agent and carry on talking with you.
 - **Act on a schedule.** "Every morning at 8, tell me the weather" becomes a routine; "remind me at 5 to call Ada" a reminder. A routine's run, like a sub-agent, can ask you nothing: it does what your agent would do without asking at the permission level you chose, and reports the rest as left to do.
 - **Wake up by itself** now and then to review what is pending, and tell you only when something deserves it.
-- **Use a computer of its own**, where the machine has one: a screen nobody else looks at, with a real browser, that it sees through pictures and acts on with mouse and keyboard. It is for sites that need signing in or a person's gestures. See below.
+- **Use a computer**: this machine's own desktop where it has one, or a screen of its own that nobody else looks at. It sees it through pictures and acts with mouse and keyboard. It is for sites that need signing in or a person's gestures. See below.
 - **Keep a task list**, and whatever [extensions](extensions.md) add.
 - **Receive and send files.** Send it a document or a photo; ask it to send you a file it made.
 
@@ -57,7 +57,14 @@ A command runs without asking only when it plainly does nothing but look: `ls`, 
 
 ## The agent's computer
 
-Reading the web is done by fetching pages, which is fast. For what that cannot do, your agent has a computer of its own: a virtual screen and a browser running under its account, whose sign-ins are kept from one day to the next in `/var/lib/orbite/computer`.
+Reading the web is done by fetching pages, which is fast. For what that cannot do, your agent has a computer, of one of two kinds:
+
+- **This computer**: the desktop you see on the machine's screen, with its programs and the accounts you are signed in to. You watch what your agent does and can take the keyboard back at any time. It is used whenever the machine has a desktop open under the account that installed Orbite.
+- **A computer of its own**: a virtual screen and a browser running under its account, which nobody else looks at and where nothing of yours is. Its sign-ins are kept from one day to the next in `/var/lib/orbite/computer`. It is what a machine without a desktop, such as a server, has.
+
+Tell your agent *"use a computer of your own"* or *"use this computer"* to choose; `/settings` shows it under **Computer**. On this computer your agent acts with your accounts, and a mouse and a keyboard can do there whatever you can. So it asks before taking them (**Use this computer**), for ten minutes at a time, and that request cannot be allowed once and for all; only the free permission level does away with it, as with every other request. Give it a machine, or a session, where that suits you, and keep it to a computer of its own otherwise.
+
+This computer is lent by a small helper, `orbite desk`, which starts with your graphical session. It works on sessions that run on Xorg. A Wayland session, the default on recent Ubuntu and Fedora, cannot be lent yet, and your agent keeps a computer of its own there; choosing "on Xorg" at the login screen is the way around for now.
 
 - **Going to a site asks you first**, with the site and what for. **Always** then covers that site. What it does there afterwards (clicks, typing) does not ask.
 - **Typing a secret asks every time.** The agent names the secret and Orbite types its value; the model does not see it, unless the field shows what is typed, in which case the picture of the screen does. The request says so.

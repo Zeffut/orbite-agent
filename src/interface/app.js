@@ -81,6 +81,13 @@
           link.href = named ? named[2] : mark;
           link.target = "_blank";
           link.rel = "noopener noreferrer";
+          // Opened by the page itself: a browser makes a tab of it, and
+          // Orbite's app, which shows no other site, hands it to the browser.
+          link.addEventListener("click", (clicked) => {
+            if (clicked.ctrlKey || clicked.metaKey || clicked.shiftKey || clicked.button !== 0) return;
+            clicked.preventDefault();
+            window.open(link.href, "_blank", "noopener,noreferrer");
+          });
           whole.append(link);
         }
         from = found.index + mark.length;

@@ -407,6 +407,9 @@ impl Host {
     /// the screen once it has settled.
     async fn on_the_computer(&self, gesture: Gesture) -> String {
         let Some(desk) = &self.computer else { return NO_COMPUTER.into() };
+        // Reached here with the Owner's say where one was needed: it holds
+        // for as long as the Agent keeps working there.
+        desk.taken();
         // What the screen showed before, to know when an address has opened.
         let before = match &gesture {
             Gesture::Open { .. } => desk.glance().ok(),
@@ -414,21 +417,12 @@ impl Host {
         };
         let (done, patience) = match gesture {
             Gesture::Look => (Ok("This is the screen.".to_owned()), Duration::from_secs(2)),
-            Gesture::Open { url, .. } => (
-                desk.with(|computer| computer.open(&url)).map(|()| format!("Opened {url}.")),
-                Duration::from_secs(25),
-            ),
+            Gesture::Open { url, .. } => {
+                (desk.open(&url).map(|()| format!("Opened {url}.")), Duration::from_secs(25))
+            }
             Gesture::Click { x, y, double } => (
-                desk.with(|computer| {
-                    // Aimed at on the picture the model was shown.
-                    let (x, y) = crate::computer::on_the_screen(x, y);
-                    if double {
-                        computer.screen().double_click(x, y)
-                    } else {
-                        computer.screen().click(x, y)
-                    }
-                })
-                .map(|()| format!("Clicked at {x}, {y}.")),
+                // Aimed at on the picture the model was shown.
+                desk.click(x, y, double).map(|()| format!("Clicked at {x}, {y}.")),
                 Duration::from_secs(6),
             ),
             Gesture::Type { text } => {
@@ -444,9 +438,7 @@ impl Host {
                     })
                     .collect();
                 let typed = match crate::extensions::filled(&text, &lent) {
-                    Ok(typed) => desk
-                        .with(|computer| computer.screen().type_text(&typed))
-                        .map(|()| "Typed.".to_owned()),
+                    Ok(typed) => desk.type_text(&typed).map(|()| "Typed.".to_owned()),
                     Err(_) => Err(std::io::Error::other(
                         "a secret named there has not been entered: your Owner gives one by sending \
                          /secret NAME in the conversation, which you never see",
@@ -454,16 +446,12 @@ impl Host {
                 };
                 (typed, Duration::from_secs(4))
             }
-            Gesture::Key { keys } => (
-                desk.with(|computer| computer.screen().key(&keys))
-                    .map(|()| format!("Pressed {keys}.")),
-                Duration::from_secs(6),
-            ),
-            Gesture::Scroll { notches } => (
-                desk.with(|computer| computer.screen().scroll(notches))
-                    .map(|()| "Scrolled.".to_owned()),
-                Duration::from_secs(3),
-            ),
+            Gesture::Key { keys } => {
+                (desk.key(&keys).map(|()| format!("Pressed {keys}.")), Duration::from_secs(6))
+            }
+            Gesture::Scroll { notches } => {
+                (desk.scroll(notches).map(|()| "Scrolled.".to_owned()), Duration::from_secs(3))
+            }
         };
         let done = match done {
             Ok(done) => done,
@@ -761,6 +749,60 @@ impl Host {
                 },
             },
             Action::Computer(_) if self.computer.is_none() => Review::Refuse(NO_COMPUTER.into()),
+            // This computer's mouse and keyboard do whatever its Owner can:
+            // taking them is asked, and again once the Agent has let go.
+            Action::Computer(gesture)
+                if self.computer.as_ref().is_some_and(|desk| desk.asks_before_taking()) =>
+            {
+                // What is refused on any Computer is refused here first, and
+                // what is asked on any Computer is said in this one request:
+                // nothing gets through under a more general question.
+                let about = match &gesture {
+                    Gesture::Open { url, purpose } => match web_address(url) {
+                        Err(problem) => return Review::Refuse(problem),
+                        Ok(address) if self.is_the_interface(&address) => {
+                            return Review::Refuse(
+                                "That is the page your Owner talks to you in: it is theirs alone \
+                                 to open."
+                                    .into(),
+                            );
+                        }
+                        Ok(address) => format!(
+                            "\n\n{}\n{}",
+                            address.host_str().unwrap_or_default(),
+                            purpose.trim()
+                        ),
+                    },
+                    Gesture::Type { text } if text.contains("{{") => format!(
+                        "\n\n{text}\n{}",
+                        self.language.say(
+                            "The value of that secret is typed in place of its name.",
+                            "La valeur de ce secret est tapée à la place de son nom.",
+                        )
+                    ),
+                    _ => String::new(),
+                };
+                Review::Ask(Approval {
+                    summary: self
+                        .language
+                        .say("Use this computer", "Utiliser cet ordinateur")
+                        .into(),
+                    detail: format!(
+                        "{}{about}",
+                        self.language.say(
+                            "Your agent takes this computer's mouse and keyboard, in your session, with \
+                             the accounts you are signed in to. It keeps them for ten minutes, then asks \
+                             again.",
+                            "Ton agent prend la souris et le clavier de cet ordinateur, dans ta session, \
+                             avec les comptes où tu es connecté. Il les garde dix minutes, puis redemande.",
+                        )
+                    ),
+                    // Asked every time, at every level but the free one, and
+                    // never allowed once and for all.
+                    critical: true,
+                    ..Approval::default()
+                })
+            }
             Action::Computer(Gesture::Open { url, purpose }) => match web_address(&url) {
                 Err(problem) => Review::Refuse(problem),
                 // The page its Owner talks to it in is not the Agent's to
@@ -1345,8 +1387,16 @@ fn is_critical(command: &str) -> bool {
 /// keeps sealed or of the Conversation: whatever program is pointed at it,
 /// and were it only to look.
 fn names_orbites_own(command: &str) -> bool {
-    const ORBITES_OWN: &[&str] =
-        &["interface.db", "interface-files", "secrets.sealed", "secrets.key", "orbite.db"];
+    const ORBITES_OWN: &[&str] = &[
+        "interface.db",
+        "interface-files",
+        "secrets.sealed",
+        "secrets.key",
+        "orbite.db",
+        // Whose desktop the Agent may be lent, and where it is lent.
+        "desk_account",
+        "orbite-desk",
+    ];
     // As the shell will read it: quotes and backslashes inside a name hide
     // nothing.
     let command = command.to_lowercase().replace(['\'', '"', '\\'], "");

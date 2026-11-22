@@ -2,6 +2,18 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.6.2
+
+Released on 2026-11-22. Your agent can use this computer's own desktop. Run the installer again to turn it on: it is what starts the helper with your session.
+
+- **Two kinds of computer for your agent**: this machine's own desktop, the one you see on its screen, with your programs and the accounts you are signed in to; or a computer of its own, which nobody else looks at and where nothing of yours is. The desktop is used wherever the machine has one open under the account that installed Orbite; "use a computer of your own" and "use this computer" choose, and `/settings` shows it. See [the agent's computer](docs/first-day.md#the-agents-computer).
+- **On your desktop a mouse and a keyboard can do whatever you can**, so taking them is asked (**Use this computer**), for ten minutes at a time, and that request cannot be allowed once and for all. Two independent reviews shaped this before release. What your agent runs as commands has the same account as its own service and could reach the desktop behind it; such a command is asked as a critical one, which is a guard and not a wall. Keep your agent to a computer of its own on a machine where that matters.
+- **Sessions on Xorg only.** A Wayland session, the default on recent Ubuntu and Fedora, cannot be lent yet: your agent keeps a computer of its own there.
+- Your agent is always told which computer it is on. Left to guess, it guessed wrong.
+- A link in an answer is opened by the page itself: Orbite's app, which shows no other site, hands it to your browser.
+
+Tried for real with an agent on Claude Haiku and the real helper, on a screen standing for a desktop: a site opened in the session's own browser, read, and shown in the page. Not tried on a person's own session, nor through the installer.
+
 ## 0.6.1
 
 Released on 2026-11-22. A new look for the conversation in a browser, and a face for Orbite.

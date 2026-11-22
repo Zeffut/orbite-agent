@@ -51,6 +51,7 @@ async fn a_turn_with_everything_on_offer_stays_light() {
     let listed: Vec<String> =
         weighed.iter().map(|(name, size)| format!("{size:>5} {name}")).collect();
     // It was 4,009 with each Action offered on its own, then 3,200; some 220
-    // more let the Agent do in plain words what took a command to write.
-    assert!(total <= 3_450, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
+    // more let the Agent do in plain words what took a command to write, and
+    // fifteen tell it which Computer it is on: left to guess, it guessed wrong.
+    assert!(total <= 3_470, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
 }
