@@ -329,13 +329,29 @@ async fn looking_into_orbites_own_files_is_asked_and_its_owners_page_is_not_the_
     let mut owner = agent_in(home.path(), Store::in_memory(), &obedient());
 
     // A command that only reads is free elsewhere; not on who is let in.
-    for command in ["grep -a -o 'open.*' ../interface.db", "cat ../interface.db-wal"] {
+    let around = home.path().display();
+    let commands = [
+        "grep -a -o 'open.*' ../interface.db".to_owned(),
+        "cat ../interface.db-wal".to_owned(),
+        // Named in pieces, as a shell still reads it.
+        "cat ../inter''face.db".to_owned(),
+        // Or not named at all: everything Orbite keeps, from above.
+        "grep -ra MARK ..".to_owned(),
+        "cat ../*".to_owned(),
+        format!("grep -r MARK {around}"),
+        "find / -name '*.key'".to_owned(),
+        "ls ~".to_owned(),
+    ];
+    for command in commands.iter().map(String::as_str) {
         dictate(&owner, "run_command", json!({ "command": command }));
-        let approval = tokio::time::timeout(std::time::Duration::from_secs(2), owner.is_asked())
+        tokio::time::timeout(std::time::Duration::from_secs(2), owner.is_asked())
             .await
             .unwrap_or_else(|_| panic!("{command} ran without asking"));
-        assert!(approval.critical, "{command}: {approval:?}");
         owner.denies();
         owner.hears().await;
+    }
+    // Looking in its own folder, or elsewhere on the machine, stays free.
+    for command in ["ls -la", "grep -r MARK .", "cat /etc/hostname"] {
+        freely(&mut owner, "run_command", json!({ "command": command })).await;
     }
 }

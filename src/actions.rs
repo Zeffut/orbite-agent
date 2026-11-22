@@ -488,6 +488,35 @@ impl Host {
         specs
     }
 
+    /// True when `command` is pointed at the folder Orbite keeps everything
+    /// in, or at one that holds it, rather than at the Agent's own folder or
+    /// elsewhere on the machine: looking there, even without naming a file,
+    /// shows what is sealed and who is let in.
+    fn looks_around_orbites_home(&self, command: &str) -> bool {
+        let Some(home) = self.workspace.parent() else { return false };
+        let read = command.replace(['\'', '"', '\\'], "");
+        read.split(|c: char| c.is_whitespace() || "=;|&()<>".contains(c)).any(|word| {
+            // Up from where commands run, which is the Agent's folder.
+            if word == ".."
+                || word.starts_with("../")
+                || word.contains("/../")
+                || word.ends_with("/..")
+            {
+                return true;
+            }
+            // The account's own folder is Orbite's.
+            if word.starts_with('~') || word.to_lowercase().starts_with("$home") {
+                return true;
+            }
+            // Named whole: Orbite's folder, one above it, or inside it but
+            // outside the Agent's.
+            let whole = Path::new(word.trim_end_matches(['*', '?']));
+            whole.is_absolute()
+                && (home.starts_with(whole)
+                    || (whole.starts_with(home) && !whole.starts_with(&self.workspace)))
+        })
+    }
+
     /// True when `address` is where Orbite's own web interface is served or
     /// reached.
     fn is_the_interface(&self, address: &reqwest::Url) -> bool {
@@ -532,7 +561,11 @@ impl Host {
             Action::RunCommand(RunCommand { command }) => {
                 // As the shell will read it: quotes inside a name hide nothing.
                 let reveals = looks_secret(&command) || looks_secret(&command.replace(['\'', '"'], ""));
-                if only_looks(&command) && !reveals && !names_orbites_own(&command) {
+                if only_looks(&command)
+                    && !reveals
+                    && !names_orbites_own(&command)
+                    && !self.looks_around_orbites_home(&command)
+                {
                     return Review::Free;
                 }
                 let mut detail = command;
@@ -1314,7 +1347,9 @@ fn is_critical(command: &str) -> bool {
 fn names_orbites_own(command: &str) -> bool {
     const ORBITES_OWN: &[&str] =
         &["interface.db", "interface-files", "secrets.sealed", "secrets.key", "orbite.db"];
-    let command = command.to_lowercase();
+    // As the shell will read it: quotes and backslashes inside a name hide
+    // nothing.
+    let command = command.to_lowercase().replace(['\'', '"', '\\'], "");
     ORBITES_OWN.iter().any(|file| command.contains(file))
 }
 
