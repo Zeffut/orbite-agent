@@ -115,6 +115,13 @@ pub trait Channel: Send {
         async move { self.send(&written).await }
     }
 
+    /// Shows the Owner the Agent's screen as it is now, where a Channel has
+    /// a place for it beside the Conversation: `picture` is a PNG file.
+    fn screen(&mut self, picture: &Path) -> impl Future<Output = ()> + Send {
+        let _ = picture;
+        async {}
+    }
+
     /// Shows the Owner what the Agent is starting to do.
     fn doing(&mut self, step: &Step) -> impl Future<Output = ()> + Send {
         let _ = step;

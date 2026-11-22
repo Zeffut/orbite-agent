@@ -461,3 +461,34 @@ async fn asked_in_plain_words_the_agent_turns_the_interface_on_then_lets_a_devic
     let told = owner.hears().await;
     assert!(told.contains("https://host.tail1234.ts.net:8377/#"), "{told}");
 }
+
+#[tokio::test]
+async fn the_agents_screen_is_shown_to_the_devices_let_in_and_to_nobody_else() {
+    use orbite::Channel;
+    let home = tempfile::tempdir().unwrap();
+    let mut interface =
+        Interface::serving(home.path(), "127.0.0.1:0".parse().unwrap(), "en").await.unwrap();
+    let mut browser = Browser::at(interface.address());
+    let code = orbite::pairing_code(home.path()).unwrap();
+    assert_eq!(browser.pairs_with(&code).await, 200);
+    let fetch = |kept: Option<String>| {
+        let mut asking = browser.http.get(format!("{}/api/screen", browser.at));
+        if let Some(kept) = kept {
+            asking = asking.header("cookie", kept);
+        }
+        async move { asking.send().await.unwrap() }
+    };
+    // Nothing to see before the Agent has a screen.
+    assert_eq!(fetch(browser.kept.clone()).await.status(), 404);
+    let mut shown = browser.watches(None).await.unwrap();
+
+    let picture = home.path().join("seen.png");
+    std::fs::write(&picture, b"\x89PNG as the screen is").unwrap();
+    interface.screen(&picture).await;
+
+    assert_eq!(next(&mut shown, "screen").await["seen"], 1);
+    let seen = fetch(browser.kept.clone()).await;
+    assert_eq!(seen.headers()["content-type"], "image/png");
+    assert_eq!(seen.bytes().await.unwrap().as_ref(), b"\x89PNG as the screen is");
+    assert_eq!(fetch(None).await.status(), 401);
+}

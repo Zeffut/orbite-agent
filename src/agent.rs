@@ -1662,6 +1662,8 @@ impl<P: Provider + 'static> Agent<P> {
                 if action.name.starts_with("computer_")
                     && let Some(picture) = attachments(&text).last()
                 {
+                    // Where the Owner can watch the screen, it follows.
+                    channel.screen(&picture).await;
                     // Shown to the Owner too when the model asks: the screen
                     // at a step that matters, whole.
                     if action.input["show"] == true {

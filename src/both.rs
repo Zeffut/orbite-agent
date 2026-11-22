@@ -176,6 +176,15 @@ impl<A: Channel, B: Channel> Channel for Both<A, B> {
         }
     }
 
+    async fn screen(&mut self, picture: &Path) {
+        if self.first_open {
+            self.first.screen(picture).await;
+        }
+        if self.second_open {
+            self.second.screen(picture).await;
+        }
+    }
+
     async fn doing(&mut self, step: &Step) {
         if self.first_open {
             self.first.doing(step).await;

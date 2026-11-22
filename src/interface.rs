@@ -40,6 +40,14 @@ const SCRIPT: &str = include_str!("interface/app.js");
 const STYLE: &str = include_str!("interface/app.css");
 const MANIFEST: &str = include_str!("interface/manifest.webmanifest");
 const ICON: &str = include_str!("interface/icon.svg");
+/// The same icon as pictures, for the phones that take nothing else when
+/// the page is put on their home screen.
+const ICONS: [(&str, &[u8]); 4] = [
+    ("/icon-192.png", include_bytes!("interface/icon-192.png")),
+    ("/icon-512.png", include_bytes!("interface/icon-512.png")),
+    ("/icon-maskable.png", include_bytes!("interface/icon-maskable.png")),
+    ("/icon-touch.png", include_bytes!("interface/icon-touch.png")),
+];
 
 /// What a device sent.
 enum Incoming {
@@ -62,6 +70,9 @@ struct Shared {
     inbox: PathBuf,
     /// Files received and not yet sent with a message, oldest first.
     waiting: Mutex<Vec<Waiting>>,
+    /// The Agent's screen as last seen, and how many times it was: kept in
+    /// memory alone.
+    screen: Mutex<(u64, Vec<u8>)>,
     language: String,
 }
 
@@ -267,11 +278,27 @@ impl Interface {
             files,
             inbox: home.join("workspace/inbox"),
             waiting: Mutex::new(Vec::new()),
+            screen: Mutex::new((0, Vec::new())),
             language: language.to_owned(),
         });
         let listening = tokio::net::TcpListener::bind(address).await?;
         let address = listening.local_addr()?;
-        let pages = Router::new()
+        let mut pages = Router::new();
+        for (path, picture) in ICONS {
+            pages = pages.route(
+                path,
+                get(move || async move {
+                    (
+                        [
+                            (header::CONTENT_TYPE, "image/png"),
+                            (header::CACHE_CONTROL, "public, max-age=86400"),
+                        ],
+                        picture,
+                    )
+                }),
+            );
+        }
+        let pages = pages
             .route("/", get(|| async { page("text/html; charset=utf-8", PAGE) }))
             .route("/app.js", get(|| async { page("text/javascript; charset=utf-8", SCRIPT) }))
             .route("/app.css", get(|| async { page("text/css; charset=utf-8", STYLE) }))
@@ -286,6 +313,7 @@ impl Interface {
             .route("/api/say", post(say))
             .route("/api/answer", post(answer))
             .route("/api/file", get(file))
+            .route("/api/screen", get(screen))
             .route(
                 "/api/upload",
                 post(upload).delete(give_up).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
@@ -498,7 +526,11 @@ async fn pair(
 
 async fn me(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
     match shared.device(&headers) {
-        Some(name) => Json(json!({ "device": name, "language": shared.language })).into_response(),
+        Some(name) => {
+            let seen = shared.screen.lock().expect("not poisoned").0;
+            Json(json!({ "device": name, "language": shared.language, "screen": seen }))
+                .into_response()
+        }
         None => {
             (StatusCode::UNAUTHORIZED, Json(json!({ "language": shared.language }))).into_response()
         }
@@ -639,6 +671,26 @@ async fn answer(
         Ok(()) => Json(json!({ "sent": true })).into_response(),
         Err(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "the agent is not listening"),
     }
+}
+
+/// The Agent's screen as it was last seen.
+async fn screen(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let picture = shared.screen.lock().expect("not poisoned").1.clone();
+    if picture.is_empty() {
+        return refused(StatusCode::NOT_FOUND, "no screen yet");
+    }
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        picture,
+    )
+        .into_response()
 }
 
 /// Takes in a file to go with the next message: saved where the Agent
@@ -901,6 +953,16 @@ impl Channel for Interface {
         if !holding.is_empty() {
             self.tell(json!({ "kind": "erase", "events": holding }));
         }
+    }
+
+    async fn screen(&mut self, picture: &Path) {
+        let Ok(seen) = std::fs::read(picture) else { return };
+        let times = {
+            let mut screen = self.shared.screen.lock().expect("not poisoned");
+            *screen = (screen.0 + 1, seen);
+            screen.0
+        };
+        self.tell(json!({ "kind": "screen", "seen": times }));
     }
 
     async fn doing(&mut self, step: &Step) {

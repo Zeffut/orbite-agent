@@ -50,6 +50,20 @@ button { cursor: pointer; }
   padding-top: max(12px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line);
 }
 #link { margin-left: auto; font-size: 13px; color: var(--warn); }
+#watch { margin-left: auto; position: relative; }
+#link:not([hidden]) + #watch { margin-left: 0; }
+#watch.fresh::after { content: ""; position: absolute; top: 9px; right: 9px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+#watch[aria-expanded="true"] { color: var(--accent); }
+#screen {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(48vw, 760px); z-index: 2;
+  background: var(--ground); border-left: 1px solid var(--line); display: flex; flex-direction: column;
+}
+#screen header { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; padding-top: max(8px, env(safe-area-inset-top)); border-bottom: 1px solid var(--line); }
+#screenWhen { font-size: 13px; color: var(--quiet); margin-right: auto; }
+#screenOpen { flex: 1; min-height: 0; display: grid; place-items: start center; padding: 12px; overflow: auto; }
+#screenNow { max-width: 100%; border-radius: 10px; border: 1px solid var(--line); display: block; }
+@media (min-width: 1100px) { body.watching #talk { margin: 0 min(48vw, 760px) 0 auto; max-width: none; } }
+@media (max-width: 1099px) { #screen { width: 100%; border-left: 0; } }
 #said { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; overscroll-behavior: contain; }
 .said { max-width: 86%; padding: 10px 14px; border-radius: 18px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .said.agent { align-self: flex-start; background: var(--paper); border: 1px solid var(--line); border-bottom-left-radius: 6px; }

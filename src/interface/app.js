@@ -12,6 +12,7 @@
       allowed: "Allowed", alwaysAllowed: "Always allowed", denied: "Denied", wrote: "Left out: you wrote instead",
       undone: "This cannot be undone.", critical: "Asked every time, whatever your settings.",
       working: "Working…", elsewhere: "From another place", browser: "Browser",
+      screen: "Your agent's screen", close: "Close",
       attach: "Attach a file", record: "Record a voice message", cancel: "Cancel", remove: "Remove",
       voice: "Voice message", tooBig: "That file is too big: 50 MB at most.",
       notSent: "That was not sent. Try again.", fileGone: "A file did not go through: attach it again.",
@@ -27,6 +28,7 @@
       allowed: "Autorisé", alwaysAllowed: "Toujours autorisé", denied: "Refusé", wrote: "Laissé de côté : tu as écrit à la place",
       undone: "Cela ne peut pas être annulé.", critical: "Demandé à chaque fois, quels que soient tes réglages.",
       working: "Au travail…", elsewhere: "Depuis un autre endroit", browser: "Navigateur",
+      screen: "L'écran de ton agent", close: "Fermer",
       attach: "Joindre un fichier", record: "Enregistrer un message vocal", cancel: "Annuler", remove: "Retirer",
       voice: "Message vocal", tooBig: "Ce fichier est trop gros : 50 Mo au plus.",
       notSent: "Ce n'est pas parti. Réessaie.", fileGone: "Un fichier n'est pas passé : joins-le à nouveau.",
@@ -212,6 +214,9 @@
           if (there) there.remove();
         }
         break;
+      case "screen":
+        sees(event.seen, true);
+        break;
       case "step":
         $("doing").textContent = `${event.icon} ${event.text}`;
         $("doing").hidden = false;
@@ -227,6 +232,34 @@
         break;
     }
   }
+
+  // The Agent's screen, beside the Conversation: there once the Agent has
+  // one, opened when the Owner wants to look, and following as it changes.
+  let seen = 0;
+  function sees(times, now) {
+    if (!times) return;
+    seen = times;
+    $("watch").hidden = false;
+    const open = !$("screen").hidden;
+    if (open) {
+      const where = "/api/screen?seen=" + times;
+      $("screenNow").src = where;
+      $("screenOpen").href = where;
+      if (now) $("screenWhen").textContent = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    } else if (now) {
+      $("watch").classList.add("fresh");
+    }
+  }
+  function watch(open) {
+    $("screen").hidden = !open;
+    $("watch").setAttribute("aria-expanded", String(open));
+    $("watch").classList.remove("fresh");
+    document.body.classList.toggle("watching", open);
+    if (open) sees(seen, false);
+  }
+  $("watch").addEventListener("click", () => watch($("screen").hidden));
+  $("screenClose").addEventListener("click", () => { watch(false); $("watch").focus(); });
+  document.addEventListener("keydown", (pressed) => { if (pressed.key === "Escape" && !$("screen").hidden) watch(false); });
 
   let listening;
   function listen() {
@@ -455,9 +488,11 @@
       asks.clear();
       listen();
       arrange();
+      sees(told.screen, false);
       text.focus();
     } else {
       $("talk").hidden = true;
+      watch(false);
       $("pairing").hidden = false;
       if (!$("device").value) $("device").value = deviceName();
       // Opened from the link Orbite gave: the code came with it, and is
