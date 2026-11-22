@@ -1310,7 +1310,12 @@ fn is_critical(command: &str) -> bool {
     };
     let outside =
         |word: &&str| word.starts_with('/') || word.starts_with('~') || word.starts_with("$home");
+    // What says who Orbite listens to and what it keeps sealed: whatever
+    // program is pointed at it.
+    const ORBITES_OWN: &[&str] =
+        &["interface.db", "interface-files", "secrets.sealed", "secrets.key", "orbite.db"];
     DANGEROUS.iter().any(|program| runs(program))
+        || ORBITES_OWN.iter().any(|file| command.contains(file))
         || words.iter().any(|word| word.starts_with("mkfs"))
         || (runs("rm") && words.iter().any(outside))
         || (runs("dd") && command.contains("of=/dev"))

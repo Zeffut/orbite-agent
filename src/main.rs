@@ -500,6 +500,15 @@ fn interface(reach: Option<Result<String, String>>) -> Result<(), Failure> {
                 None => println!("The web interface will be served at http://{address}\n{applies}"),
             }
         }
+        // Served encrypted by something of the Owner's own, in front of it.
+        ["at", reached] if reached.starts_with("https://") && config.interface.is_some() => {
+            let reached = reached.trim_end_matches('/');
+            config.interface_reached_at = Some(reached.to_owned());
+            config.save(&home)?;
+            println!(
+                "The web interface is reached at {reached}\nIt applies at the next start of Orbite."
+            );
+        }
         ["off"] => {
             config.interface = None;
             config.interface_reached_at = None;
@@ -507,9 +516,9 @@ fn interface(reach: Option<Result<String, String>>) -> Result<(), Failure> {
             println!("The web interface is off. It applies at the next start of Orbite.");
         }
         _ => {
-            return Err(
-                "Usage: orbite interface | interface on [ADDRESS:PORT] | interface off".into()
-            );
+            return Err("Usage: orbite interface | interface on [ADDRESS:PORT] | interface at \
+                 https://NAME (once it is on) | interface off"
+                .into());
         }
     }
     Ok(())

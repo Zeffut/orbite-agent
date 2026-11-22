@@ -221,6 +221,14 @@ async fn the_conversation_is_found_again_and_carried_on_from_where_the_page_left
 #[tokio::test]
 async fn what_another_site_has_a_browser_send_is_refused() {
     let home = tempfile::tempdir().unwrap();
+    // Served encrypted under a name, as Tailscale or a proxy of the Owner's does.
+    orbite::Config {
+        interface: Some("127.0.0.1:8377".into()),
+        interface_reached_at: Some("https://host.tail1234.ts.net:8377".into()),
+        ..Default::default()
+    }
+    .save(home.path())
+    .unwrap();
     let provider = ScriptedProvider::answering(["Never said."]);
     let browser = agent_with_a_paired_browser(home.path(), &provider).await;
     let say = |with: &'static [(&'static str, &'static str)]| {
@@ -256,6 +264,13 @@ async fn what_another_site_has_a_browser_send_is_refused() {
         ("x-forwarded-host", "host.tail1234.ts.net:8377"),
     ];
     assert_eq!(say(THROUGH).await, 200);
+    // A name it is not served under earns nothing by being claimed.
+    const CLAIMED: &[(&str, &str)] = &[
+        ("x-orbite", "1"),
+        ("origin", "https://elsewhere.example"),
+        ("x-forwarded-host", "elsewhere.example"),
+    ];
+    assert_eq!(say(CLAIMED).await, 401);
 }
 
 #[tokio::test]
@@ -545,8 +560,17 @@ async fn a_device_is_named_with_what_its_owner_can_read_and_type() {
         orbite::interface_devices(home.path()).unwrap().into_iter().map(|one| one.name).collect();
     names.sort();
     assert_eq!(names, ["Mac · Safari", "Mac · Safari 2", "bMacb", "browser"]);
+    // Letters that show as nothing, or as letters they are not, are left out.
+    assert_eq!(pair("iPhone\u{3164}").await, 200);
+    assert_eq!(pair("\u{456}Phone Zoé").await, 200);
+    let names: Vec<String> =
+        orbite::interface_devices(home.path()).unwrap().into_iter().map(|one| one.name).collect();
+    assert!(
+        names.contains(&"iPhone".to_owned()) && names.contains(&"Phone Zoé".to_owned()),
+        "{names:?}"
+    );
     // One turned away leaves the other, and its name is free again for one device.
     assert!(orbite::turn_away(home.path(), "Mac · Safari").unwrap());
     assert_eq!(pair("Mac · Safari").await, 200);
-    assert_eq!(orbite::interface_devices(home.path()).unwrap().len(), 4);
+    assert_eq!(orbite::interface_devices(home.path()).unwrap().len(), 6);
 }

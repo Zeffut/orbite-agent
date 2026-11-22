@@ -470,17 +470,20 @@ async fn asked_by_its_name(
 
 /// True when a request that changes something comes from the interface's
 /// own page: another site a browser has open cannot send it.
-fn from_the_page(headers: &HeaderMap) -> bool {
+fn from_the_page(headers: &HeaderMap, names: &[String]) -> bool {
     let own = headers.get("x-orbite").is_some();
-    // The place the browser asked for: as it reached Orbite, or as it
-    // reached what serves Orbite to it encrypted.
-    let named = |name: &str| headers.get(name).and_then(|host| host.to_str().ok());
-    let places = [named("host"), named("x-forwarded-host")];
+    // The place the browser asked for: as it reached Orbite, or one of the
+    // names Orbite is served under encrypted, which no request can make up.
+    let host = headers.get(header::HOST).and_then(|host| host.to_str().ok());
     let same_place = match headers.get(header::ORIGIN).and_then(|origin| origin.to_str().ok()) {
         None => true,
         Some(origin) => {
             let from = origin.strip_prefix("http://").or(origin.strip_prefix("https://"));
-            from.is_some() && places.contains(&from)
+            let name = from.map(|from| from.rsplit_once(':').map_or(from, |(name, _)| name));
+            from.is_some()
+                && (from == host
+                    || name
+                        .is_some_and(|name| names.iter().any(|own| own.eq_ignore_ascii_case(name))))
         }
     };
     own && same_place
@@ -495,7 +498,7 @@ async fn pair(
     headers: HeaderMap,
     Json(sent): Json<Value>,
 ) -> Response {
-    if !from_the_page(&headers) {
+    if !from_the_page(&headers, &shared.names) {
         return refused(StatusCode::FORBIDDEN, "not from the interface");
     }
     let code: String = sent["code"]
@@ -510,7 +513,13 @@ async fn pair(
         .as_str()
         .unwrap_or_default()
         .chars()
-        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '·' | '-' | '_' | '.' | '\''))
+        // Latin letters, accented ones too: none that shows as nothing, or
+        // as a letter it is not.
+        .filter(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, ' ' | '·' | '-' | '_' | '.' | '\'')
+                || (('\u{c0}'..='\u{24f}').contains(c) && c.is_alphabetic())
+        })
         .take(60)
         .collect();
     let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -650,7 +659,7 @@ async fn say(
     headers: HeaderMap,
     Json(sent): Json<Value>,
 ) -> Response {
-    if !from_the_page(&headers) || shared.device(&headers).is_none() {
+    if !from_the_page(&headers, &shared.names) || shared.device(&headers).is_none() {
         return refused(StatusCode::UNAUTHORIZED, "not paired");
     }
     let mut text = sent["text"].as_str().unwrap_or_default().trim().to_owned();
@@ -703,7 +712,7 @@ async fn answer(
     headers: HeaderMap,
     Json(sent): Json<Value>,
 ) -> Response {
-    if !from_the_page(&headers) || shared.device(&headers).is_none() {
+    if !from_the_page(&headers, &shared.names) || shared.device(&headers).is_none() {
         return refused(StatusCode::UNAUTHORIZED, "not paired");
     }
     let answered = match sent["answer"].as_str() {
@@ -749,7 +758,7 @@ async fn upload(
     content: axum::body::Body,
 ) -> Response {
     // Nothing of what is sent is read before the device is known.
-    if !from_the_page(&headers) || shared.device(&headers).is_none() {
+    if !from_the_page(&headers, &shared.names) || shared.device(&headers).is_none() {
         return refused(StatusCode::UNAUTHORIZED, "not paired");
     }
     let Ok(content) = axum::body::to_bytes(content, UPLOAD_LIMIT).await else {
@@ -802,7 +811,7 @@ async fn give_up(
     headers: HeaderMap,
     Query(asked): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    if !from_the_page(&headers) || shared.device(&headers).is_none() {
+    if !from_the_page(&headers, &shared.names) || shared.device(&headers).is_none() {
         return refused(StatusCode::UNAUTHORIZED, "not paired");
     }
     let token = asked.get("file").map(String::as_str).unwrap_or_default();

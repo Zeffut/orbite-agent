@@ -13,6 +13,8 @@ Where the page is reached depends on the machine:
 
 You can also name an address of a private network yourself, `sudo orbite interface on 10.0.0.5:8377`. What travels there is not encrypted by Orbite, and a phone's browser then gives the page no microphone. Orbite refuses to serve the page on a public address in the open.
 
+If something of your own already encrypts in front of the machine (a reverse proxy with a name and a certificate), leave the page on `127.0.0.1`, point it there, and say where it is reached: `sudo orbite interface at https://agent.example.com`. Orbite then answers under that name, and gives it in the links that let a device in.
+
 `sudo orbite interface off`, or *"turn the web interface off"*, closes it, and what Tailscale served for it.
 
 ## Letting a device in
