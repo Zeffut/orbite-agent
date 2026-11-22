@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0f1115">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <title>Orbite</title>
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -31,25 +32,27 @@
 </main>
 <main id="talk" hidden>
   <header>
-    <img src="/icon.svg" alt="" width="28" height="28">
-    <strong id="title">Orbite</strong>
     <span id="link" data-say="offline" hidden></span>
-    <button id="watch" type="button" class="round quiet" aria-label="Screen" data-label="screen" aria-expanded="false" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 5h16v11H4zM9 20h6M12 16v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div id="who"><span class="avatar" aria-hidden="true"></span><strong id="title">Orbite</strong></div>
+    <button id="watch" type="button" class="pill" aria-expanded="false" hidden><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M4 5h16v11H4zM9 20h6M12 16v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span data-say="screenShort"></span></button>
   </header>
   <section id="said" aria-live="polite"></section>
-  <p id="doing" hidden></p>
-  <p id="note" role="status" hidden></p>
-  <div id="attached" hidden></div>
-  <form id="say">
-    <label id="attach" class="round quiet" data-label="attach" aria-label="Attach" tabindex="0"><input id="files" type="file" multiple hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M20 11.5l-8 8a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5L10 17.5a2 2 0 0 1-3-3L14.5 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></label>
-    <textarea id="text" rows="1" data-placeholder="write" enterkeyhint="send"></textarea>
-    <button id="mic" type="button" class="round" aria-label="Record" data-label="record" hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-    <button id="send" class="round" aria-label="Send" data-label="send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 20l18-8L3 4l3 8-3 8zm3-8h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
-  </form>
-  <div id="recording" hidden>
-    <button id="recordStop" type="button" class="round quiet" aria-label="Cancel" data-label="cancel"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
-    <span id="recordTime" aria-live="off">0:00</span>
-    <button id="recordSend" type="button" class="round" aria-label="Send" data-label="send"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 20l18-8L3 4l3 8-3 8zm3-8h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
+  <div id="foot">
+    <button id="down" type="button" class="round" aria-label="Latest" data-label="latest" hidden><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <p id="doing" hidden></p>
+    <p id="note" role="status" hidden></p>
+    <div id="attached" hidden></div>
+    <form id="say">
+      <label id="attach" class="round quiet" data-label="attach" aria-label="Attach" tabindex="0"><input id="files" type="file" multiple hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></label>
+      <textarea id="text" rows="1" enterkeyhint="send"></textarea>
+      <button id="mic" type="button" class="round bright" aria-label="Record" data-label="record" hidden><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button id="send" class="round bright" aria-label="Send" data-label="send"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </form>
+    <div id="recording" hidden>
+      <button id="recordStop" type="button" class="round quiet" aria-label="Cancel" data-label="cancel"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      <span id="recordTime" aria-live="off">0:00</span>
+      <button id="recordSend" type="button" class="round bright" aria-label="Send" data-label="send"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    </div>
   </div>
 </main>
 <aside id="screen" hidden>

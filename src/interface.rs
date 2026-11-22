@@ -75,6 +75,8 @@ struct Shared {
     screen: Mutex<(u64, Vec<u8>)>,
     /// The names the interface is served under, beside its address.
     names: Vec<String>,
+    /// What the Owner called their Agent.
+    agent: String,
     language: String,
 }
 
@@ -289,6 +291,10 @@ impl Interface {
                     Some(vec![named])
                 })
                 .unwrap_or_default(),
+            agent: crate::Config::load(home)
+                .ok()
+                .and_then(|config| config.agent_name)
+                .unwrap_or_else(|| "Orbite".to_owned()),
             language: language.to_owned(),
         });
         let listening = tokio::net::TcpListener::bind(address).await?;
@@ -368,7 +374,9 @@ impl Interface {
 }
 
 impl Shared {
-    fn show(&self, body: Value) -> i64 {
+    fn show(&self, mut body: Value) -> i64 {
+        // When it was said, for the page to mark the hours of the Conversation.
+        body["at"] = json!(now());
         let written = body.to_string();
         let database = self.database.lock().expect("not poisoned");
         let kept = database
@@ -583,8 +591,11 @@ async fn me(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
     match shared.device(&headers) {
         Some(name) => {
             let seen = shared.screen.lock().expect("not poisoned").0;
-            Json(json!({ "device": name, "language": shared.language, "screen": seen }))
-                .into_response()
+            Json(json!({
+                "device": name, "language": shared.language, "screen": seen,
+                "agent": shared.agent,
+            }))
+            .into_response()
         }
         None => {
             (StatusCode::UNAUTHORIZED, Json(json!({ "language": shared.language }))).into_response()
