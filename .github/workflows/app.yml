@@ -91,9 +91,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: app
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: tauri-cli@2
+      # Built here rather than fetched ready-made: the ready-made one is
+      # for another processor, and what it then installs refuses to go on.
+      - run: cargo install tauri-cli --version "^2" --locked
       - run: brew install xcodegen
       - run: cargo tauri ios init
       - run: cargo tauri ios build --debug --target aarch64-sim
