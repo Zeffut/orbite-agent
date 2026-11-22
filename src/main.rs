@@ -426,6 +426,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .learning_in(home.join("skills"))
         .hearing_notices_in(home.join("notices"))
         .extending_in(home.join("extensions"))
+        .switching_the_interface_with(switch_the_interface)
         .connecting_servers_in(&home)
         .configured_in(&home)
         .keeping_secrets_in(&home)
@@ -643,7 +644,8 @@ async fn providers() -> Result<(), Failure> {
     }
     if asked == ["add"] {
         let typed = std::io::BufReader::new(std::io::stdin());
-        let mut setup = Setup::in_home(home()?, typed, std::io::stdout());
+        let mut setup = Setup::in_home(home()?, typed, std::io::stdout())
+            .turning_the_interface_on_with(|| switch_the_interface(true));
         if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
             setup = setup.reading_secrets_with(|question| rpassword::prompt_password(question));
         }
@@ -664,15 +666,40 @@ async fn setup() -> Result<(), Failure> {
         Some("language") => Some(SetupStep::Language),
         Some("provider") => Some(SetupStep::Provider),
         Some("telegram") => Some(SetupStep::Telegram),
+        Some("interface") => Some(SetupStep::Interface),
         Some("name") => Some(SetupStep::Name),
-        Some(_) => return Err("Usage: orbite setup [language|provider|telegram|name]".into()),
+        Some(_) => {
+            return Err("Usage: orbite setup [language|provider|telegram|interface|name]".into());
+        }
     };
     let typed = std::io::BufReader::new(std::io::stdin());
-    let mut setup = Setup::in_home(home()?, typed, std::io::stdout());
+    let mut setup = Setup::in_home(home()?, typed, std::io::stdout())
+        .turning_the_interface_on_with(|| switch_the_interface(true));
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         setup = setup.reading_secrets_with(|question| rpassword::prompt_password(question));
     }
     Ok(setup.run(only).await?)
+}
+
+/// Turns the web interface on or off by running `orbite interface on|off`,
+/// as root where the Agent's account was given that: it is what may have
+/// Tailscale serve it to the Owner's other devices.
+fn switch_the_interface(on: bool) -> Result<(), String> {
+    let program = env::current_exe().map_err(|error| error.to_string())?;
+    let quietly = |command: &mut std::process::Command| {
+        command
+            .args(["interface", if on { "on" } else { "off" }])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|ended| ended.success())
+    };
+    let as_root = quietly(std::process::Command::new("sudo").arg("-n").arg(&program));
+    if as_root || quietly(&mut std::process::Command::new(&program)) {
+        return Ok(());
+    }
+    Err("The web interface could not be changed.".into())
 }
 
 /// Enters, lists or removes the secrets the Agent can use without seeing them.

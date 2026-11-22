@@ -162,6 +162,21 @@ fn kept_in(home: &Path) -> io::Result<rusqlite::Connection> {
     Ok(database)
 }
 
+/// Keeps `text` as the Agent's first words in the interface of `home`,
+/// when nothing was said there yet: the first device let in is greeted.
+pub fn greet(home: &Path, text: &str) -> io::Result<()> {
+    let database = kept_in(home)?;
+    let said: i64 =
+        database.query_row("SELECT COUNT(*) FROM shown", [], |row| row.get(0)).map_err(wrong)?;
+    if said == 0 {
+        let body = json!({ "kind": "agent", "text": text }).to_string();
+        database
+            .execute("INSERT INTO shown (at, body) VALUES (?1, ?2)", (now(), body))
+            .map_err(wrong)?;
+    }
+    Ok(())
+}
+
 /// A device let in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Device {

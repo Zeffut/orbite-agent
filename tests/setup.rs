@@ -159,7 +159,7 @@ async fn set_up(
 /// key, the first model offered, no lighter model, the bot's token, then a
 /// name of their own.
 fn first_run() -> String {
-    format!("1\ncustom\n{}\n1\n\n{}\nNova\n", api_key(), bot_token())
+    format!("1\ncustom\n{}\n1\n\n2\n{}\nNova\n", api_key(), bot_token())
 }
 
 async fn sent_to_owner(telegram: &MockServer) -> Vec<String> {
@@ -228,7 +228,7 @@ async fn a_wrong_api_key_is_explained_and_asked_for_again() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\nwrong-key\n{}\n1\n\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\nwrong-key\n{}\n1\n\n2\n{}\nNova\n", api_key(), bot_token());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -244,7 +244,7 @@ async fn a_wrong_bot_token_is_explained_and_asked_for_again() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\n{}\n1\n\nnot-a-token\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\n{}\n1\n\n2\nnot-a-token\n{}\nNova\n", api_key(), bot_token());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -290,7 +290,8 @@ async fn a_setup_cut_short_resumes_where_it_stopped() {
     let asked_before = provider.received_requests().await.unwrap().len();
 
     let shown =
-        set_up(home.path(), &format!("{}\nNova\n", bot_token()), &provider, &telegram, None).await;
+        set_up(home.path(), &format!("2\n{}\nNova\n", bot_token()), &provider, &telegram, None)
+            .await;
 
     assert_eq!(
         provider.received_requests().await.unwrap().len(),
@@ -321,7 +322,7 @@ async fn setup_speaks_the_language_the_owner_chooses() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("2\ncustom\n{}\n1\n\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("2\ncustom\n{}\n1\n\n2\n{}\nNova\n", api_key(), bot_token());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -335,7 +336,7 @@ async fn a_name_can_be_picked_from_the_suggestions_and_a_model_typed_by_hand() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\n{}\nmodel-of-my-own\n\n{}\n1\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\n{}\nmodel-of-my-own\n\n2\n{}\n1\n", api_key(), bot_token());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -393,7 +394,8 @@ async fn a_model_that_cannot_act_is_chosen_only_after_the_owner_insists() {
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
 
     // The mute model, declined at the warning; then the first one offered.
-    let typed = format!("1\ncustom\n{}\nmodel-mute\nno\n1\n\n{}\nNova\n", api_key(), bot_token());
+    let typed =
+        format!("1\ncustom\n{}\nmodel-mute\nno\n1\n\n2\n{}\nNova\n", api_key(), bot_token());
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
     assert!(shown.contains("cannot act") && shown.contains("Strongly discouraged"), "{shown}");
     assert_eq!(Config::load(home.path()).unwrap().provider.unwrap().model, "model-large");
@@ -529,9 +531,10 @@ async fn an_owner_with_a_chatgpt_plan_signs_in_by_a_link_instead_of_giving_a_key
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
     // English, the ChatGPT plan, a wrong paste then the right address, the
     // model offered (kept though this fake only ever talks), no lighter
-    // model, the bot's token, a name.
+    // model, Telegram, the bot's token, a name.
     let bot = bot_token();
-    let typed = ["1", "chatgpt", "nonsense", "<address>", "1", "yes", "", bot.as_str(), "Nova"];
+    let typed =
+        ["1", "chatgpt", "nonsense", "<address>", "1", "yes", "", "2", bot.as_str(), "Nova"];
     let owner = Answering {
         lines: typed.iter().map(|line| line.to_string()).collect(),
         shown: shown.clone(),
@@ -599,4 +602,79 @@ async fn another_provider_is_added_after_those_set_up_each_with_a_key_of_its_own
     let names: Vec<String> =
         Config::load(home.path()).unwrap().providers().into_iter().map(|one| one.name).collect();
     assert_eq!(names, ["custom", "groq"]);
+}
+
+#[tokio::test]
+async fn an_owner_who_chooses_the_browser_needs_no_telegram_and_ends_with_a_link_that_lets_them_in()
+{
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![]).await;
+    // English, the Provider, its key and model, no lighter model, the browser, a name.
+    let typed = format!("1\ncustom\n{}\n1\n\n1\nNova\n", api_key());
+
+    let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
+
+    let config = Config::load(home.path()).unwrap();
+    assert_eq!(config.interface.as_deref(), Some("127.0.0.1:8377"));
+    assert_eq!(config.telegram_owner, None);
+    assert!(!shown.contains("BotFather"), "nothing of Telegram is asked: {shown}");
+    assert!(telegram.received_requests().await.unwrap().is_empty());
+    // The link carries a code that lets a first device in.
+    let link = "http://127.0.0.1:8377/#";
+    let code: String =
+        shown[shown.find(link).expect("no link shown") + link.len()..].chars().take(9).collect();
+    let interface = orbite::Interface::serving(home.path(), "127.0.0.1:0".parse().unwrap(), "en")
+        .await
+        .unwrap();
+    let paired = reqwest::Client::new()
+        .post(format!("http://{}/api/pair", interface.address()))
+        .header("x-orbite", "1")
+        .json(&json!({ "code": code, "name": "phone" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(paired.status(), 200);
+    // The Agent's first words wait there, under its name.
+    let kept =
+        paired.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+    let mut events = reqwest::Client::new()
+        .get(format!("http://{}/api/events", interface.address()))
+        .header("cookie", kept)
+        .send()
+        .await
+        .unwrap();
+    let first = String::from_utf8_lossy(&events.chunk().await.unwrap().unwrap()).into_owned();
+    assert!(first.contains("I'm Nova"), "{first}");
+}
+
+#[tokio::test]
+async fn an_owner_may_choose_both_and_is_greeted_in_each() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
+    let typed = format!("1\ncustom\n{}\n1\n\n3\n{}\nNova\n", api_key(), bot_token());
+
+    let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
+
+    let config = Config::load(home.path()).unwrap();
+    assert_eq!(config.interface.as_deref(), Some("127.0.0.1:8377"));
+    assert_eq!(config.telegram_owner, Some(OWNER));
+    assert!(shown.contains("http://127.0.0.1:8377/#"), "{shown}");
+    assert!(shown.contains("in Telegram too"), "{shown}");
+    assert!(sent_to_owner(&telegram).await.last().unwrap().contains("Nova"));
+}
+
+#[tokio::test]
+async fn the_interface_can_be_turned_on_later_without_going_through_setup_again() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
+    set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    assert_eq!(Config::load(home.path()).unwrap().interface, None);
+
+    let shown = set_up(home.path(), "", &provider, &telegram, Some(Step::Interface)).await;
+
+    assert!(shown.contains("http://127.0.0.1:8377"), "{shown}");
+    assert_eq!(Config::load(home.path()).unwrap().interface.as_deref(), Some("127.0.0.1:8377"));
 }

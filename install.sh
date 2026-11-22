@@ -339,6 +339,7 @@ if command -v sudo >/dev/null 2>&1 && [ -d "$ROOT/etc/sudoers.d" ]; then
     cat >"$WORK/sudoers" <<RULES
 # Written by Orbite's installer: what the agent's account may do as root.
 orbite ALL=(root) NOPASSWD: $PROGRAM update, $PROGRAM update on, $PROGRAM update off
+orbite ALL=(root) NOPASSWD: $PROGRAM interface on, $PROGRAM interface off
 orbite ALL=(root) NOPASSWD: /usr/bin/systemctl restart orbite, /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff
 RULES
     # A rule sudo cannot read would lock sudo for everybody: checked first.

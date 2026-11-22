@@ -414,3 +414,50 @@ async fn a_device_turned_away_is_told_nothing_more_even_on_a_page_left_open() {
     let told = tokio::time::timeout(Duration::from_secs(2), seen_by_first.recv()).await;
     assert!(matches!(told, Ok(None) | Err(_)), "{told:?}");
 }
+
+/// Where the stand-in for `orbite interface on` writes, in the test below.
+static SWITCHED_IN: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Does what `orbite interface on|off` does where Tailscale serves it.
+fn switch(on: bool) -> Result<(), String> {
+    let home = SWITCHED_IN.get().unwrap();
+    let mut config = orbite::Config::load(home).unwrap();
+    config.interface = on.then(|| "127.0.0.1:8377".to_owned());
+    config.interface_reached_at = on.then(|| "https://host.tail1234.ts.net:8377".to_owned());
+    config.save(home).map_err(|error| error.to_string())
+}
+
+#[tokio::test]
+async fn asked_in_plain_words_the_agent_turns_the_interface_on_then_lets_a_device_in() {
+    let home = tempfile::tempdir().unwrap();
+    SWITCHED_IN.set(home.path().to_owned()).unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("command", json!({ "command": "/interface on" }))])
+        .then(Ok("[silent]".into()))
+        .then_acts([("command", json!({ "command": "/pair" }))])
+        .then(Ok("[silent]".into()));
+    let (mut channel, mut owner) = support::memory_channel();
+    let (model, folder) = (provider.clone(), home.path().to_owned());
+    tokio::spawn(async move {
+        Agent::new(model, Store::in_memory())
+            .configured_in(&folder)
+            .switching_the_interface_with(switch)
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("I want to talk to you from my phone's browser.");
+    let asked = owner.is_asked().await;
+    assert!(asked.summary.contains("Turn the web interface on"), "{}", asked.summary);
+    owner.allows();
+    let told = owner.hears().await;
+    assert!(told.contains("https://host.tail1234.ts.net:8377"), "{told}");
+    assert!(told.contains("encrypted"), "{told}");
+
+    owner.says("Add my phone.");
+    owner.is_asked().await;
+    owner.allows();
+    let told = owner.hears().await;
+    assert!(told.contains("https://host.tail1234.ts.net:8377/#"), "{told}");
+}
