@@ -426,7 +426,11 @@
     } catch (refused) {
       return note(words.noMic);
     }
-    const kinds = [["audio/ogg;codecs=opus", "ogg"], ["audio/webm;codecs=opus", "webm"], ["audio/mp4", "m4a"]];
+    // Safari, and every browser on an iPhone, records best in its own
+    // wrapping: what it makes in the others' does not play back whole.
+    const apple = /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent);
+    const usual = [["audio/ogg;codecs=opus", "ogg"], ["audio/webm;codecs=opus", "webm"], ["audio/mp4", "m4a"]];
+    const kinds = apple ? [usual[2], usual[1], usual[0]] : usual;
     const [kind, ending] = kinds.find(([kind]) => MediaRecorder.isTypeSupported(kind)) || ["", "webm"];
     recorder = new MediaRecorder(stream, kind ? { mimeType: kind } : undefined);
     recorded = [];

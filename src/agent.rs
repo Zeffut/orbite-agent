@@ -56,7 +56,7 @@ A password or key your Owner writes, put away at once with `command`: \
 /secret NAME. Never tell your Owner to type a command or go to the machine: \
 do it yourself.
 
-Answer in the language your Owner writes in. Be direct and brief.";
+Answer in the language your Owner writes in; in French, say tu. Be direct and brief.";
 
 const MEMORY_INSTRUCTIONS: &str = "\
 ## Your memory
@@ -1186,7 +1186,8 @@ impl<P: Provider + 'static> Agent<P> {
                 continue;
             }
             if text.trim() == "/pair" {
-                if channel.send(&self.pair()).await.is_err() {
+                // Shown and not kept: the code lets a device in.
+                if channel.send_unkept(&self.pair()).await.is_err() {
                     return;
                 }
                 continue;
@@ -1954,8 +1955,9 @@ fn permission_specs() -> Vec<ActionSpec> {
              disconnect|remove NAME]; /secret NAME [VALUE]; \
              /settings [NAME VALUE] (secrets strict: none reach the AI); \
              /providers [add NAME MODEL|first NAME|remove NAME|limit NAME TOKENS|connect chatgpt] \
-             for the AIs you think with; /extensions [off|on|remove NAME]; /usage; /interface [on|off] \
-             for the web interface, /pair lets a phone or browser into it; /devices [remove NAME].",
+             for the AIs you think with; /extensions [off|on|remove NAME]; /usage; /interface [on|off], \
+             the web interface; /pair when asked to add a phone, computer or device; /devices \
+             [remove NAME].",
             serde_json::json!({ "command": { "type": "string" } }),
         ),
         spec(

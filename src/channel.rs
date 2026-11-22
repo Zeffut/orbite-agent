@@ -39,6 +39,13 @@ pub trait Channel: Send {
 
     fn send(&mut self, text: &str) -> impl Future<Output = io::Result<()>> + Send;
 
+    /// Sends the Owner something that is theirs alone to read and is kept
+    /// nowhere on the Host, where a Channel keeps what it shows: a code
+    /// that lets a device in.
+    fn send_unkept(&mut self, text: &str) -> impl Future<Output = io::Result<()>> + Send {
+        self.send(text)
+    }
+
     /// Asks the Owner to allow or deny an Action, and waits for the answer.
     /// A Channel with no way to ask denies.
     fn ask(&mut self, approval: &Approval) -> impl Future<Output = io::Result<Answer>> + Send {

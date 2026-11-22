@@ -315,3 +315,27 @@ async fn orbites_own_command_run_by_the_agent_is_asked_about_every_time() {
     owner.denies();
     owner.hears().await;
 }
+
+#[tokio::test]
+async fn looking_into_orbites_own_files_is_asked_and_its_owners_page_is_not_the_agents_to_open() {
+    let home = tempfile::tempdir().unwrap();
+    orbite::Config {
+        interface: Some("127.0.0.1:8377".into()),
+        interface_reached_at: Some("https://host.tail1234.ts.net:8377".into()),
+        ..Default::default()
+    }
+    .save(home.path())
+    .unwrap();
+    let mut owner = agent_in(home.path(), Store::in_memory(), &obedient());
+
+    // A command that only reads is free elsewhere; not on who is let in.
+    for command in ["grep -a -o 'open.*' ../interface.db", "cat ../interface.db-wal"] {
+        dictate(&owner, "run_command", json!({ "command": command }));
+        let approval = tokio::time::timeout(std::time::Duration::from_secs(2), owner.is_asked())
+            .await
+            .unwrap_or_else(|_| panic!("{command} ran without asking"));
+        assert!(approval.critical, "{command}: {approval:?}");
+        owner.denies();
+        owner.hears().await;
+    }
+}

@@ -885,6 +885,12 @@ impl Channel for Interface {
         Ok(())
     }
 
+    async fn send_unkept(&mut self, text: &str) -> io::Result<()> {
+        // Told to the devices open now, and written nowhere.
+        self.tell(json!({ "kind": "agent", "text": text }));
+        Ok(())
+    }
+
     async fn offer(&mut self, text: &str, choices: &[(String, String)]) -> io::Result<()> {
         let choices: Vec<Value> = choices
             .iter()

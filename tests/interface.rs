@@ -407,6 +407,7 @@ async fn asked_in_plain_words_the_agent_lets_a_device_in_once_its_owner_agrees()
 
     // The code works, and no model was shown it.
     assert_eq!(Browser::at(address).pairs_with(&code).await, 200);
+    // Nor is it written where the Agent could read it back.
     let shown = format!("{:?}", provider.every_call());
     assert!(!shown.contains(&code), "{shown}");
 }
@@ -573,4 +574,45 @@ async fn a_device_is_named_with_what_its_owner_can_read_and_type() {
     assert!(orbite::turn_away(home.path(), "Mac · Safari").unwrap());
     assert_eq!(pair("Mac · Safari").await, 200);
     assert_eq!(orbite::interface_devices(home.path()).unwrap().len(), 6);
+}
+
+#[tokio::test]
+async fn a_code_asked_for_in_the_page_is_shown_there_and_kept_nowhere() {
+    let home = tempfile::tempdir().unwrap();
+    let interface =
+        Interface::serving(home.path(), "127.0.0.1:0".parse().unwrap(), "en").await.unwrap();
+    let address = interface.address();
+    orbite::Config { interface: Some(address.to_string()), ..Default::default() }
+        .save(home.path())
+        .unwrap();
+    let mut browser = Browser::at(address);
+    let (provider, folder) = (ScriptedProvider::default(), home.path().to_owned());
+    let mut interface = interface;
+    tokio::spawn(async move {
+        Agent::new(provider, Store::in_memory())
+            .configured_in(&folder)
+            .converse(&mut interface)
+            .await
+    });
+    let code = orbite::pairing_code(home.path()).unwrap();
+    assert_eq!(browser.pairs_with(&code).await, 200);
+    let mut shown = browser.watches(None).await.unwrap();
+
+    browser.says("/pair").await;
+    // The page open now is shown the link...
+    let told = loop {
+        let told = next(&mut shown, "agent").await;
+        if told["text"].as_str().is_some_and(|text| text.contains("/#")) {
+            break told;
+        }
+    };
+    assert!(told["id"].is_null(), "it is told, not kept: {told}");
+    // ...and nothing on the Host holds it: not what a device finds again later,
+    // nor any file of the interface.
+    let again = browser.watches(None).await.unwrap();
+    drop(again);
+    for file in ["interface.db", "interface.db-wal"] {
+        let kept = std::fs::read(home.path().join(file)).unwrap_or_default();
+        assert!(!String::from_utf8_lossy(&kept).contains("/#"), "{file} holds the link");
+    }
 }

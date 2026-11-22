@@ -488,6 +488,30 @@ impl Host {
         specs
     }
 
+    /// True when `address` is where Orbite's own web interface is served or
+    /// reached.
+    fn is_the_interface(&self, address: &reqwest::Url) -> bool {
+        let Some(config) = self.workspace.parent().and_then(|home| crate::Config::load(home).ok())
+        else {
+            return false;
+        };
+        let asked = (address.host_str().unwrap_or_default(), address.port_or_known_default());
+        let served = config.interface.as_deref().and_then(|served| {
+            let served: std::net::SocketAddr = served.parse().ok()?;
+            let here =
+                ["localhost", "127.0.0.1", "[::1]", &served.ip().to_string()].contains(&asked.0);
+            Some(here && asked.1 == Some(served.port()))
+        });
+        let reached = config.interface_reached_at.as_deref().and_then(|reached| {
+            let reached = reqwest::Url::parse(reached).ok()?;
+            Some(
+                reached.host_str().is_some_and(|name| name.eq_ignore_ascii_case(asked.0))
+                    && reached.port_or_known_default() == asked.1,
+            )
+        });
+        served == Some(true) || reached == Some(true)
+    }
+
     /// The gate every Action passes through before it is carried out.
     pub(crate) fn review(&self, request: &ActionRequest) -> Review {
         if !is_own(&request.name) {
@@ -508,7 +532,7 @@ impl Host {
             Action::RunCommand(RunCommand { command }) => {
                 // As the shell will read it: quotes inside a name hide nothing.
                 let reveals = looks_secret(&command) || looks_secret(&command.replace(['\'', '"'], ""));
-                if only_looks(&command) && !reveals {
+                if only_looks(&command) && !reveals && !names_orbites_own(&command) {
                     return Review::Free;
                 }
                 let mut detail = command;
@@ -706,6 +730,12 @@ impl Host {
             Action::Computer(_) if self.computer.is_none() => Review::Refuse(NO_COMPUTER.into()),
             Action::Computer(Gesture::Open { url, purpose }) => match web_address(&url) {
                 Err(problem) => Review::Refuse(problem),
+                // The page its Owner talks to it in is not the Agent's to
+                // open: there it would answer its own requests.
+                Ok(address) if self.is_the_interface(&address) => Review::Refuse(
+                    "That is the page your Owner talks to you in: it is theirs alone to open."
+                        .into(),
+                ),
                 // Going to a site is asked; what is done there afterwards is not.
                 Ok(address) => Review::Ask(Approval {
                     summary: self.language.say("Use the computer on a site", "Utiliser l'ordinateur sur un site").into(),
@@ -1272,6 +1302,23 @@ fn only_looks(command: &str) -> bool {
 /// through unasked: taking administrator rights, wiping, shutting down,
 /// running what was just downloaded. A list of known dangers, not a proof.
 fn is_critical(command: &str) -> bool {
+    if names_orbites_own(command) {
+        return true;
+    }
+    is_dangerous(command)
+}
+
+/// True when `command` names what says who Orbite listens to, or what it
+/// keeps sealed or of the Conversation: whatever program is pointed at it,
+/// and were it only to look.
+fn names_orbites_own(command: &str) -> bool {
+    const ORBITES_OWN: &[&str] =
+        &["interface.db", "interface-files", "secrets.sealed", "secrets.key", "orbite.db"];
+    let command = command.to_lowercase();
+    ORBITES_OWN.iter().any(|file| command.contains(file))
+}
+
+fn is_dangerous(command: &str) -> bool {
     const DANGEROUS: &[&str] = &[
         // Orbite's own command changes its Providers, settings and secrets.
         "orbite",
@@ -1310,12 +1357,8 @@ fn is_critical(command: &str) -> bool {
     };
     let outside =
         |word: &&str| word.starts_with('/') || word.starts_with('~') || word.starts_with("$home");
-    // What says who Orbite listens to and what it keeps sealed: whatever
-    // program is pointed at it.
-    const ORBITES_OWN: &[&str] =
-        &["interface.db", "interface-files", "secrets.sealed", "secrets.key", "orbite.db"];
     DANGEROUS.iter().any(|program| runs(program))
-        || ORBITES_OWN.iter().any(|file| command.contains(file))
+        || names_orbites_own(&command)
         || words.iter().any(|word| word.starts_with("mkfs"))
         || (runs("rm") && words.iter().any(outside))
         || (runs("dd") && command.contains("of=/dev"))
