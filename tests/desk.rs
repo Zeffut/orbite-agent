@@ -98,6 +98,14 @@ async fn a_desktop_offered_by_its_account_is_the_agents_computer_until_its_owner
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     owner.says("Click in the middle of the screen.");
+    // On their own desktop a gesture can do whatever they can: taking its
+    // mouse and keyboard is theirs to allow.
+    let asked = tokio::time::timeout(Duration::from_secs(60), owner.is_asked_whenever())
+        .await
+        .expect("the desktop was taken without asking");
+    assert!(asked.summary.contains("Use this computer"), "{}", asked.summary);
+    assert!(asked.detail.contains("in your session"), "{}", asked.detail);
+    owner.allows();
     assert_eq!(heard(&mut owner).await, "Clicked.");
     // The Agent knows whose desktop it is on, and acted on that one: the
     // point it aimed at on the picture is the middle of the real screen.

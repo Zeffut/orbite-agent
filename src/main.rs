@@ -548,9 +548,9 @@ fn pair() -> Result<(), Failure> {
 /// whose desktop may be offered (`desk allow ACCOUNT`).
 fn desk() -> Result<(), Failure> {
     use std::os::unix::fs::MetadataExt;
-    let home = home()?;
     let asked: Vec<String> = env::args().skip(2).collect();
     if let ["allow", account] = asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        let home = home()?;
         let number = account_numbered(account)
             .ok_or_else(|| format!("There is no account called {account} on this machine."))?;
         let mut config = Config::load(&home)?;
@@ -564,9 +564,16 @@ fn desk() -> Result<(), Failure> {
     if !asked.is_empty() {
         return Err("Usage: orbite desk | sudo orbite desk allow ACCOUNT".into());
     }
-    let agent = fs::metadata(&home)
-        .map(|folder| folder.uid())
-        .map_err(|_| "Orbite is not installed on this machine.")?;
+    // The folder of the Orbite installed here, which its Owner cannot read
+    // but can see is there, and whose account the Agent's service runs as.
+    let installed = match setting("ORBITE_HOME") {
+        Some(home) => PathBuf::from(home),
+        None => {
+            PathBuf::from(format!("{}/var/lib/orbite", setting("ORBITE_ROOT").unwrap_or_default()))
+        }
+    };
+    let agent_of = |folder: &PathBuf| fs::metadata(folder).map(|folder| folder.uid());
+    let agent = agent_of(&installed).map_err(|_| "Orbite is not installed on this machine.")?;
     let account = required("USER").or_else(|_| required("LOGNAME"))?;
     let display = setting_of_the_session("DISPLAY");
     let wayland = setting_of_the_session("WAYLAND_DISPLAY").is_some()
@@ -581,16 +588,21 @@ fn desk() -> Result<(), Failure> {
         }
     };
     let screen = orbite::Screen::at(display.unwrap_or_default());
-    // The Agent's service may be starting, or starting again: it is waited for.
+    // The Agent's service may be starting, or starting again: it is waited
+    // for, as long as this session lasts and Orbite is installed.
     loop {
+        if agent_of(&installed).ok() != Some(agent) {
+            // Orbite was removed, or is another's now: nothing to lend to.
+            return Ok(());
+        }
         match orbite::offer_this_computer(orbite::DESK_SOCKET, agent, &account, session, &screen) {
             Ok(()) | Err(orbite::NotOffered::NobodyListening) => {
                 std::thread::sleep(std::time::Duration::from_secs(5));
             }
-            Err(orbite::NotOffered::NotOrbite) => {
-                return Err(
-                    "What listens for desktops on this machine is not Orbite's own service.".into(),
-                );
+            // Something else holds the place the service listens at: it is
+            // told nothing, and the service is waited for.
+            Err(orbite::NotOffered::NotOrbite | orbite::NotOffered::Other(_)) => {
+                std::thread::sleep(std::time::Duration::from_secs(30));
             }
             Err(orbite::NotOffered::NotTheOwner) => {
                 return Err(format!(
@@ -606,7 +618,6 @@ fn desk() -> Result<(), Failure> {
                         .into(),
                 );
             }
-            Err(orbite::NotOffered::Other(why)) => return Err(why.into()),
         }
     }
 }

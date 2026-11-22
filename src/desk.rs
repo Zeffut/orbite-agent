@@ -28,11 +28,18 @@ fn send(to: &mut UnixStream, said: &[u8]) -> io::Result<()> {
     to.flush()
 }
 
+/// The largest greeting or order: a few words, never a screen.
+const WORDS: usize = 64 * 1024;
+
 fn receive(from: &mut UnixStream) -> io::Result<Vec<u8>> {
+    receive_at_most(from, LARGEST)
+}
+
+fn receive_at_most(from: &mut UnixStream, most: usize) -> io::Result<Vec<u8>> {
     let mut length = [0u8; 4];
     from.read_exact(&mut length)?;
     let length = u32::from_be_bytes(length) as usize;
-    if length > LARGEST {
+    if length > most {
         return Err(io::Error::other("more was sent than a screen holds"));
     }
     let mut said = vec![0u8; length];
@@ -92,7 +99,7 @@ impl Offered {
             seen["width"].as_u64().unwrap_or(0) as u32,
             seen["height"].as_u64().unwrap_or(0) as u32,
         );
-        if points.len() != (width * height * 3) as usize || width == 0 {
+        if points.len() as u64 != u64::from(width) * u64::from(height) * 3 || width == 0 {
             return Err(io::Error::other("the desktop sent a picture that is not whole"));
         }
         self.size = (width as u16, height as u16);
@@ -129,47 +136,73 @@ pub type Lent = Arc<Mutex<Option<Offered>>>;
 /// is told no and nothing of it is kept. Returns once listening, or says
 /// why it could not (another Orbite of this machine is listening already).
 pub fn listen(name: &str, trusted: u32, lent: Lent) -> io::Result<()> {
-    let listening = UnixListener::bind_addr(&SocketAddr::from_abstract_name(name)?)?;
+    let address = SocketAddr::from_abstract_name(name)?;
+    let first = UnixListener::bind_addr(&address);
+    let failed = first.as_ref().err().map(|error| io::Error::new(error.kind(), error.to_string()));
     std::thread::spawn(move || {
-        for offering in listening.incoming() {
-            let Ok(mut offering) = offering else { continue };
-            let _ = offering.set_read_timeout(Some(Duration::from_secs(20)));
-            let _ = offering.set_write_timeout(Some(Duration::from_secs(20)));
-            // Heard out first, whoever it is: an answer sent before the
-            // other side has spoken is one it may never read.
-            let said = receive(&mut offering)
-                .ok()
-                .and_then(|said| serde_json::from_slice::<Value>(&said).ok());
-            let welcome = match account_of(&offering) {
-                Ok(account) if account == trusted => said,
-                _ => {
-                    let refused =
-                        json!({ "ok": false, "why": "not the account Orbite was installed by" });
-                    let _ = send(&mut offering, refused.to_string().as_bytes());
-                    continue;
+        // A name taken by something else is asked for again until it is
+        // free: whoever took it is not obeyed by any helper meanwhile.
+        let listening = match first {
+            Ok(listening) => listening,
+            Err(_) => loop {
+                std::thread::sleep(Duration::from_secs(10));
+                if let Ok(listening) = UnixListener::bind_addr(&address) {
+                    break listening;
                 }
-            };
-            let Some(said) = welcome else { continue };
-            if said["session"] != "x11" {
-                // Told plainly, and nothing is lent: the Agent keeps a
-                // computer of its own.
-                let refused = json!({ "ok": false, "why": "wayland" });
-                let _ = send(&mut offering, refused.to_string().as_bytes());
-                continue;
-            }
-            if send(&mut offering, json!({ "ok": true }).to_string().as_bytes()).is_err() {
-                continue;
-            }
-            let size = (
-                said["width"].as_u64().unwrap_or(0) as u16,
-                said["height"].as_u64().unwrap_or(0) as u16,
-            );
-            let account = said["account"].as_str().unwrap_or_default().to_owned();
-            *lent.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-                Some(Offered { stream: offering, account, size });
+            },
+        };
+        for offering in listening.incoming() {
+            let Ok(offering) = offering else { continue };
+            // Who it is comes first, before a word of theirs is read; and
+            // each is heard apart, so that none keeps the others waiting.
+            let known = account_of(&offering).is_ok_and(|account| account == trusted);
+            let lent = lent.clone();
+            std::thread::spawn(move || welcome(offering, known, &lent));
         }
     });
-    Ok(())
+    match failed {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+/// Hears one caller out: the account whose desktop Orbite takes is lent
+/// from, anyone else is told no.
+fn welcome(mut offering: UnixStream, known: bool, lent: &Lent) {
+    let _ = offering.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = offering.set_write_timeout(Some(Duration::from_secs(20)));
+    // Heard out before being answered: an answer sent before the other
+    // side has spoken is one it may never read. A few words at most.
+    let said = receive_at_most(&mut offering, WORDS)
+        .ok()
+        .and_then(|said| serde_json::from_slice::<Value>(&said).ok());
+    let (Some(said), true) = (said, known) else {
+        let refused = json!({ "ok": false, "why": "not the account Orbite was installed by" });
+        let _ = send(&mut offering, refused.to_string().as_bytes());
+        return;
+    };
+    if said["session"] != "x11" {
+        // Told plainly, and nothing is lent: the Agent keeps a computer of its own.
+        let _ =
+            send(&mut offering, json!({ "ok": false, "why": "wayland" }).to_string().as_bytes());
+        return;
+    }
+    if send(&mut offering, json!({ "ok": true }).to_string().as_bytes()).is_err() {
+        return;
+    }
+    let _ = offering.set_read_timeout(Some(Duration::from_secs(20)));
+    let size =
+        (said["width"].as_u64().unwrap_or(0) as u16, said["height"].as_u64().unwrap_or(0) as u16);
+    // A name as accounts are named: nothing else of it reaches a model.
+    let account: String = said["account"]
+        .as_str()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .take(32)
+        .collect();
+    *lent.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Some(Offered { stream: offering, account, size });
 }
 
 /// Listens as [`listen`] does and gives a way to ask whether a desktop is
@@ -227,7 +260,7 @@ pub fn offer(
         });
     }
     loop {
-        let asked: Value = match receive(&mut service) {
+        let asked: Value = match receive_at_most(&mut service, WORDS) {
             Ok(asked) => serde_json::from_slice(&asked).unwrap_or_default(),
             // The service stopped: the offer ends with it.
             Err(_) => return Ok(()),
@@ -242,7 +275,7 @@ pub fn offer(
             "click" => screen.click(number("x") as u16, number("y") as u16).map(|()| None),
             "type" => screen.type_text(text("text")).map(|()| None),
             "key" => screen.key(text("keys")).map(|()| None),
-            "scroll" => screen.scroll(number("notches") as i32).map(|()| None),
+            "scroll" => screen.scroll(number("notches").clamp(-50, 50) as i32).map(|()| None),
             "open" => open_in_the_session(text("address")).map(|()| None),
             _ => Err(io::Error::other("not something a desktop is asked")),
         };

@@ -407,6 +407,9 @@ impl Host {
     /// the screen once it has settled.
     async fn on_the_computer(&self, gesture: Gesture) -> String {
         let Some(desk) = &self.computer else { return NO_COMPUTER.into() };
+        // Reached here with the Owner's say where one was needed: it holds
+        // for as long as the Agent keeps working there.
+        desk.taken();
         // What the screen showed before, to know when an address has opened.
         let before = match &gesture {
             Gesture::Open { .. } => desk.glance().ok(),
@@ -746,6 +749,30 @@ impl Host {
                 },
             },
             Action::Computer(_) if self.computer.is_none() => Review::Refuse(NO_COMPUTER.into()),
+            // This computer's mouse and keyboard do whatever its Owner can:
+            // taking them is asked, and again once the Agent has let go.
+            Action::Computer(_)
+                if self.computer.as_ref().is_some_and(|desk| desk.asks_before_taking()) =>
+            {
+                Review::Ask(Approval {
+                    summary: self
+                        .language
+                        .say("Use this computer", "Utiliser cet ordinateur")
+                        .into(),
+                    detail: self
+                        .language
+                        .say(
+                            "Your agent takes this computer's mouse and keyboard, in your session, with \
+                             the accounts you are signed in to. It keeps them while it works, and asks \
+                             again later.",
+                            "Ton agent prend la souris et le clavier de cet ordinateur, dans ta session, \
+                             avec les comptes où tu es connecté. Il les garde le temps de travailler, et \
+                             redemande plus tard.",
+                        )
+                        .into(),
+                    ..Approval::default()
+                })
+            }
             Action::Computer(Gesture::Open { url, purpose }) => match web_address(&url) {
                 Err(problem) => Review::Refuse(problem),
                 // The page its Owner talks to it in is not the Agent's to
@@ -1330,8 +1357,16 @@ fn is_critical(command: &str) -> bool {
 /// keeps sealed or of the Conversation: whatever program is pointed at it,
 /// and were it only to look.
 fn names_orbites_own(command: &str) -> bool {
-    const ORBITES_OWN: &[&str] =
-        &["interface.db", "interface-files", "secrets.sealed", "secrets.key", "orbite.db"];
+    const ORBITES_OWN: &[&str] = &[
+        "interface.db",
+        "interface-files",
+        "secrets.sealed",
+        "secrets.key",
+        "orbite.db",
+        // Whose desktop the Agent may be lent, and where it is lent.
+        "desk_account",
+        "orbite-desk",
+    ];
     // As the shell will read it: quotes and backslashes inside a name hide
     // nothing.
     let command = command.to_lowercase().replace(['\'', '"', '\\'], "");

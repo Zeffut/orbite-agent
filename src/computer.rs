@@ -635,7 +635,14 @@ pub(crate) struct Desk {
     lent: crate::desk::Lent,
     /// True when the Owner said to keep to a Computer of the Agent's own.
     keeps_to_its_own: std::sync::atomic::AtomicBool,
+    /// Until when the Owner's last say covers the Agent holding this
+    /// computer's mouse and keyboard.
+    taken_until: std::sync::Mutex<Option<Instant>>,
 }
+
+/// How long after its last gesture the Agent still holds this computer's
+/// mouse and keyboard without asking again.
+const HELD_FOR: Duration = Duration::from_secs(600);
 
 impl Drop for Desk {
     fn drop(&mut self) {
@@ -701,6 +708,27 @@ impl Desk {
             taken: std::sync::atomic::AtomicU32::new(0),
             lent: std::sync::Arc::default(),
             keeps_to_its_own: std::sync::atomic::AtomicBool::new(false),
+            taken_until: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// True when the next gesture would take this computer's mouse and
+    /// keyboard and the Owner's say for it has run out: on their desktop a
+    /// gesture can do whatever they can, so taking it is theirs to allow.
+    pub(crate) fn asks_before_taking(&self) -> bool {
+        if self.which() == Which::ItsOwn {
+            return false;
+        }
+        let until = self.taken_until.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        until.is_none_or(|until| Instant::now() > until)
+    }
+
+    /// Notes that the Agent acts on this computer with its Owner's say,
+    /// which then holds for a while after each gesture.
+    pub(crate) fn taken(&self) {
+        if matches!(self.which(), Which::This(_)) {
+            *self.taken_until.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some(Instant::now() + HELD_FOR);
         }
     }
 

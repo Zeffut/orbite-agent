@@ -21,6 +21,7 @@ Under X11 the helper does this directly. Under Wayland a program may only do it 
 
 ## Consequences
 
-- On this computer the Agent acts with the Owner's signed-in accounts. The same Approvals apply as on a computer of its own, and the Owner sees every gesture; an Owner who wants distance says "use a computer of your own".
+- **On this computer a mouse and a keyboard can do whatever the Owner can**: open a terminal, read what is signed in, answer for them. The separate account, which keeps a mistaken command small everywhere else, does not hold there, and no rule about single gestures would. So taking the mouse and keyboard is asked of the Owner, in those words, and asked again once the Agent has let go for a while; an Owner may answer "always", knowing what it means, and at the free level nothing is asked, as for everything. An Owner who wants distance says "use a computer of your own".
+- What the Agent runs as commands has the same account as its service, and could speak to the helper in its place when the service is down. Such a command is a Critical Action, which is a guard and not a wall: the wall is not lending the desktop.
 - The helper adds one program to the Owner's session and one file that starts it. Uninstalling removes both.
 - Two people logged in on the same Host do not both offer their desktop: only the account written down at install does.
