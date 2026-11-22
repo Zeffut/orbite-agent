@@ -1,6 +1,7 @@
 name: App
 
 # Orbite's app for phones and computers, built for each system it runs on.
+# All of it is Rust: no other toolchain is involved.
 on:
   push:
     branches: [app, main]
@@ -26,33 +27,32 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src-tauri
-      - run: npm ci
+          workspaces: app
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2
       - if: runner.os == 'Linux'
-        working-directory: app/src-tauri
         run: |
-          cargo fmt --check
-          cargo clippy --all-targets --locked -- -D warnings
-          cargo test --locked
-      - run: npm run tauri build
+          rustup component add rustfmt clippy
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
+      - run: cargo tauri build
       - uses: actions/upload-artifact@v4
         with:
           name: orbite-app-${{ runner.os }}
           path: |
-            app/src-tauri/target/release/bundle/**/*.deb
-            app/src-tauri/target/release/bundle/**/*.AppImage
-            app/src-tauri/target/release/bundle/**/*.dmg
-            app/src-tauri/target/release/bundle/**/*.msi
-            app/src-tauri/target/release/bundle/**/*.exe
+            app/target/release/bundle/**/*.deb
+            app/target/release/bundle/**/*.AppImage
+            app/target/release/bundle/**/*.dmg
+            app/target/release/bundle/**/*.msi
+            app/target/release/bundle/**/*.exe
           if-no-files-found: error
 
   android:
@@ -61,9 +61,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -71,16 +68,17 @@ jobs:
       - run: rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src-tauri
-      - run: npm ci
-      - run: |
-          echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
-      - run: npm run tauri android init
-      - run: npm run tauri android build -- --debug --apk --target aarch64
+          workspaces: app
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2
+      - run: echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - run: cargo tauri android init
+      - run: cargo tauri android build --debug --apk --target aarch64
       - uses: actions/upload-artifact@v4
         with:
           name: orbite-app-Android
-          path: app/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          path: app/gen/android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
 
   ios:
@@ -89,19 +87,18 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: app/src-tauri
+          workspaces: app
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: tauri-cli@2
       - run: brew install xcodegen
-      - run: npm ci
-      - run: npm run tauri ios init
-      - run: npm run tauri ios build -- --debug --target aarch64-sim
+      - run: cargo tauri ios init
+      - run: cargo tauri ios build --debug --target aarch64-sim
       - uses: actions/upload-artifact@v4
         with:
           name: orbite-app-iPhone-simulator
-          path: app/src-tauri/gen/apple/build/**/*.app
-          if-no-files-found: warn
+          path: app/gen/apple/build/**/*.app
+          if-no-files-found: error
