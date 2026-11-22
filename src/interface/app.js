@@ -112,7 +112,9 @@
     if (follow) said.scrollTop = said.scrollHeight;
   }
   // The Agent's mark stirs while it works, and a way back down shows when the Owner reads further up.
-  const working = (busy) => document.querySelector("#who .avatar").classList.toggle("working", busy);
+  const mascot = document.querySelector("#who .mascot");
+  const working = (busy) => mascot.classList.toggle("working", busy);
+  const waiting = () => mascot.classList.toggle("waiting", asks.size > 0);
   said.addEventListener("scroll", () => { $("down").hidden = atTheEnd(); });
   $("down").addEventListener("click", () => { said.scrollTop = said.scrollHeight; });
 
@@ -196,6 +198,7 @@
         card.append(answers);
         asks.set(event.ask, card);
         add(card, event);
+        waiting();
         break;
       }
       case "settled": {
@@ -211,6 +214,7 @@
         if (card.dataset.event) line.dataset.event = card.dataset.event;
         card.replaceWith(line);
         asks.delete(event.ask);
+        waiting();
         break;
       }
       case "file": {
@@ -524,6 +528,7 @@
       $("talk").hidden = false;
       said.replaceChildren();
       asks.clear();
+      waiting();
       const name = told.agent || "Orbite";
       $("title").textContent = name;
       document.title = name;

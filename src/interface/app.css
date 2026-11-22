@@ -53,19 +53,24 @@ button { cursor: pointer; }
   padding: 10px 16px; padding-top: max(10px, env(safe-area-inset-top));
 }
 #who {
-  display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 6px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 14px 4px 8px; border-radius: 999px;
   background: var(--agent); border: 1px solid var(--agent-line); font-size: 14px;
 }
-.avatar {
-  width: 24px; height: 24px; border-radius: 50%; background: var(--bright); flex: none; position: relative;
-}
-.avatar::after {
-  content: ""; position: absolute; inset: 0; background: var(--on-bright);
-  -webkit-mask: var(--mark) center / 78% no-repeat; mask: var(--mark) center / 78% no-repeat;
-  --mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='10'/%3E%3Cellipse cx='32' cy='32' rx='26' ry='11' fill='none' stroke='black' stroke-width='4' transform='rotate(-28 32 32)'/%3E%3C/svg%3E");
-}
-.avatar.working { animation: breathe 1.4s infinite ease-in-out; }
-@keyframes breathe { 50% { transform: scale(0.86); opacity: 0.7; } }
+/* The Agent's mark: a planet that looks back. It blinks at rest, a moon
+   travels its ring while it works, and a dot shows when it waits for an answer. */
+.mascot { flex: none; overflow: visible; }
+.mascot .ring { fill: none; stroke: var(--bright); stroke-width: 5; }
+.mascot .body { fill: var(--bright); }
+.mascot .eyes { fill: var(--on-bright); transform-origin: 50px 45px; animation: blink 5s infinite; transition: transform 0.2s; }
+.mascot .moon { fill: var(--accent); display: none; offset-path: path("M6 50 A44 13 0 1 0 94 50 A44 13 0 1 0 6 50"); offset-distance: 30%; }
+.mascot .dot { fill: #ffb020; display: none; }
+.mascot.working .moon { display: block; animation: travel 2.6s linear infinite; }
+.mascot.working .eyes { animation: none; transform: translate(3px, 3px); }
+.mascot.waiting .dot { display: block; }
+.mascot.waiting .moon { display: none; }
+.mascot.waiting .eyes { animation: none; transform: translateY(-4px); }
+@keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.1); } }
+@keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
 #link { position: absolute; left: 16px; font-size: 12px; color: var(--warn); }
 .pill {
   position: absolute; right: 16px; display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px;
@@ -152,7 +157,8 @@ button { cursor: pointer; }
 #say:focus-within { border-color: color-mix(in srgb, var(--ink) 30%, var(--agent-line)); }
 #recording { align-items: center; }
 #recordTime { flex: 1; font-variant-numeric: tabular-nums; color: var(--quiet); padding-left: 4px; }
-#recordTime::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 10px; border-radius: 50%; background: var(--warn); animation: breathe 1.2s infinite ease-in-out; }
+#recordTime::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 10px; border-radius: 50%; background: var(--warn); animation: pulse 1.2s infinite ease-in-out; }
+@keyframes pulse { 50% { opacity: 0.25; } }
 #text {
   flex: 1; min-width: 0; resize: none; max-height: 40vh; padding: 8px 4px; border: 0; background: none; outline: none;
 }
@@ -166,7 +172,7 @@ button { cursor: pointer; }
 .round.bright { background: var(--bright); color: var(--on-bright); }
 .round:disabled { opacity: 0.4; }
 #talk.dropping #said { outline: 2px dashed var(--accent); outline-offset: -8px; border-radius: 20px; }
-@media (prefers-reduced-motion: reduce) { .avatar.working, #recordTime::before { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .mascot .eyes, .mascot.working .moon, #recordTime::before { animation: none; } }
 
 /* The Agent's screen, beside the Conversation. */
 #screen {
