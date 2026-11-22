@@ -56,6 +56,14 @@ fn asked_of(tailscale: &Path, asked: &[&str]) -> Result<String, String> {
 
 /// The `tailscale` program of this machine, when it has one.
 pub fn tailscale() -> Option<std::path::PathBuf> {
+    // As root, only the one the system keeps among its own programs:
+    // whoever had Orbite run as root has no say in which program that is.
+    // SAFETY: a plain system call.
+    #[cfg(unix)]
+    if unsafe { libc::geteuid() } == 0 {
+        let system = crate::system_program("tailscale");
+        return system.is_file().then_some(system);
+    }
     crate::hearing::found("tailscale")
 }
 
