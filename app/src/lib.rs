@@ -149,6 +149,7 @@ fn tell(app: &AppHandle, title: &str) {
         let _ = window.set_title(&unseen.agent);
     }
     // How many, on the app's icon, where the system shows such a thing.
+    #[cfg(desktop)]
     let _ = window.set_badge_count((unseen.count > 0).then_some(i64::from(unseen.count)));
     let looking = window.is_focused().unwrap_or(false) && window.is_visible().unwrap_or(false);
     if unseen.count > before && !looking {
