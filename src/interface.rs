@@ -73,6 +73,8 @@ struct Shared {
     /// The Agent's screen as last seen, and how many times it was: kept in
     /// memory alone.
     screen: Mutex<(u64, Vec<u8>)>,
+    /// The names the interface is served under, beside its address.
+    names: Vec<String>,
     language: String,
 }
 
@@ -279,6 +281,14 @@ impl Interface {
             inbox: home.join("workspace/inbox"),
             waiting: Mutex::new(Vec::new()),
             screen: Mutex::new((0, Vec::new())),
+            names: crate::Config::load(home)
+                .ok()
+                .and_then(|config| config.interface_reached_at)
+                .and_then(|reached| {
+                    let named = reached.split("://").nth(1)?.split(['/', ':']).next()?.to_owned();
+                    Some(vec![named])
+                })
+                .unwrap_or_default(),
             language: language.to_owned(),
         });
         let listening = tokio::net::TcpListener::bind(address).await?;
@@ -318,6 +328,7 @@ impl Interface {
                 "/api/upload",
                 post(upload).delete(give_up).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
             )
+            .layer(axum::middleware::from_fn_with_state(shared.clone(), asked_by_its_name))
             .with_state(shared.clone());
         let serving = tokio::spawn(async move {
             let _ = axum::serve(listening, pages).await;
@@ -431,6 +442,32 @@ fn page(kind: &'static str, body: &'static str) -> Response {
         .into_response()
 }
 
+/// Answers only what was asked of the interface by a name of its own: the
+/// address it listens on, the Host itself, or the name it is served under.
+/// A page of another site that has a browser reach this place under its
+/// own name is refused, whatever it then asks.
+async fn asked_by_its_name(
+    State(shared): State<Arc<Shared>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let asked = request.headers().get(header::HOST).and_then(|host| host.to_str().ok());
+    let name = asked.map(|host| match host.rsplit_once(':') {
+        // Not the colons of an address written in brackets.
+        Some((name, port)) if port.chars().all(|c| c.is_ascii_digit()) => name,
+        _ => host,
+    });
+    let own = name.is_some_and(|name| {
+        name.eq_ignore_ascii_case("localhost")
+            || name.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok()
+            || shared.names.iter().any(|own| own.eq_ignore_ascii_case(name))
+    });
+    if !own {
+        return refused(StatusCode::MISDIRECTED_REQUEST, "not this place");
+    }
+    next.run(request).await
+}
+
 /// True when a request that changes something comes from the interface's
 /// own page: another site a browser has open cannot send it.
 fn from_the_page(headers: &HeaderMap) -> bool {
@@ -468,7 +505,15 @@ async fn pair(
         .filter(char::is_ascii_alphanumeric)
         .map(|letter| letter.to_ascii_uppercase())
         .collect();
-    let name: String = sent["name"].as_str().unwrap_or_default().trim().chars().take(60).collect();
+    // A name the Owner can read and type: letters, digits and a few marks.
+    let name: String = sent["name"]
+        .as_str()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '·' | '-' | '_' | '.' | '\''))
+        .take(60)
+        .collect();
+    let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
     let name = if name.is_empty() { "browser".to_owned() } else { name };
     let Ok(token) = unguessable() else {
         return refused(StatusCode::INTERNAL_SERVER_ERROR, "no token could be made");
@@ -487,14 +532,15 @@ async fn pair(
                 .is_ok_and(|used| used == 1);
         if good {
             // A name is a device's own: a second of the same name is numbered.
-            let taken: i64 = database
-                .query_row(
-                    "SELECT COUNT(*) FROM devices WHERE name = ?1 OR name LIKE ?2",
-                    (&name, format!("{name} (%")),
-                    |row| row.get(0),
-                )
-                .unwrap_or_default();
-            let named = if taken == 0 { name } else { format!("{name} ({})", taken + 1) };
+            let taken = |name: &str| {
+                database
+                    .query_row("SELECT 1 FROM devices WHERE name = ?1", [name], |_| Ok(()))
+                    .is_ok()
+            };
+            let named = (1..)
+                .map(|nth| if nth == 1 { name.clone() } else { format!("{name} {nth}") })
+                .find(|named| !taken(named))
+                .unwrap_or(name);
             database
                 .execute(
                     "INSERT INTO devices (name, token, since, seen) VALUES (?1, ?2, ?3, ?3)",
@@ -700,11 +746,15 @@ async fn upload(
     State(shared): State<Arc<Shared>>,
     headers: HeaderMap,
     Query(asked): Query<std::collections::HashMap<String, String>>,
-    content: axum::body::Bytes,
+    content: axum::body::Body,
 ) -> Response {
+    // Nothing of what is sent is read before the device is known.
     if !from_the_page(&headers) || shared.device(&headers).is_none() {
         return refused(StatusCode::UNAUTHORIZED, "not paired");
     }
+    let Ok(content) = axum::body::to_bytes(content, UPLOAD_LIMIT).await else {
+        return refused(StatusCode::PAYLOAD_TOO_LARGE, "too big");
+    };
     if content.is_empty() {
         return refused(StatusCode::BAD_REQUEST, "an empty file");
     }

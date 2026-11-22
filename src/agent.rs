@@ -3983,8 +3983,8 @@ impl<P: Provider + 'static> Agent<P> {
                             summary,
                             detail,
                             irreversible: changes == Changes::ForGood,
-                            // Letting a device in is asked at every level:
-                            // no model does it on its own.
+                            // Letting a device in is asked like a Critical
+                            // Action: never allowed once and for all.
                             critical: command == "/pair",
                             ..Approval::default()
                         })

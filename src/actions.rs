@@ -979,6 +979,11 @@ impl Host {
                     | "secrets.key"
                     | "secrets.sealed"
                     | "tryouts.json"
+                    // Who is let into the Conversation, and what they see.
+                    | "interface.db"
+                    | "interface.db-wal"
+                    | "interface.db-shm"
+                    | "interface-files"
             )
         )
     }

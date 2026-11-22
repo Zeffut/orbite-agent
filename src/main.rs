@@ -446,8 +446,7 @@ fn reach() -> Option<Result<String, String>> {
     match asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["on"] => Some(orbite::open_on_tailscale(&tailscale, DEFAULT_INTERFACE.parse().ok()?)),
         ["off"] => {
-            let reached = Config::load(&home().ok()?).ok()?.interface_reached_at?;
-            let _ = orbite::close_on_tailscale(&tailscale, &reached);
+            let _ = orbite::close_on_tailscale(&tailscale, DEFAULT_INTERFACE.parse().ok()?);
             None
         }
         _ => None,
@@ -809,10 +808,10 @@ fn uninstall() -> Result<(), Failure> {
     systemctl(&["disable", "--now", "orbite"]);
     systemctl(&["disable", "--now", "orbite-update.timer"]);
     // What Tailscale serves for the web interface goes with it.
-    if let Ok(Config { interface_reached_at: Some(reached), .. }) = Config::load(&data)
-        && let Some(tailscale) = orbite::tailscale()
+    if let Ok(Config { interface_reached_at: Some(_), .. }) = Config::load(&data)
+        && let (Some(tailscale), Ok(local)) = (orbite::tailscale(), DEFAULT_INTERFACE.parse())
     {
-        let _ = orbite::close_on_tailscale(&tailscale, &reached);
+        let _ = orbite::close_on_tailscale(&tailscale, local);
     }
     // The data first: were it to fail, the program is still there to try again.
     if !keep && data.exists() {

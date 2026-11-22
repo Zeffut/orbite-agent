@@ -19,7 +19,7 @@ You can also name an address of a private network yourself, `sudo orbite interfa
 
 There is no password and no account. A device is let in once, with a code:
 
-- Tell your agent *"add my phone"*. It asks you to confirm with a button, then gives you a link: open it on the device and it is in. The link works once, for ten minutes.
+- Tell your agent *"add my phone"*. It asks you to confirm with a button (at the free permission level it asks nothing, as for everything else), then gives you a link: open it on the device and it is in. The link works once, for ten minutes.
 - Or run `sudo orbite pair` on the machine and type the code it shows on the page.
 
 Setup ends with such a link for your first device.

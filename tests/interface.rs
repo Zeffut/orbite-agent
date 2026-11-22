@@ -492,3 +492,61 @@ async fn the_agents_screen_is_shown_to_the_devices_let_in_and_to_nobody_else() {
     assert_eq!(seen.bytes().await.unwrap().as_ref(), b"\x89PNG as the screen is");
     assert_eq!(fetch(None).await.status(), 401);
 }
+
+#[tokio::test]
+async fn a_page_that_reaches_the_interface_under_a_name_of_its_own_is_answered_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    let browser = agent_with_a_paired_browser(home.path(), &provider).await;
+    let code = orbite::pairing_code(home.path()).unwrap();
+    let asking = |host: &'static str| {
+        let sending = browser
+            .http
+            .post(format!("{}/api/pair", browser.at))
+            .header("x-orbite", "1")
+            .header("host", host)
+            .header("origin", format!("http://{host}"))
+            .json(&json!({ "code": "ZZZZ-ZZZZ", "name": "elsewhere" }));
+        async move { sending.send().await.unwrap().status().as_u16() }
+    };
+
+    // Another site's name, made to lead here: refused before anything is looked at.
+    for _ in 0..10 {
+        assert_eq!(asking("evil.example:8377").await, 421);
+    }
+    // It could not even use up the tries: the Owner's code still works.
+    assert_eq!(
+        Browser::at(browser.at.trim_start_matches("http://").parse().unwrap())
+            .pairs_with(&code)
+            .await,
+        200
+    );
+    // The Host's own names are answered.
+    assert_eq!(asking("localhost:8377").await, 401);
+}
+
+#[tokio::test]
+async fn a_device_is_named_with_what_its_owner_can_read_and_type() {
+    let home = tempfile::tempdir().unwrap();
+    let interface =
+        Interface::serving(home.path(), "127.0.0.1:0".parse().unwrap(), "en").await.unwrap();
+    let pair = |name: &'static str| {
+        let browser = Browser::at(interface.address());
+        let code = orbite::pairing_code(home.path()).unwrap();
+        async move { browser.posts("/api/pair", json!({ "code": code, "name": name })).await.status() }
+    };
+
+    assert_eq!(pair("Mac · Safari").await, 200);
+    assert_eq!(pair("\u{200b}\u{202e}").await, 200);
+    assert_eq!(pair("  Mac  ·  Safari ").await, 200);
+    assert_eq!(pair("<b>Mac</b>").await, 200);
+
+    let mut names: Vec<String> =
+        orbite::interface_devices(home.path()).unwrap().into_iter().map(|one| one.name).collect();
+    names.sort();
+    assert_eq!(names, ["Mac · Safari", "Mac · Safari 2", "bMacb", "browser"]);
+    // One turned away leaves the other, and its name is free again for one device.
+    assert!(orbite::turn_away(home.path(), "Mac · Safari").unwrap());
+    assert_eq!(pair("Mac · Safari").await, 200);
+    assert_eq!(orbite::interface_devices(home.path()).unwrap().len(), 4);
+}

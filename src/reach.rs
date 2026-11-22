@@ -103,12 +103,22 @@ pub fn open_on_tailscale(tailscale: &Path, local: SocketAddr) -> Result<String, 
     Ok(address_of(name, port))
 }
 
-/// Has Tailscale stop serving what [`open_on_tailscale`] opened at `address`.
-pub fn close_on_tailscale(tailscale: &Path, address: &str) -> Result<(), String> {
-    let port = address
-        .trim_start_matches("https://")
-        .rsplit_once(':')
-        .and_then(|(_, port)| port.parse::<u16>().ok())
-        .unwrap_or(443);
-    asked_of(tailscale, &["serve", &format!("--https={port}"), "off"]).map(|_| ())
+/// Has Tailscale stop serving what [`open_on_tailscale`] opened for what
+/// listens at `local`, and nothing else: whatever is written down
+/// elsewhere, only a port Tailscale itself says is served to there is
+/// closed. Does nothing when there is none.
+pub fn close_on_tailscale(tailscale: &Path, local: SocketAddr) -> Result<(), String> {
+    let target = format!("http://{local}");
+    let serving: Value =
+        serde_json::from_str(&asked_of(tailscale, &["serve", "status", "--json"])?)
+            .unwrap_or_default();
+    for (place, served) in serving["Web"].as_object().into_iter().flatten() {
+        if served["Handlers"]["/"]["Proxy"] == target.as_str()
+            && let Some((_, port)) = place.rsplit_once(':')
+            && let Ok(port) = port.parse::<u16>()
+        {
+            asked_of(tailscale, &["serve", &format!("--https={port}"), "off"])?;
+        }
+    }
+    Ok(())
 }

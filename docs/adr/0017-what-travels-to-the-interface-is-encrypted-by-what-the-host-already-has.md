@@ -17,7 +17,7 @@ How the certificate comes depends on where the Host is, in this order:
 
 ## Consequences
 
-- Turning the interface on where Tailscale is takes whoever may configure Tailscale: root, or its operator. It is therefore done when Orbite is installed or from the Host's command line, not by the Agent's account.
+- Turning the interface on where Tailscale is takes whoever may configure Tailscale: root, or its operator. The Agent's account is given exactly that as root, `orbite interface on` and `off`, and nothing else of Tailscale: what it opens is one port served to Orbite, and what it closes is only a port Tailscale itself says is served to Orbite, whatever is written in the Agent's folder.
 - Orbite depends on a behaviour of Tailscale's command line (`serve`, its status in JSON). The few calls are in one place, and when Tailscale refuses or cannot encrypt, the interface stays on the Host and the Owner is told why.
 - Other private networks (ZeroTier, NetBird, plain WireGuard) give no certificate: there the interface works without the microphone, installation and notifications, until something in front of it encrypts.
 - The public-address way will need Orbite to answer on port 443, which the Agent's account may not open on its own: its service is given that one right and no other.

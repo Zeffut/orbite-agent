@@ -87,12 +87,18 @@ fn a_tailscale_that_cannot_encrypt_is_said_so_and_asked_for_nothing() {
 }
 
 #[test]
-fn what_tailscale_served_for_orbite_is_closed_by_its_port() {
+fn only_what_tailscale_serves_to_orbite_is_closed() {
     let folder = tempfile::tempdir().unwrap();
-    let tailscale = tailscale_in(folder.path(), CONNECTED, "{}");
+    // The Owner serves two things of their own, and Orbite's on 8378.
+    let serves = r#"{"TCP":{"443":{"HTTPS":true},"8377":{"HTTPS":true},"8378":{"HTTPS":true}},
+        "Web":{"host.tail1234.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:9120"}}},
+               "host.tail1234.ts.net:8377":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:3000"}}},
+               "host.tail1234.ts.net:8378":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8377"}}}}}"#;
+    let tailscale = tailscale_in(folder.path(), CONNECTED, serves);
 
-    close_on_tailscale(&tailscale, "https://host.tail1234.ts.net:8378").unwrap();
+    close_on_tailscale(&tailscale, "127.0.0.1:8377".parse().unwrap()).unwrap();
 
+    // Only what is served to Orbite is closed, whatever was written down.
     assert_eq!(asked(folder.path()), ["serve --https=8378 off"]);
 }
 
@@ -127,6 +133,9 @@ fn turned_on_where_tailscale_is_the_interface_is_reached_encrypted_and_turned_of
     let pairing = orbite(home.path(), folder.path(), &["pair"]);
     assert!(pairing.contains("Open https://host.tail1234.ts.net:8377 on the device"), "{pairing}");
 
+    // Tailscale now says what it serves for Orbite.
+    let serves = r#"{"Web":{"host.tail1234.ts.net:8377":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8377"}}}}}"#;
+    fs::write(folder.path().join("serves.json"), serves).unwrap();
     orbite(home.path(), folder.path(), &["interface", "off"]);
     assert_eq!(
         asked(folder.path()),
