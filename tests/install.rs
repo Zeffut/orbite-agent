@@ -661,7 +661,14 @@ fn the_agents_account_may_keep_its_machine_as_root_and_do_nothing_else_as_root()
         assert!(rules.contains(allowed), "{allowed} in:\n{rules}");
     }
     // Nothing open-ended: no ALL as a command, no wildcard.
-    for line in rules.lines().filter(|line| !line.starts_with('#') && !line.is_empty()) {
+    // What root runs is looked for in the system's own folders, whoever asks.
+    let searched = "Defaults:orbite secure_path=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"";
+    assert!(rules.lines().any(|line| line == searched), "{rules}");
+    assert!(rules.lines().any(|line| line == "Defaults:orbite env_reset, !setenv"), "{rules}");
+    let allowing = |line: &&str| {
+        !line.starts_with('#') && !line.is_empty() && !line.starts_with("Defaults:orbite ")
+    };
+    for line in rules.lines().filter(allowing) {
         assert!(line.starts_with("orbite ALL=(root) NOPASSWD: /"), "{line}");
         assert!(!line.contains('*') && !line.contains("NOPASSWD: ALL"), "{line}");
     }

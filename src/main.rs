@@ -579,7 +579,9 @@ fn uninstall() -> Result<(), Failure> {
         }
     }
     let systemctl = |arguments: &[&str]| {
-        let _ = std::process::Command::new("systemctl").args(arguments).status();
+        let _ = std::process::Command::new(orbite::system_program("systemctl"))
+            .args(arguments)
+            .status();
     };
     systemctl(&["disable", "--now", "orbite"]);
     systemctl(&["disable", "--now", "orbite-update.timer"]);
@@ -613,9 +615,12 @@ fn uninstall() -> Result<(), Failure> {
         // The data stays, given to root before the account goes: left to
         // the account's number, a later account given that number would
         // read the Agent's secrets.
-        let _ = std::process::Command::new("chown").args(["-R", "root:root"]).arg(&data).status();
+        let _ = std::process::Command::new(orbite::system_program("chown"))
+            .args(["-R", "root:root"])
+            .arg(&data)
+            .status();
     }
-    let _ = std::process::Command::new("userdel").arg("orbite").status();
+    let _ = std::process::Command::new(orbite::system_program("userdel")).arg("orbite").status();
     // Some systems give every account a mailbox, which the account leaves behind.
     for mailbox in ["/var/spool/mail/orbite", "/var/mail/orbite"] {
         let _ = fs::remove_file(format!("{root}{mailbox}"));
@@ -1059,5 +1064,15 @@ fn required(name: &str) -> Result<String, Failure> {
 }
 
 fn setting(name: &str) -> Option<String> {
+    // Run as root through sudo by an account that is not root: what that
+    // account put around the command has no say in what root then does.
+    #[cfg(unix)]
+    {
+        let by_another = env::var("SUDO_UID").is_ok_and(|asked_by| asked_by.trim() != "0");
+        // SAFETY: a plain system call.
+        if by_another && unsafe { libc::geteuid() } == 0 {
+            return None;
+        }
+    }
     env::var(name).ok().filter(|value| !value.trim().is_empty())
 }

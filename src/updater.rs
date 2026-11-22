@@ -326,6 +326,30 @@ fn make_runnable(program: &Path) -> Result<(), UpdateError> {
     Ok(())
 }
 
+/// Where the system keeps its own programs: nothing an account without
+/// root's rights can write in.
+const SYSTEM_FOLDERS: [&str; 6] =
+    ["/usr/sbin", "/usr/bin", "/sbin", "/bin", "/usr/local/sbin", "/usr/local/bin"];
+
+/// The program called `name` among `folders`, when one of them has it.
+fn found_among(name: &str, folders: &[&str]) -> Option<std::path::PathBuf> {
+    folders.iter().map(|folder| std::path::Path::new(folder).join(name)).find(|file| file.is_file())
+}
+
+/// A program of the system, to run. As root it is taken from where the
+/// system keeps its own and nowhere else: whoever had Orbite run as root
+/// has no say, through the folders they search, in what root then runs.
+pub fn system_program(name: &str) -> std::path::PathBuf {
+    // SAFETY: a plain system call.
+    #[cfg(unix)]
+    if unsafe { libc::geteuid() } == 0 {
+        // Found nowhere there, it is not looked for anywhere else.
+        return found_among(name, &SYSTEM_FOLDERS)
+            .unwrap_or_else(|| std::path::Path::new(SYSTEM_FOLDERS[1]).join(name));
+    }
+    name.into()
+}
+
 /// The systemd service of an installed Orbite.
 pub struct Systemd;
 
@@ -333,8 +357,12 @@ impl Service for Systemd {
     fn restart(&self) -> std::io::Result<()> {
         // A program that kept failing may have used up the starts systemd
         // allows in a row: the count begins again with this one.
-        let _ = std::process::Command::new("systemctl").args(["reset-failed", "orbite"]).status();
-        let done = std::process::Command::new("systemctl").args(["restart", "orbite"]).status()?;
+        let _ = std::process::Command::new(system_program("systemctl"))
+            .args(["reset-failed", "orbite"])
+            .status();
+        let done = std::process::Command::new(system_program("systemctl"))
+            .args(["restart", "orbite"])
+            .status()?;
         if done.success() {
             Ok(())
         } else {
@@ -343,9 +371,26 @@ impl Service for Systemd {
     }
 
     fn is_running(&self) -> bool {
-        std::process::Command::new("systemctl")
+        std::process::Command::new(system_program("systemctl"))
             .args(["is-active", "--quiet", "orbite"])
             .status()
             .is_ok_and(|status| status.success())
+    }
+}
+
+#[cfg(test)]
+mod system_programs {
+    use super::found_among;
+
+    #[test]
+    fn a_program_is_taken_from_the_folders_named_and_from_no_other() {
+        let system = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::write(system.path().join("systemctl"), "").unwrap();
+        std::fs::write(elsewhere.path().join("tailscale"), "").unwrap();
+        let folders = [system.path().to_str().unwrap()];
+
+        assert_eq!(found_among("systemctl", &folders), Some(system.path().join("systemctl")));
+        assert_eq!(found_among("tailscale", &folders), None);
     }
 }

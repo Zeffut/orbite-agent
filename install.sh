@@ -338,6 +338,10 @@ fi
 if command -v sudo >/dev/null 2>&1 && [ -d "$ROOT/etc/sudoers.d" ]; then
     cat >"$WORK/sudoers" <<RULES
 # Written by Orbite's installer: what the agent's account may do as root.
+# What root then runs is looked for where the system keeps its own programs.
+Defaults:orbite secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Nothing the account puts around a command reaches root.
+Defaults:orbite env_reset, !setenv
 orbite ALL=(root) NOPASSWD: $PROGRAM update, $PROGRAM update on, $PROGRAM update off
 orbite ALL=(root) NOPASSWD: /usr/bin/systemctl restart orbite, /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff
 RULES
