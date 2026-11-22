@@ -350,6 +350,20 @@ pub fn system_program(name: &str) -> std::path::PathBuf {
     name.into()
 }
 
+/// True when `program` is what sudo itself was asked to run, by an account
+/// that is not root: `asked_by` and `ran` are what sudo says of that
+/// (`SUDO_UID`, `SUDO_COMMAND`). A root shell opened with sudo, in which the
+/// program is then run, is root's own doing and is not this.
+pub fn run_by_sudo_for_another(
+    asked_by: Option<&str>,
+    ran: Option<&str>,
+    program: &std::path::Path,
+) -> bool {
+    let another = asked_by.is_some_and(|asked_by| asked_by.trim() != "0");
+    let first = ran.and_then(|ran| ran.split_whitespace().next()).map(std::path::Path::new);
+    another && first.is_some_and(|first| first.file_name() == program.file_name())
+}
+
 /// The systemd service of an installed Orbite.
 pub struct Systemd;
 
@@ -380,7 +394,22 @@ impl Service for Systemd {
 
 #[cfg(test)]
 mod system_programs {
-    use super::found_among;
+    use super::{found_among, run_by_sudo_for_another};
+
+    #[test]
+    fn only_a_program_sudo_itself_ran_for_another_account_counts_as_such() {
+        let program = std::path::Path::new("/usr/local/bin/orbite");
+        let by = |asked_by, ran| run_by_sudo_for_another(asked_by, ran, program);
+
+        // The agent's account, through the rule that lets it.
+        assert!(by(Some("998"), Some("/usr/local/bin/orbite update")));
+        // A root shell opened with sudo, where the Owner then runs it.
+        assert!(!by(Some("1000"), Some("/usr/bin/sh release/try-install.sh")));
+        assert!(!by(Some("1000"), Some("/bin/bash")));
+        // Root's own sudo, and no sudo at all.
+        assert!(!by(Some("0"), Some("/usr/local/bin/orbite update")));
+        assert!(!by(None, None));
+    }
 
     #[test]
     fn a_program_is_taken_from_the_folders_named_and_from_no_other() {
