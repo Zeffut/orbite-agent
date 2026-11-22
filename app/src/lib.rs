@@ -120,6 +120,7 @@ async fn answer(app: AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
 fn come_forward(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
+        #[cfg(desktop)]
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
