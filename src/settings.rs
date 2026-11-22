@@ -8,8 +8,9 @@ use chrono::NaiveTime;
 use crate::{Config, Store};
 
 /// The settings, in the order they are shown.
-pub const SETTINGS: [&str; 10] = [
+pub const SETTINGS: [&str; 11] = [
     "permission",
+    "computer",
     "quiet",
     "wakeups",
     "secrets",
@@ -65,6 +66,10 @@ impl<'a> Settings<'a> {
                     minutes => minutes.to_string(),
                 }
             }
+            // Which Computer the Agent uses: this machine's own desktop
+            // where one is offered, or always one of its own.
+            "computer" if self.kept("computer_own")?.is_some() => "own".into(),
+            "computer" => "this".into(),
             "secrets" if self.kept("secrets_strict")?.is_some() => "strict".into(),
             "secrets" => on_or_off(self.kept("secrets_in_conversation")?.is_some()).into(),
             "updates" => on_or_off(self.config().automatic_updates != Some(false)).into(),
@@ -94,6 +99,7 @@ impl<'a> Settings<'a> {
             // strict: what speaks of a password is held back from the AI
             // provider until the Owner says what it is.
             "secrets" => &["off", "strict", "on"],
+            "computer" => &["this", "own"],
             "updates" => &["off", "on"],
             "language" => &["en", "fr"],
             "light" => &["off"],
@@ -143,6 +149,10 @@ impl<'a> Settings<'a> {
                     Some(minutes) => keep("wake_up_minutes", Some(&minutes.to_string())),
                     None => Err("wakeups is off, or a number of minutes, such as 240.".into()),
                 }
+            }
+            "computer" => {
+                one_of(Self::choices(key))?;
+                keep("computer_own", (value == "own").then_some("on"))
             }
             "secrets" => {
                 one_of(Self::choices(key))?;

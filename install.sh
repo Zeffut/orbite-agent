@@ -359,6 +359,23 @@ else
     say "when you ask it to. Install sudo and run this installer again to let it."
 fi
 
+# This machine's own desktop is the agent's computer where there is one: a
+# helper offers it from the graphical session of whoever installed Orbite,
+# and of nobody else. Where no desktop is ever opened, it never runs.
+OWNER_ACCOUNT="${SUDO_USER:-}"
+if [ -n "$OWNER_ACCOUNT" ] && [ "$OWNER_ACCOUNT" != root ] && [ -d "$ROOT/etc/xdg/autostart" ]; then
+    cat >"$ROOT/etc/xdg/autostart/orbite-desk.desktop" <<DESK
+[Desktop Entry]
+Type=Application
+Name=Orbite
+Comment=Lends this desktop to your agent
+Exec=$PROGRAM desk
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+DESK
+    env ORBITE_HOME="$HOME_DIR" "$PROGRAM" desk allow "$OWNER_ACCOUNT" >/dev/null 2>&1 || true
+fi
+
 # Orbite keeps itself up to date: once a day it installs the latest release
 # signed by its key, and goes back to the one before if that does not start.
 # The Owner turns it off with: orbite update off

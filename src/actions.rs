@@ -414,21 +414,12 @@ impl Host {
         };
         let (done, patience) = match gesture {
             Gesture::Look => (Ok("This is the screen.".to_owned()), Duration::from_secs(2)),
-            Gesture::Open { url, .. } => (
-                desk.with(|computer| computer.open(&url)).map(|()| format!("Opened {url}.")),
-                Duration::from_secs(25),
-            ),
+            Gesture::Open { url, .. } => {
+                (desk.open(&url).map(|()| format!("Opened {url}.")), Duration::from_secs(25))
+            }
             Gesture::Click { x, y, double } => (
-                desk.with(|computer| {
-                    // Aimed at on the picture the model was shown.
-                    let (x, y) = crate::computer::on_the_screen(x, y);
-                    if double {
-                        computer.screen().double_click(x, y)
-                    } else {
-                        computer.screen().click(x, y)
-                    }
-                })
-                .map(|()| format!("Clicked at {x}, {y}.")),
+                // Aimed at on the picture the model was shown.
+                desk.click(x, y, double).map(|()| format!("Clicked at {x}, {y}.")),
                 Duration::from_secs(6),
             ),
             Gesture::Type { text } => {
@@ -444,9 +435,7 @@ impl Host {
                     })
                     .collect();
                 let typed = match crate::extensions::filled(&text, &lent) {
-                    Ok(typed) => desk
-                        .with(|computer| computer.screen().type_text(&typed))
-                        .map(|()| "Typed.".to_owned()),
+                    Ok(typed) => desk.type_text(&typed).map(|()| "Typed.".to_owned()),
                     Err(_) => Err(std::io::Error::other(
                         "a secret named there has not been entered: your Owner gives one by sending \
                          /secret NAME in the conversation, which you never see",
@@ -454,16 +443,12 @@ impl Host {
                 };
                 (typed, Duration::from_secs(4))
             }
-            Gesture::Key { keys } => (
-                desk.with(|computer| computer.screen().key(&keys))
-                    .map(|()| format!("Pressed {keys}.")),
-                Duration::from_secs(6),
-            ),
-            Gesture::Scroll { notches } => (
-                desk.with(|computer| computer.screen().scroll(notches))
-                    .map(|()| "Scrolled.".to_owned()),
-                Duration::from_secs(3),
-            ),
+            Gesture::Key { keys } => {
+                (desk.key(&keys).map(|()| format!("Pressed {keys}.")), Duration::from_secs(6))
+            }
+            Gesture::Scroll { notches } => {
+                (desk.scroll(notches).map(|()| "Scrolled.".to_owned()), Duration::from_secs(3))
+            }
         };
         let done = match done {
             Ok(done) => done,

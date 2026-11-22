@@ -129,7 +129,7 @@ impl Screen {
 
     /// What the screen shows now: its size, then red, green and blue for
     /// each point, row after row.
-    fn points(&self) -> io::Result<(u32, u32, Vec<u8>)> {
+    pub(crate) fn points(&self) -> io::Result<(u32, u32, Vec<u8>)> {
         let (connection, number) = self.connect()?;
         let screen = &connection.setup().roots[number];
         let (width, height) = (screen.width_in_pixels, screen.height_in_pixels);
@@ -630,6 +630,27 @@ pub(crate) struct Desk {
     folder: PathBuf,
     computer: std::sync::Mutex<Option<Computer>>,
     taken: std::sync::atomic::AtomicU32,
+    /// This computer's own desktop, when the account that opened it offers
+    /// it: used rather than a Computer of the Agent's own.
+    lent: crate::desk::Lent,
+    /// True when the Owner said to keep to a Computer of the Agent's own.
+    keeps_to_its_own: std::sync::atomic::AtomicBool,
+}
+
+impl Drop for Desk {
+    fn drop(&mut self) {
+        // The desktop is given back: its helper has nothing more to wait for.
+        *self.lent.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+}
+
+/// Which Computer the Agent is on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Which {
+    /// The machine's own desktop, opened by this account.
+    This(String),
+    /// A screen and a browser of the Agent's own.
+    ItsOwn,
 }
 
 /// The size of the Computer's screen.
@@ -642,13 +663,26 @@ const CURSOR_SIZED: usize = 600;
 /// The size of the picture of the screen a model is shown: two thirds of it.
 pub(crate) const SHOWN: (u16, u16) = (853, 533);
 
-/// The point of the screen that a point of the picture shown to a model stands for.
-pub(crate) fn on_the_screen(x: u16, y: u16) -> (u16, u16) {
+/// The size of the picture a model is shown of a screen of `whole` size:
+/// as wide as [`SHOWN`], and as high as keeps the screen's shape.
+pub(crate) fn shown_size(whole: (u16, u16)) -> (u16, u16) {
+    if whole == SCREEN || whole.0 == 0 {
+        return SHOWN;
+    }
+    let high =
+        (u32::from(SHOWN.0) * u32::from(whole.1) + u32::from(whole.0) / 2) / u32::from(whole.0);
+    (SHOWN.0, high.clamp(1, 2000) as u16)
+}
+
+/// The point of a screen of `whole` size that a point of the picture shown
+/// to a model stands for.
+pub(crate) fn on_the_screen(x: u16, y: u16, whole: (u16, u16)) -> (u16, u16) {
+    let shown = shown_size(whole);
     let scaled = |at: u16, shown: u16, whole: u16| {
         ((u32::from(at) * u32::from(whole) + u32::from(shown) / 2) / u32::from(shown))
-            .min(u32::from(whole) - 1) as u16
+            .min(u32::from(whole).saturating_sub(1)) as u16
     };
-    (scaled(x, SHOWN.0, SCREEN.0), scaled(y, SHOWN.1, SCREEN.1))
+    (scaled(x, shown.0, whole.0), scaled(y, shown.1, whole.1))
 }
 
 /// Where the smaller picture a model is shown is kept, beside the whole one.
@@ -665,6 +699,115 @@ impl Desk {
             folder,
             computer: std::sync::Mutex::new(None),
             taken: std::sync::atomic::AtomicU32::new(0),
+            lent: std::sync::Arc::default(),
+            keeps_to_its_own: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Where a desktop offered to the Agent is to be put.
+    pub(crate) fn lent(&self) -> crate::desk::Lent {
+        self.lent.clone()
+    }
+
+    /// Keeps to a Computer of the Agent's own, or not, as the Owner says.
+    pub(crate) fn keep_to_its_own(&self, keep: bool) {
+        self.keeps_to_its_own.store(keep, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Does `something` on this computer's desktop when one is offered and
+    /// wanted; `None` otherwise, and once the desktop stopped answering:
+    /// the session ended, and the Agent is back on a Computer of its own.
+    fn on_this_computer<T>(
+        &self,
+        something: impl FnOnce(&mut crate::desk::Offered) -> io::Result<T>,
+    ) -> Option<io::Result<T>> {
+        if self.keeps_to_its_own.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        let mut lent = self.lent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let done = something(lent.as_mut()?);
+        // What the desktop refused is an answer; a broken line is its end.
+        let gone = done.as_ref().is_err_and(|error| {
+            matches!(
+                error.kind(),
+                io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::UnexpectedEof
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::WouldBlock
+                    | io::ErrorKind::TimedOut
+            )
+        });
+        if gone {
+            *lent = None;
+            return Some(Err(io::Error::other(
+                "this computer's desktop is no longer offered: its session ended. Your next \
+                 action is on a Computer of your own.",
+            )));
+        }
+        Some(done)
+    }
+
+    /// Which Computer the Agent's next gesture is made on.
+    pub(crate) fn which(&self) -> Which {
+        if self.keeps_to_its_own.load(std::sync::atomic::Ordering::Relaxed) {
+            return Which::ItsOwn;
+        }
+        let lent = self.lent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        lent.as_ref().map_or(Which::ItsOwn, |offered| Which::This(offered.account.clone()))
+    }
+
+    /// The size of the screen gestures are made on.
+    pub(crate) fn size(&self) -> (u16, u16) {
+        if self.which() == Which::ItsOwn {
+            return SCREEN;
+        }
+        let lent = self.lent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        lent.as_ref().map_or(SCREEN, |offered| offered.size)
+    }
+
+    /// What the screen shows now: its size, then its points.
+    fn points(&self) -> io::Result<(u32, u32, Vec<u8>)> {
+        match self.on_this_computer(|desktop| desktop.points()) {
+            Some(seen) => seen,
+            None => self.with(|computer| computer.screen().points()),
+        }
+    }
+
+    pub(crate) fn open(&self, address: &str) -> io::Result<()> {
+        match self.on_this_computer(|desktop| desktop.open(address)) {
+            Some(done) => done,
+            None => self.with(|computer| computer.open(address)),
+        }
+    }
+
+    /// Clicks at a point of the picture the model was shown.
+    pub(crate) fn click(&self, x: u16, y: u16, twice: bool) -> io::Result<()> {
+        let (x, y) = on_the_screen(x, y, self.size());
+        match self.on_this_computer(|desktop| desktop.click(x, y, twice)) {
+            Some(done) => done,
+            None if twice => self.with(|computer| computer.screen().double_click(x, y)),
+            None => self.with(|computer| computer.screen().click(x, y)),
+        }
+    }
+
+    pub(crate) fn type_text(&self, text: &str) -> io::Result<()> {
+        match self.on_this_computer(|desktop| desktop.type_text(text)) {
+            Some(done) => done,
+            None => self.with(|computer| computer.screen().type_text(text)),
+        }
+    }
+
+    pub(crate) fn key(&self, keys: &str) -> io::Result<()> {
+        match self.on_this_computer(|desktop| desktop.key(keys)) {
+            Some(done) => done,
+            None => self.with(|computer| computer.screen().key(keys)),
+        }
+    }
+
+    pub(crate) fn scroll(&self, notches: i32) -> io::Result<()> {
+        match self.on_this_computer(|desktop| desktop.scroll(notches)) {
+            Some(done) => done,
+            None => self.with(|computer| computer.screen().scroll(notches)),
         }
     }
 
@@ -691,11 +834,12 @@ impl Desk {
     pub(crate) fn stop(&self) {
         let mut computer = self.computer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         drop(computer.take());
+        *self.lent.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     /// What the screen shows now, to tell later whether it changed.
     pub(crate) fn glance(&self) -> io::Result<Vec<u8>> {
-        self.with(|computer| computer.screen().points()).map(|(_, _, points)| points)
+        self.points().map(|(_, _, points)| points)
     }
 
     /// A picture of the screen once it has stopped changing for `calm`
@@ -715,11 +859,11 @@ impl Desk {
                 || one.iter().zip(other).filter(|(new, old)| new != old).count() > CURSOR_SIZED
         };
         let until = Instant::now() + patience;
-        let mut seen = self.with(|computer| computer.screen().points())?;
+        let mut seen = self.points()?;
         let mut still = 0;
         while still < calm && Instant::now() < until {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            let now = self.with(|computer| computer.screen().points())?;
+            let now = self.points()?;
             let moved = differing(&now.2, &seen.2);
             let unchanged_since_before = before.is_some_and(|before| !differing(&now.2, before));
             // All black is a browser between two paintings, not a page.
@@ -729,8 +873,9 @@ impl Desk {
         }
         // Whole for the Owner, and smaller for the model: a picture costs a
         // model about as many tokens as it has points.
-        let small = crate::png::reduced(seen.0, seen.1, &seen.2, SHOWN.0.into(), SHOWN.1.into());
-        let small = crate::png::encode(SHOWN.0.into(), SHOWN.1.into(), &small);
+        let shown = shown_size((seen.0 as u16, seen.1 as u16));
+        let small = crate::png::reduced(seen.0, seen.1, &seen.2, shown.0.into(), shown.1.into());
+        let small = crate::png::encode(shown.0.into(), shown.1.into(), &small);
         let seen = crate::png::encode(seen.0, seen.1, &seen.2);
         let number = self.taken.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let pictures = self.folder.join("pictures");

@@ -58,6 +58,8 @@ async fn main() -> ExitCode {
     let changes_the_machine = match command.as_str() {
         "update" => env::args().nth(2).is_none(),
         "uninstall" | "export" | "restore" | "version" | "providers" => true,
+        // Offered from the session of whoever opened the desktop, as them.
+        "desk" => env::args().nth(2).is_none(),
         _ => false,
     };
     // What Tailscale is asked takes whoever ran this, root or its operator:
@@ -88,6 +90,7 @@ async fn main() -> ExitCode {
         Some("interface") => interface(reach),
         Some("pair") => pair(),
         Some("devices") => devices(),
+        Some("desk") => desk(),
         Some("transcription") => {
             let asked: Vec<String> = env::args().skip(2).collect();
             let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
@@ -427,6 +430,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .hearing_notices_in(home.join("notices"))
         .extending_in(home.join("extensions"))
         .switching_the_interface_with(switch_the_interface)
+        .lent_this_computer_by(config.desk_account.unwrap_or(u32::MAX), orbite::DESK_SOCKET)
         .connecting_servers_in(&home)
         .configured_in(&home)
         .keeping_secrets_in(&home)
@@ -537,6 +541,88 @@ fn pair() -> Result<(), Failure> {
         "Open {at} on the device, and type this code there:\n\n    {code}\n\nIt works once, for ten minutes."
     );
     Ok(())
+}
+
+/// Offers this machine's desktop to the Agent, from the graphical session of
+/// whoever opened it; or, as root when Orbite is installed, writes down
+/// whose desktop may be offered (`desk allow ACCOUNT`).
+fn desk() -> Result<(), Failure> {
+    use std::os::unix::fs::MetadataExt;
+    let home = home()?;
+    let asked: Vec<String> = env::args().skip(2).collect();
+    if let ["allow", account] = asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+        let number = account_numbered(account)
+            .ok_or_else(|| format!("There is no account called {account} on this machine."))?;
+        let mut config = Config::load(&home)?;
+        config.desk_account = Some(number);
+        config.save(&home)?;
+        println!(
+            "The desktop of {account} may be offered to the agent, once they run: orbite desk"
+        );
+        return Ok(());
+    }
+    if !asked.is_empty() {
+        return Err("Usage: orbite desk | sudo orbite desk allow ACCOUNT".into());
+    }
+    let agent = fs::metadata(&home)
+        .map(|folder| folder.uid())
+        .map_err(|_| "Orbite is not installed on this machine.")?;
+    let account = required("USER").or_else(|_| required("LOGNAME"))?;
+    let display = setting_of_the_session("DISPLAY");
+    let wayland = setting_of_the_session("WAYLAND_DISPLAY").is_some()
+        || setting_of_the_session("XDG_SESSION_TYPE").as_deref() == Some("wayland");
+    let session = match (&display, wayland) {
+        (_, true) => "wayland",
+        (Some(_), false) => "x11",
+        (None, false) => {
+            return Err(
+                "This is not a graphical session: there is no desktop here to offer.".into()
+            );
+        }
+    };
+    let screen = orbite::Screen::at(display.unwrap_or_default());
+    // The Agent's service may be starting, or starting again: it is waited for.
+    loop {
+        match orbite::offer_this_computer(orbite::DESK_SOCKET, agent, &account, session, &screen) {
+            Ok(()) | Err(orbite::NotOffered::NobodyListening) => {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+            }
+            Err(orbite::NotOffered::NotOrbite) => {
+                return Err(
+                    "What listens for desktops on this machine is not Orbite's own service.".into(),
+                );
+            }
+            Err(orbite::NotOffered::NotTheOwner) => {
+                return Err(format!(
+                    "Orbite takes the desktop of the account it was installed by, which is not \
+                     {account}. To have it take yours: sudo orbite desk allow {account}"
+                )
+                .into());
+            }
+            Err(orbite::NotOffered::Wayland) => {
+                return Err(
+                    "This session is a Wayland one, whose desktop Orbite cannot be lent yet: \
+                            the agent keeps a computer of its own. Sessions on Xorg can be lent."
+                        .into(),
+                );
+            }
+            Err(orbite::NotOffered::Other(why)) => return Err(why.into()),
+        }
+    }
+}
+
+/// A setting of the graphical session this was started in.
+fn setting_of_the_session(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
+}
+
+/// The number of the account called `name` on this machine.
+fn account_numbered(name: &str) -> Option<u32> {
+    let accounts = fs::read_to_string("/etc/passwd").ok()?;
+    accounts.lines().find_map(|line| {
+        let mut parts = line.split(':');
+        (parts.next()? == name).then(|| parts.nth(1)?.parse().ok()).flatten()
+    })
 }
 
 /// Lists the devices let into the web interface, or turns one away.
@@ -835,6 +921,7 @@ fn uninstall() -> Result<(), Failure> {
         "/etc/systemd/system/orbite-update.service",
         "/etc/systemd/system/orbite-update.timer",
         "/etc/sudoers.d/orbite",
+        "/etc/xdg/autostart/orbite-desk.desktop",
         "/usr/local/bin/orbite.previous",
         "/usr/local/bin/orbite.refused",
         "/usr/local/bin/orbite.updating",

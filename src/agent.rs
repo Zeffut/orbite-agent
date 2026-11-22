@@ -345,6 +345,17 @@ impl<P: Provider + 'static> Agent<P> {
 
     /// Says that Orbite is started again whenever it ends, as its service
     /// does: the Agent then ends by itself to take a setting read at start.
+    /// Takes the desktop of this machine when the account numbered
+    /// `account` offers it, on the socket called `name`.
+    pub fn lent_this_computer_by(self, account: u32, name: &str) -> Self {
+        if let Some(desk) = &self.host.computer {
+            // Another Orbite of this machine listening already is no reason
+            // not to start: this one keeps a Computer of its own.
+            let _ = crate::desk::listen(name, account, desk.lent());
+        }
+        self
+    }
+
     /// Lets the Owner have the web interface turned on and off from the
     /// Conversation, with `switch`.
     pub fn switching_the_interface_with(mut self, switch: fn(bool) -> Result<(), String>) -> Self {
@@ -1299,6 +1310,17 @@ impl<P: Provider + 'static> Agent<P> {
                 .replace("the Agent", "you")
                 .replace(" it always asks", " you always ask")
         ));
+        if let Some(desk) = &self.host.computer {
+            // As the Owner set it, read each time: it may have just changed.
+            desk.keep_to_its_own(matches!(self.store.setting("computer_own"), Ok(Some(_))));
+            if let crate::computer::Which::This(account) = desk.which() {
+                instructions.push_str(&format!(
+                    "\n\nYour Computer is this machine's own desktop, opened by {account}: they \
+                     see what you do there, and their accounts are signed in. Leave their \
+                     windows as you found them."
+                ));
+            }
+        }
         if let Some(memory) = &self.host.memory {
             instructions.push_str(&format!("\n\n{MEMORY_INSTRUCTIONS}\n"));
             let entries = memory.entries();
@@ -2344,6 +2366,7 @@ impl<P: Provider + 'static> Agent<P> {
                 format!("🪶 {}", say("Model for light work", "Modèle pour le travail léger"))
             }
             "voice" => format!("🎙 {}", say("Voice messages", "Messages vocaux")),
+            "computer" => format!("🖥 {}", say("Computer", "Ordinateur")),
             _ => format!("🌐 {}", say("Language", "Langue")),
         };
         // A value as an Owner reads it; what is written to set it stays as it is.
@@ -2353,6 +2376,8 @@ impl<P: Provider + 'static> Agent<P> {
             "careful" => say("careful", "prudent"),
             "balanced" => say("balanced", "équilibré"),
             "free" => say("free", "libre"),
+            "this" => say("this computer", "cet ordinateur"),
+            "own" => say("one of its own", "le sien, à part"),
             "en" => "English".to_owned(),
             "fr" => "Français".to_owned(),
             other => other.to_owned(),
