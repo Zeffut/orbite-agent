@@ -2,22 +2,36 @@
 //! app holds nothing of the Conversation itself. It remembers where the
 //! agent is reached, checks that it answers, and gives way to its page.
 //! The few pages of its own are written here, in Rust, and hold no script.
+//! Around that page it does what a browser tab cannot: it tells the Owner
+//! of something new when they are elsewhere, keeps other sites out of the
+//! window, and stays at hand beside the clock.
 
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use orbite_app_core::{
-    Asked, Language, away_page, leaving_page, link_page, reached, reaching_page,
+    Asked, Language, Unseen, away_page, leaving_page, link_page, reached, reaching_page,
+    something_new, stays_in_the_app,
 };
 use tauri::http::{Request, Response};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 
 /// Where the app's own pages are, as each system has a window ask for them.
 #[cfg(any(windows, target_os = "android"))]
 const OWN_PAGES: &str = "http://orbite.localhost/";
 #[cfg(not(any(windows, target_os = "android")))]
 const OWN_PAGES: &str = "orbite://localhost/";
+
+/// How many things the Owner had not seen when the app last told them.
+struct Told(AtomicU32);
+
+fn language() -> Language {
+    Language::of(sys_locale::get_locale().as_deref())
+}
 
 /// The file the app keeps the agent's address in, and nothing else.
 fn kept_in(app: &AppHandle) -> Option<PathBuf> {
@@ -59,7 +73,7 @@ async fn answers(address: String) -> bool {
 
 /// The page of the app's that answers what one of its pages asked for.
 async fn shown(app: &AppHandle, path: &str, query: &str) -> String {
-    let language = Language::of(sys_locale::get_locale().as_deref());
+    let language = language();
     match Asked::of(path, query) {
         Asked::Link => link_page(language, None),
         Asked::Open(pasted) => match reached(&pasted) {
@@ -102,9 +116,82 @@ async fn answer(app: AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> 
         .expect("a page of the app's own")
 }
 
+/// Shows the window again, in front.
+fn come_forward(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Tells the Owner of what the agent's page says they have not seen, when
+/// they are not looking at the window, and once for each new thing.
+fn tell(app: &AppHandle, title: &str) {
+    let unseen = Unseen::of(title);
+    let told = app.state::<Told>();
+    let before = told.0.swap(unseen.count, Ordering::SeqCst);
+    let Some(window) = app.get_webview_window("main") else { return };
+    // The window is named after the agent, without the count the page adds.
+    if !unseen.agent.is_empty() {
+        let _ = window.set_title(&unseen.agent);
+    }
+    let looking = window.is_focused().unwrap_or(false) && window.is_visible().unwrap_or(false);
+    if unseen.count > before && !looking {
+        let body = match unseen.latest.is_empty() {
+            true => something_new(language()).to_owned(),
+            false => unseen.latest.clone(),
+        };
+        let _ = app.notification().builder().title(&unseen.agent).body(body).show();
+    }
+}
+
+/// Beside the clock: the app stays at hand once its window is closed.
+#[cfg(desktop)]
+fn stay_at_hand(app: &AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::TrayIconBuilder;
+    let [open, other, quit] = orbite_app_core::menu(language());
+    let offered = Menu::with_items(
+        app,
+        &[
+            &MenuItem::with_id(app, "open", open, true, None::<&str>)?,
+            &MenuItem::with_id(app, "other", other, true, None::<&str>)?,
+            &MenuItem::with_id(app, "quit", quit, true, None::<&str>)?,
+        ],
+    )?;
+    let mut tray = TrayIconBuilder::with_id("orbite").tooltip("Orbite").menu(&offered);
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.on_menu_event(|app, chosen| match chosen.id().as_ref() {
+        "open" => come_forward(app),
+        "other" => {
+            if let (Some(window), Ok(link)) =
+                (app.get_webview_window("main"), format!("{OWN_PAGES}link").parse())
+            {
+                let _ = window.navigate(link);
+            }
+            come_forward(app);
+        }
+        "quit" => app.exit(0),
+        _ => {}
+    })
+    .build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init());
+    // One Orbite at a time: opened again, the one that runs comes forward.
+    #[cfg(desktop)]
+    let app = app
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| come_forward(app)))
+        .plugin(tauri_plugin_window_state::Builder::default().build());
+    app.manage(Told(AtomicU32::new(0)))
         .register_asynchronous_uri_scheme_protocol("orbite", |context, request, responder| {
             let app = context.app_handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -113,11 +200,52 @@ pub fn run() {
         })
         .setup(|app| {
             let pages = WebviewUrl::CustomProtocol(OWN_PAGES.parse()?);
-            let window = WebviewWindowBuilder::new(app, "main", pages);
+            let (leaving, telling) = (app.handle().clone(), app.handle().clone());
+            let window = WebviewWindowBuilder::new(app, "main", pages)
+                // The window shows the app's pages and the agent's: any
+                // other site opens in the Owner's browser.
+                .on_navigation(move |to| {
+                    if stays_in_the_app(to.as_str(), kept(&leaving).as_deref()) {
+                        return true;
+                    }
+                    if matches!(to.scheme(), "https" | "http") {
+                        let _ = leaving.opener().open_url(to.as_str(), None::<&str>);
+                    }
+                    false
+                })
+                .on_document_title_changed(move |_, title| tell(&telling, &title));
             #[cfg(desktop)]
-            let window =
-                window.title("Orbite").inner_size(460.0, 780.0).min_inner_size(340.0, 480.0);
-            window.build()?;
+            let window = {
+                let opening = app.handle().clone();
+                window
+                    .title("Orbite")
+                    .inner_size(460.0, 780.0)
+                    .min_inner_size(340.0, 480.0)
+                    // A link the agent's page opens apart is another site's.
+                    .on_new_window(move |to, _| {
+                        if matches!(to.scheme(), "https" | "http") {
+                            let _ = opening.opener().open_url(to.as_str(), None::<&str>);
+                        }
+                        tauri::webview::NewWindowResponse::Deny
+                    })
+            };
+            let window = window.build()?;
+            #[cfg(desktop)]
+            {
+                // Where the system keeps apps beside the clock, closing the
+                // window puts Orbite there, where it still tells of what is new.
+                let at_hand = stay_at_hand(app.handle()).is_ok();
+                if at_hand && cfg!(any(windows, target_os = "macos")) {
+                    let closing = window.clone();
+                    window.on_window_event(move |happened| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = happened {
+                            api.prevent_close();
+                            let _ = closing.hide();
+                        }
+                    });
+                }
+            }
+            let _ = window;
             Ok(())
         })
         .run(tauri::generate_context!())

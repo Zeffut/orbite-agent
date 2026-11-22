@@ -89,6 +89,61 @@ pub fn host_of(address: &str) -> String {
         .unwrap_or_default()
 }
 
+/// What the agent's page says, through its title, of what the Owner has not
+/// seen yet: how many things, the agent's name, and the latest of them in a
+/// few words. The page writes `(2) Atlas — Done, the file is ready`; with
+/// nothing unseen its title is the agent's name alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unseen {
+    pub count: u32,
+    pub agent: String,
+    pub latest: String,
+}
+
+impl Unseen {
+    pub fn of(title: &str) -> Self {
+        let counted = title.strip_prefix('(').and_then(|rest| {
+            let (count, rest) = rest.split_once(") ")?;
+            Some((count.parse::<u32>().ok()?, rest))
+        });
+        let (count, rest) = counted.unwrap_or((0, title));
+        let (agent, latest) = rest.split_once(" — ").unwrap_or((rest, ""));
+        Self { count, agent: agent.trim().to_owned(), latest: latest.trim().to_owned() }
+    }
+}
+
+/// True when `to` is a place the app's window may show: a page of the
+/// app's own, or one of the agent at `agent`. Anything else is another
+/// site, which opens in the Owner's browser and never in the app.
+pub fn stays_in_the_app(to: &str, agent: Option<&str>) -> bool {
+    let Ok(to) = url::Url::parse(to) else { return false };
+    if to.scheme() == "orbite"
+        || to.host_str() == Some("orbite.localhost")
+        || to.scheme() == "about"
+    {
+        return true;
+    }
+    let Some(agent) = agent.and_then(|agent| url::Url::parse(agent).ok()) else { return false };
+    to.scheme() == agent.scheme()
+        && to.host_str() == agent.host_str()
+        && to.port_or_known_default() == agent.port_or_known_default()
+}
+
+/// What the app's menu beside the clock offers, in order: open the window,
+/// point the app at another agent, quit.
+pub fn menu(language: Language) -> [&'static str; 3] {
+    [
+        language.say("Open Orbite", "Ouvrir Orbite"),
+        language.say("Use another agent…", "Utiliser un autre agent…"),
+        language.say("Quit", "Quitter"),
+    ]
+}
+
+/// What a notification says when the page gave no words for it.
+pub fn something_new(language: Language) -> &'static str {
+    language.say("Something new for you", "Du nouveau pour toi")
+}
+
 /// What a page of the app's asked for, by its path and what follows `?`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Asked {
@@ -295,6 +350,35 @@ mod tests {
     fn what_follows_the_address_is_a_code_only_when_it_looks_like_one() {
         let read = reached("https://host.example/#<script>").unwrap();
         assert_eq!(read, Reached { address: "https://host.example".into(), code: None });
+    }
+
+    #[test]
+    fn what_is_unseen_is_read_from_the_title_of_the_agents_page() {
+        assert_eq!(
+            Unseen::of("(2) Atlas — Done, the file is ready"),
+            Unseen { count: 2, agent: "Atlas".into(), latest: "Done, the file is ready".into() }
+        );
+        assert_eq!(
+            Unseen::of("Atlas"),
+            Unseen { count: 0, agent: "Atlas".into(), latest: String::new() }
+        );
+        // A name that happens to hold brackets or a dash is still a name.
+        assert_eq!(Unseen::of("(x) Bot").count, 0);
+        assert_eq!(Unseen::of("(3) My agent").agent, "My agent");
+    }
+
+    #[test]
+    fn the_window_shows_the_apps_pages_and_the_agents_and_nothing_else() {
+        let agent = Some("https://host.tail1234.ts.net:8377");
+        assert!(stays_in_the_app("orbite://localhost/go", agent));
+        assert!(stays_in_the_app("http://orbite.localhost/link", None));
+        assert!(stays_in_the_app("https://host.tail1234.ts.net:8377/api/file?id=x", agent));
+        // Another site, another port of the same machine, or the same name in the open.
+        assert!(!stays_in_the_app("https://example.com/", agent));
+        assert!(!stays_in_the_app("https://host.tail1234.ts.net/", agent));
+        assert!(!stays_in_the_app("http://host.tail1234.ts.net:8377/", agent));
+        assert!(!stays_in_the_app("https://host.tail1234.ts.net.evil.example:8377/", agent));
+        assert!(!stays_in_the_app("https://example.com/", None));
     }
 
     #[test]
