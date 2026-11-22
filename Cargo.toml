@@ -1,12 +1,13 @@
 [package]
 name = "orbite"
-version = "0.5.17"
+version = "0.6.0"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "An open-source, self-hosted personal AI agent that lives on your own machine."
 repository = "https://github.com/Zeffut/orbite-agent"
 
 [dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json", "query", "form"] }
 base64 = "0.23.1"
 chacha20poly1305 = "0.11.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
@@ -27,6 +28,7 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 tar = "0.4.46"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "io-std", "time", "process", "signal"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
 url = "2.5.8"
 x11rb = { version = "0.14.0", features = ["xtest"] }
 

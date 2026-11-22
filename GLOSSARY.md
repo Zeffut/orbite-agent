@@ -33,8 +33,20 @@ The one continuous exchange between an Owner and their Agent; there is exactly o
 _Avoid_: chat, thread, session
 
 **Channel**:
-A place where the Conversation happens (Telegram in 1.0).
+A place where the Conversation happens: the Interface, Telegram, a terminal.
 _Avoid_: client, platform, frontend
+
+**Interface**:
+The Channel Orbite serves itself: the Conversation in a browser, on the Owner's Devices.
+_Avoid_: dashboard, web app, UI
+
+**Device**:
+A browser the Owner let into the Interface, on a computer or a phone.
+_Avoid_: session, client, login
+
+**Pairing**:
+Letting a Device in, with a code used once.
+_Avoid_: login, sign-in, authentication
 
 **Approval**:
 The Owner's answer to an Agent asking permission before an Action.

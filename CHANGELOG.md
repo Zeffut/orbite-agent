@@ -2,6 +2,21 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.6.0
+
+Released on 2026-11-22. Your agent in a browser. Run the installer again when updating: it renews what the agent's account may do as root, which turning the interface on from the conversation needs.
+
+- **A web interface, served by Orbite itself**: your conversation, approvals as buttons and your agent's screen, in a browser on your computer or your phone. Nothing passes through anyone else's server. See [the web interface](docs/interface.md).
+- **Telegram is now optional.** Setup asks where you will talk to your agent: in a browser, in Telegram, or both, on the same conversation. It ends with a link that lets your first device in.
+- **No password, no account.** A device is let in once: tell your agent "add my phone", confirm, and open the link it gives. "Which devices can open our conversation?" lists them and "remove my old phone" turns one away.
+- **Encrypted on your own network.** Where the machine is on Tailscale, the page is served over HTTPS inside your Tailscale network, with a certificate Tailscale gets and renews; Orbite itself listens on the machine alone. Elsewhere it stays on the machine, and Orbite refuses to serve it on a public address in the open.
+- **Files, pictures and voice messages** from the page: the paperclip, a paste, a drop, the microphone.
+- **Your agent's screen** beside the conversation, following each thing it does on its computer.
+- "Turn the web interface on" and "off" work from the conversation.
+- A command that looks into the folder Orbite keeps everything in, or names its own files, is now asked however it is written. Before, one that only read could show what is sealed without asking.
+
+Tried for real in Chrome on a computer, through Tailscale's HTTPS, with an agent on Claude Haiku. On a real iPhone, text and pictures were tried; a voice message recorded by Safari came in broken, was corrected, and the correction has not been tried on an iPhone yet, nor has adding the page to a phone's home screen. Not there yet: notifications on a phone, and a certificate for a machine with a public address and no Tailscale.
+
 ## 0.5.17
 
 Released on 2026-11-22. A security fix found by an independent review (0.5.16 was never published: its own trials stopped it); update from any version, and run the installer again to renew what the agent's account may do as root.

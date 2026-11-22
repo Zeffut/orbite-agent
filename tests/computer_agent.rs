@@ -401,3 +401,43 @@ async fn the_agent_shows_its_owner_the_screen_at_a_step_that_matters_in_one_gest
     });
     assert!(told, "{:?}", provider.last_asked());
 }
+
+#[tokio::test]
+async fn the_page_its_owner_talks_to_it_in_is_not_the_agents_to_open() {
+    if !has_a_computer() {
+        return;
+    }
+    let home = a_home();
+    orbite::Config {
+        interface: Some("127.0.0.1:8377".into()),
+        interface_reached_at: Some("https://host.tail1234.ts.net:8377".into()),
+        ..Default::default()
+    }
+    .save(home.path())
+    .unwrap();
+    let provider = ScriptedProvider::default();
+    for address in ["http://127.0.0.1:8377/#ABCD-EFGH", "https://HOST.tail1234.ts.net:8377/"] {
+        provider
+            .then_acts([("computer_open", json!({ "url": address, "purpose": "look" }))])
+            .then(Ok("Refused.".into()));
+    }
+    let (mut channel, mut owner) = memory_channel();
+    let (model, held) = (provider.clone(), home.clone());
+    tokio::spawn(async move {
+        let home = held.path().to_owned();
+        Agent::new(model, Store::in_memory())
+            .working_in(home.join("workspace"))
+            .using_a_computer_in(home.join("computer"))
+            .converse(&mut channel)
+            .await;
+        drop(held);
+    });
+
+    for _ in 0..2 {
+        owner.says("Open our own page.");
+        assert_eq!(heard(&mut owner).await, "Refused.");
+        assert!(owner.was_asked_nothing(), "refused outright, not put to the Owner");
+    }
+    let told = format!("{:?}", provider.last_asked());
+    assert!(told.contains("theirs alone to open"), "{told}");
+}

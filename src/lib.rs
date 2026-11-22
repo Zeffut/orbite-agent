@@ -13,6 +13,7 @@ mod computer;
 mod config;
 mod extensions;
 mod hearing;
+mod interface;
 mod language;
 mod mcp;
 mod memory;
@@ -21,6 +22,7 @@ mod openai_compatible;
 mod png;
 mod provider;
 mod providers;
+mod reach;
 mod routed;
 mod routines;
 mod secrets;
@@ -50,6 +52,9 @@ pub use chatgpt::ChatGpt;
 pub use computer::{Computer, Screen};
 pub use config::{Config, ProviderChoice, Transcription};
 pub use hearing::{Advice, MODELS, Machine, Model, chosen as chosen_transcriber, transcription};
+pub use interface::{
+    Device, Interface, devices as interface_devices, is_private, pairing_code, turn_away,
+};
 pub use language::Language;
 pub use mcp::{
     add_server as add_connector, listed as connectors, remove_server as remove_connector,
@@ -61,6 +66,7 @@ pub use provider::{
     ActionRequest, ActionSpec, Message, Provider, ProviderError, Reply, Request, Usage,
 };
 pub use providers::{change_providers, change_providers_in, providers_shown};
+pub use reach::{close_on_tailscale, open_on_tailscale, tailscale};
 pub use routed::Routed;
 pub use secrets::{Secrets, SecretsError};
 pub use settings::{SETTINGS, Settings, TAKES_A_RESTART};

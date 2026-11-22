@@ -2,7 +2,7 @@
 
 An open-source personal AI agent that lives on a machine you control, uses the AI you already pay for, and adapts to you over time.
 
-> **Status: early development.** Versions before 1.0 are for trying it out, and things will change. What works today: an agent you talk to in Telegram (or a terminal) that acts on its machine behind your approvals, remembers, learns skills, runs routines and sub-agents, reads the web, wakes up by itself, uses MCP servers, writes its own extensions, and has a computer of its own with a browser. [CHANGELOG.md](CHANGELOG.md) says what each version brought.
+> **Status: early development.** Versions before 1.0 are for trying it out, and things will change. What works today: an agent you talk to in a browser or in Telegram (or a terminal) that acts on its machine behind your approvals, remembers, learns skills, runs routines and sub-agents, reads the web, wakes up by itself, uses MCP servers, writes its own extensions, and has a computer of its own with a browser. [CHANGELOG.md](CHANGELOG.md) says what each version brought.
 
 ## Trying it
 
@@ -22,7 +22,8 @@ The installer checks the machine before changing anything, verifies that what it
 
 Then:
 
-- [Installing Orbite](docs/install.md): from nothing to an agent that answers you in Telegram, and how to update, move and remove it.
+- [Installing Orbite](docs/install.md): from nothing to an agent that answers you, and how to update, move and remove it.
+- [The web interface](docs/interface.md): your conversation in a browser, on your computer and your phone.
 - [Your first day](docs/first-day.md): what your agent can do, Approvals, commands, settings, secrets, MCP servers.
 - [Extensions](docs/extensions.md): living with them, and writing one.
 - [Providers](docs/providers.md): the AI your agent thinks with, and how to choose a model.
@@ -32,7 +33,7 @@ Then:
 Already there:
 
 - One command installs Orbite on a Linux machine (Debian, Ubuntu, Fedora, Arch, openSUSE and those made from them): a spare computer, a mini PC, a VPS.
-- You talk to your agent in Telegram, in one continuous conversation.
+- You talk to your agent in a browser or in Telegram, in one continuous conversation.
 - It runs on API keys from the provider you choose, or on a model on your own machine.
 - It has its own computer on your machine, with a screen and a browser.
 - It remembers, learns skills, runs routines, and writes its own extensions when you agree.

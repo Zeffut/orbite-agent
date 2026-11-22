@@ -39,6 +39,13 @@ pub trait Channel: Send {
 
     fn send(&mut self, text: &str) -> impl Future<Output = io::Result<()>> + Send;
 
+    /// Sends the Owner something that is theirs alone to read and is kept
+    /// nowhere on the Host, where a Channel keeps what it shows: a code
+    /// that lets a device in.
+    fn send_unkept(&mut self, text: &str) -> impl Future<Output = io::Result<()>> + Send {
+        self.send(text)
+    }
+
     /// Asks the Owner to allow or deny an Action, and waits for the answer.
     /// A Channel with no way to ask denies.
     fn ask(&mut self, approval: &Approval) -> impl Future<Output = io::Result<Answer>> + Send {
@@ -113,6 +120,13 @@ pub trait Channel: Send {
             written.push_str(&format!("\n{label}: {command}"));
         }
         async move { self.send(&written).await }
+    }
+
+    /// Shows the Owner the Agent's screen as it is now, where a Channel has
+    /// a place for it beside the Conversation: `picture` is a PNG file.
+    fn screen(&mut self, picture: &Path) -> impl Future<Output = ()> + Send {
+        let _ = picture;
+        async {}
     }
 
     /// Shows the Owner what the Agent is starting to do.

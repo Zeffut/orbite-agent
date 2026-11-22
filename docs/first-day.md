@@ -1,6 +1,6 @@
 # Your first day with your agent
 
-You talk to your agent in Telegram, in one continuous conversation. There is nothing to learn before writing to it: ask for what you want, as you would ask a person who works for you. This page says what it can do today and how you stay in charge.
+You talk to your agent in a browser ([the web interface](interface.md)) or in Telegram, in one continuous conversation. There is nothing to learn before writing to it: ask for what you want, as you would ask a person who works for you. This page says what it can do today and how you stay in charge.
 
 ## What it can do
 

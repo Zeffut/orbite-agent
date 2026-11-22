@@ -56,7 +56,7 @@ A password or key your Owner writes, put away at once with `command`: \
 /secret NAME. Never tell your Owner to type a command or go to the machine: \
 do it yourself.
 
-Answer in the language your Owner writes in. Be direct and brief.";
+Answer in the language your Owner writes in; in French, say tu. Be direct and brief.";
 
 const MEMORY_INSTRUCTIONS: &str = "\
 ## Your memory
@@ -179,6 +179,8 @@ pub struct Agent<P> {
     /// True when ending the Conversation gets Orbite started again, as a
     /// service does.
     restarted: bool,
+    /// Turns the web interface on (true) or off, as whoever may.
+    interface_switch: Option<fn(bool) -> Result<(), String>>,
     /// How many turns in a row the model itself failed or declined.
     model_at_fault: u8,
     /// True when a notice was added that the Agent has yet to respond to.
@@ -261,6 +263,7 @@ impl<P: Provider + 'static> Agent<P> {
             chatgpt_sign_in: None,
             transcriber: None,
             restarted: false,
+            interface_switch: None,
             model_at_fault: 0,
             owed: false,
             set_aside: std::collections::VecDeque::new(),
@@ -342,6 +345,13 @@ impl<P: Provider + 'static> Agent<P> {
 
     /// Says that Orbite is started again whenever it ends, as its service
     /// does: the Agent then ends by itself to take a setting read at start.
+    /// Lets the Owner have the web interface turned on and off from the
+    /// Conversation, with `switch`.
+    pub fn switching_the_interface_with(mut self, switch: fn(bool) -> Result<(), String>) -> Self {
+        self.interface_switch = Some(switch);
+        self
+    }
+
     pub fn restarted_by_its_service(mut self) -> Self {
         self.restarted = true;
         self
@@ -1164,6 +1174,34 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 continue;
             }
+            if let Some(asked) = text
+                .trim()
+                .strip_prefix("/interface")
+                .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                let (said, restart) = self.switch_interface(asked.trim());
+                if channel.send(&said).await.is_err() || (restart && self.restarted) {
+                    return;
+                }
+                continue;
+            }
+            if text.trim() == "/pair" {
+                // Shown and not kept: the code lets a device in.
+                if channel.send_unkept(&self.pair()).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            if let Some(asked) = text
+                .trim()
+                .strip_prefix("/devices")
+                .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+            {
+                if channel.send(&self.devices(asked.trim())).await.is_err() {
+                    return;
+                }
+                continue;
+            }
             if text.trim() == "/reset" {
                 self.await_nothing();
                 self.forget_answers(channel).await;
@@ -1625,6 +1663,8 @@ impl<P: Provider + 'static> Agent<P> {
                 if action.name.starts_with("computer_")
                     && let Some(picture) = attachments(&text).last()
                 {
+                    // Where the Owner can watch the screen, it follows.
+                    channel.screen(&picture).await;
                     // Shown to the Owner too when the model asks: the screen
                     // at a step that matters, whole.
                     if action.input["show"] == true {
@@ -1852,6 +1892,8 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
         ["/connect", _, address] if address.starts_with("https://") => Changes::Something,
         ["/mcp", "connect", _]
         | ["/connections"]
+        | ["/devices"]
+        | ["/interface"]
         | ["/usage"]
         | ["/settings"]
         | ["/settings", _] => Changes::Nothing,
@@ -1862,6 +1904,9 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
         | ["/providers", "first", _]
         | ["/providers", "limit", _, _] => Changes::Something,
         ["/providers", "remove", _] => Changes::ForGood,
+        // Who may open the Conversation: the Owner's to agree to, every time.
+        ["/pair"] | ["/interface", "on" | "off"] => Changes::Something,
+        ["/devices", "remove", _, ..] => Changes::ForGood,
         ["/extensions", "off" | "on", _] => Changes::Something,
         ["/extensions", "remove", _] => Changes::ForGood,
         // With a value only when the Owner wrote it themselves, which is
@@ -1876,7 +1921,8 @@ fn command_for_the_agent(command: &str) -> Result<Changes, String> {
             return Err("That is not a command you can give. You can give: /connect NAME \
                         https://ADDRESS, /mcp connect NAME, /connections [off|on|disconnect|remove \
                         NAME], /secret NAME, /providers [add NAME MODEL|first NAME|remove NAME|limit NAME \
-                        TOKENS|connect chatgpt], /extensions [off|on|remove NAME], \
+                        TOKENS|connect chatgpt], /extensions [off|on|remove NAME], /interface [on|off], /pair, \
+                        /devices [remove NAME], \
                         /settings [NAME VALUE] (not \
                         permission nor secrets), /usage. Anything else your Owner writes \
                         themselves: tell them which command."
@@ -1909,7 +1955,9 @@ fn permission_specs() -> Vec<ActionSpec> {
              disconnect|remove NAME]; /secret NAME [VALUE]; \
              /settings [NAME VALUE] (secrets strict: none reach the AI); \
              /providers [add NAME MODEL|first NAME|remove NAME|limit NAME TOKENS|connect chatgpt] \
-             for the AIs you think with; /extensions [off|on|remove NAME]; /usage.",
+             for the AIs you think with; /extensions [off|on|remove NAME]; /usage; /interface [on|off], \
+             the web interface; /pair when asked to add a phone, computer or device; /devices \
+             [remove NAME].",
             serde_json::json!({ "command": { "type": "string" } }),
         ),
         spec(
@@ -3264,6 +3312,166 @@ impl<P: Provider + 'static> Agent<P> {
         }
     }
 
+    /// Where the web interface is served, when it is on.
+    fn interface(&self) -> Option<(PathBuf, String)> {
+        let home = self.home.clone()?;
+        let config = crate::Config::load(&home).ok()?;
+        let served = config.interface?;
+        // Where the Owner's devices reach it, when that is not where it is served.
+        Some((home, config.interface_reached_at.unwrap_or(format!("http://{served}"))))
+    }
+
+    /// Says where the web interface is, or turns it on or off; true when
+    /// Orbite has to start again for that.
+    fn switch_interface(&self, asked: &str) -> (String, bool) {
+        let say = |english: &'static str, french: &'static str| self.language.say(english, french);
+        let on = match (asked, self.interface()) {
+            ("", Some((_, at))) | ("on", Some((_, at))) => {
+                return (
+                    format!(
+                        "{} {at}",
+                        say("The web interface is on:", "L'interface web est activée :")
+                    ),
+                    false,
+                );
+            }
+            ("", None) | ("off", None) => {
+                return (
+                    say("The web interface is off.", "L'interface web est désactivée.").into(),
+                    false,
+                );
+            }
+            ("on", None) => true,
+            ("off", Some(_)) => false,
+            _ => return (say("Say on or off.", "Dis on ou off.").into(), false),
+        };
+        let switched = match self.interface_switch {
+            Some(switch) => switch(on),
+            None => {
+                Err(say("I cannot do that from here.", "Je ne peux pas le faire d'ici.").to_owned())
+            }
+        };
+        if let Err(why) = switched {
+            return (format!("🔴 {why}"), false);
+        }
+        let then = match self.restarted {
+            true => say(
+                "I restart to apply it: back in a moment.",
+                "Je redémarre pour l'appliquer : de retour dans un instant.",
+            ),
+            false => say(
+                "It applies at my next start.",
+                "Ce sera pris en compte à mon prochain démarrage.",
+            ),
+        };
+        if !on {
+            return (
+                format!(
+                    "✅ {} {then}",
+                    say("The web interface is off.", "L'interface web est désactivée.")
+                ),
+                true,
+            );
+        }
+        let reached = self.home.as_ref().and_then(|home| crate::Config::load(home).ok());
+        let said = match reached.and_then(|config| config.interface_reached_at) {
+            Some(at) => format!(
+                "✅ {} {at}\n{} {then}\n{}",
+                say("The web interface is on:", "L'interface web est activée :"),
+                say(
+                    "It is reached from the devices of your Tailscale network, encrypted.",
+                    "Elle est joignable depuis les appareils de ton réseau Tailscale, en chiffré."
+                ),
+                say("Then tell me which device to add.", "Dis-moi ensuite quel appareil ajouter."),
+            ),
+            None => format!(
+                "✅ {} {then}\n{}",
+                say(
+                    "The web interface is on, on this machine only.",
+                    "L'interface web est activée, sur cette machine seulement."
+                ),
+                say(
+                    "To open it from your phone, this machine and your phone need Tailscale; then ask me again.",
+                    "Pour l'ouvrir depuis ton téléphone, cette machine et ton téléphone doivent être sur Tailscale ; redemande-le-moi ensuite."
+                ),
+            ),
+        };
+        (said, true)
+    }
+
+    /// A code that lets one more device into the web interface, with where
+    /// to type it. It is shown to the Owner and kept nowhere a model reads.
+    fn pair(&self) -> String {
+        let say = |english: &'static str, french: &'static str| self.language.say(english, french);
+        let Some((home, address)) = self.interface() else {
+            return say(
+                "The web interface is not on yet: ask me to turn it on first.",
+                "L'interface web n'est pas encore activée : demande-moi d'abord de l'activer.",
+            )
+            .to_owned();
+        };
+        match crate::pairing_code(&home) {
+            Ok(code) => format!(
+                "{} {address}/#{code}\n\n{} **{code}**. {}",
+                say("On the device, open", "Sur l'appareil, ouvre"),
+                say("If it asks for a code:", "S'il demande un code :"),
+                say("It works once, for ten minutes.", "Il sert une fois, pendant dix minutes."),
+            ),
+            Err(error) => format!("🔴 {error}"),
+        }
+    }
+
+    /// The devices let into the web interface, or one turned away.
+    fn devices(&self, asked: &str) -> String {
+        let say = |english: &'static str, french: &'static str| self.language.say(english, french);
+        let Some((home, _)) = self.interface() else {
+            return say("The web interface is not on.", "L'interface web n'est pas activée.")
+                .to_owned();
+        };
+        if let Some(name) =
+            asked.strip_prefix("remove").map(str::trim).filter(|name| !name.is_empty())
+        {
+            return match crate::turn_away(&home, name) {
+                Ok(true) => format!(
+                    "✅ **{name}** {}",
+                    say(
+                        "can no longer open the conversation.",
+                        "ne peut plus ouvrir la discussion."
+                    )
+                ),
+                Ok(false) => format!(
+                    "{} **{name}**.",
+                    say("No device is called", "Aucun appareil ne s'appelle")
+                ),
+                Err(error) => format!("🔴 {error}"),
+            };
+        }
+        match crate::interface_devices(&home) {
+            Ok(all) if all.is_empty() => {
+                say("No device was let in yet.", "Aucun appareil n'a encore été autorisé.")
+                    .to_owned()
+            }
+            Ok(all) => {
+                let mut said =
+                    say("Devices let into the conversation:", "Appareils autorisés :").to_owned();
+                for device in all {
+                    let seen = chrono::DateTime::from_timestamp(device.seen as i64, 0)
+                        .map(|seen| {
+                            seen.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string()
+                        })
+                        .unwrap_or_default();
+                    said.push_str(&format!(
+                        "\n• **{}** ({} {seen})",
+                        device.name,
+                        say("last seen", "vu le")
+                    ));
+                }
+                said
+            }
+            Err(error) => format!("🔴 {error}"),
+        }
+    }
+
     fn usage(&self) -> String {
         self.count_what_others_spent();
         let today = (self.clock)().date_naive();
@@ -3711,6 +3919,48 @@ impl<P: Provider + 'static> Agent<P> {
                                     )
                                 ),
                             ),
+                            ["/interface", what] => (
+                                match what {
+                                    "on" => say(
+                                        "Turn the web interface on",
+                                        "Activer l'interface web"
+                                    ),
+                                    _ => say(
+                                        "Turn the web interface off",
+                                        "Désactiver l'interface web"
+                                    ),
+                                }
+                                .to_owned(),
+                                match what {
+                                    "on" => say(
+                                        "Your conversation can then be opened in a browser, by the \
+                                         devices you let in.",
+                                        "Ta discussion pourra alors s'ouvrir dans un navigateur, sur \
+                                         les appareils que tu autorises."
+                                    ),
+                                    _ => "",
+                                }
+                                .to_owned(),
+                            ),
+                            ["/pair"] => (
+                                say("Let a new device in", "Autoriser un nouvel appareil")
+                                    .to_owned(),
+                                say(
+                                    "It will read this conversation and write in it as you. You \
+                                     get a code to type on it.",
+                                    "Il pourra lire cette discussion et y écrire comme toi. Tu \
+                                     reçois un code à saisir dessus.",
+                                )
+                                .to_owned(),
+                            ),
+                            ["/devices", "remove", ..] => (
+                                format!(
+                                    "{} {}",
+                                    say("Turn away the device", "Retirer l'appareil"),
+                                    words[2..].join(" ")
+                                ),
+                                String::new(),
+                            ),
                             ["/providers", "first", name] => (
                                 format!(
                                     "{} {name}",
@@ -3735,6 +3985,9 @@ impl<P: Provider + 'static> Agent<P> {
                             summary,
                             detail,
                             irreversible: changes == Changes::ForGood,
+                            // Letting a device in is asked like a Critical
+                            // Action: never allowed once and for all.
+                            critical: command == "/pair",
                             ..Approval::default()
                         })
                     }
@@ -3862,6 +4115,7 @@ impl<P: Provider + 'static> Agent<P> {
                             let words: Vec<&str> = command.split_whitespace().collect();
                             match words[..] {
                                 ["/connect", ..] | ["/connections", _, _] => true,
+                                ["/interface", _] => true,
                                 ["/providers", _, _, ..] => true,
                                 ["/settings", name, _, ..] => {
                                     crate::TAKES_A_RESTART.contains(&name)

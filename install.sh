@@ -343,6 +343,7 @@ Defaults:orbite secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/
 # Nothing the account puts around a command reaches root.
 Defaults:orbite env_reset, !setenv
 orbite ALL=(root) NOPASSWD: $PROGRAM update, $PROGRAM update on, $PROGRAM update off
+orbite ALL=(root) NOPASSWD: $PROGRAM interface on, $PROGRAM interface off
 orbite ALL=(root) NOPASSWD: /usr/bin/systemctl restart orbite, /usr/bin/systemctl reboot, /usr/bin/systemctl poweroff
 RULES
     # A rule sudo cannot read would lock sudo for everybody: checked first.

@@ -97,6 +97,20 @@ impl<A: Channel, B: Channel> Channel for Both<A, B> {
         }
     }
 
+    async fn send_unkept(&mut self, text: &str) -> io::Result<()> {
+        if self.first_open && self.first.send_unkept(text).await.is_err() {
+            self.first_open = false;
+        }
+        if self.second_open && self.second.send_unkept(text).await.is_err() {
+            self.second_open = false;
+        }
+        if self.first_open || self.second_open {
+            Ok(())
+        } else {
+            Err(io::Error::other("every place the Conversation was open in has closed"))
+        }
+    }
+
     async fn send(&mut self, text: &str) -> io::Result<()> {
         if self.first_open && self.first.send(text).await.is_err() {
             self.first_open = false;
@@ -173,6 +187,15 @@ impl<A: Channel, B: Channel> Channel for Both<A, B> {
         }
         if self.second_open {
             self.second.settle(approval, answer).await;
+        }
+    }
+
+    async fn screen(&mut self, picture: &Path) {
+        if self.first_open {
+            self.first.screen(picture).await;
+        }
+        if self.second_open {
+            self.second.screen(picture).await;
         }
     }
 

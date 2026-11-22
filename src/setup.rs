@@ -30,6 +30,8 @@ pub enum Step {
     /// One more Provider, asked after those already set up.
     AnotherProvider,
     Telegram,
+    /// The web interface, turned on.
+    Interface,
     Name,
 }
 
@@ -49,6 +51,10 @@ fn stopped(error: impl fmt::Display) -> SetupError {
     SetupError(error.to_string())
 }
 
+/// Turns the web interface on for the installation, as whoever may: where
+/// Orbite is installed that takes more than the Agent's account.
+type TurnOn = Box<dyn FnMut() -> Result<(), String> + Send>;
+
 /// Reads an answer without showing it as it is typed.
 type ReadHidden = Box<dyn FnMut(&str) -> std::io::Result<String> + Send>;
 
@@ -58,6 +64,7 @@ pub struct Setup<R, W> {
     shown: W,
     /// Reads what must not be shown as it is typed; by default, a line of `typed`.
     hidden: Option<ReadHidden>,
+    turn_interface_on: Option<TurnOn>,
     providers_at: Option<String>,
     /// True when the Provider being set up is added to those there are.
     adding: bool,
@@ -77,6 +84,7 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             typed,
             shown,
             hidden: None,
+            turn_interface_on: None,
             providers_at: None,
             adding: false,
             telegram_at: "https://api.telegram.org".into(),
@@ -93,6 +101,16 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         read: impl FnMut(&str) -> std::io::Result<String> + Send + 'static,
     ) -> Self {
         self.hidden = Some(Box::new(read));
+        self
+    }
+
+    /// Turns the web interface on with `turn_on` rather than by writing
+    /// down where it is served: it then writes that down itself.
+    pub fn turning_the_interface_on_with(
+        mut self,
+        turn_on: impl FnMut() -> Result<(), String> + Send + 'static,
+    ) -> Self {
+        self.turn_interface_on = Some(Box::new(turn_on));
         self
     }
 
@@ -144,7 +162,17 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             self.adding = true;
             self.provider(&mut config, &secrets, language).await?;
         }
-        if wanted(Step::Telegram, config.telegram_owner.is_some() && has(TELEGRAM_TOKEN)?) {
+        // Where the Conversation is held: in a browser, in Telegram, or both.
+        let linked = config.telegram_owner.is_some() && has(TELEGRAM_TOKEN)?;
+        let (in_a_browser, in_telegram) = match only {
+            None if config.interface.is_none() && !linked => self.place(language)?,
+            None => (false, false),
+            Some(only) => (only == Step::Interface, only == Step::Telegram),
+        };
+        if in_a_browser {
+            self.interface(&mut config, language)?;
+        }
+        if in_telegram {
             self.telegram(&mut config, &secrets, language).await?;
         }
         if wanted(Step::Name, config.agent_name.is_some()) {
@@ -526,6 +554,72 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         models.iter().filter_map(|model| model["id"].as_str().map(str::to_owned)).take(15).collect()
     }
 
+    /// Asks where the Owner will talk to their Agent: in a browser, in
+    /// Telegram, in that order.
+    fn place(&mut self, language: Language) -> Result<(bool, bool), SetupError> {
+        self.say(language.say(
+            "\nWhere will you talk to your agent?\n  \
+             1. In a browser, on your computer and your phone\n  \
+             2. In Telegram\n  \
+             3. Both",
+            "\nOù parleras-tu à ton agent ?\n  \
+             1. Dans un navigateur, sur ton ordinateur et ton téléphone\n  \
+             2. Dans Telegram\n  \
+             3. Les deux",
+        ))?;
+        loop {
+            let answer = self.ask(language.say("Number > ", "Numéro > "))?.to_lowercase();
+            match answer.as_str() {
+                "1" | "browser" | "web" | "navigateur" => return Ok((true, false)),
+                "2" | "telegram" => return Ok((false, true)),
+                "3" | "both" | "les deux" => return Ok((true, true)),
+                _ => {}
+            }
+        }
+    }
+
+    /// Turns the web interface on, and says where it will be reached.
+    fn interface(&mut self, config: &mut Config, language: Language) -> Result<(), SetupError> {
+        match &mut self.turn_interface_on {
+            Some(turn_on) => {
+                turn_on().map_err(stopped)?;
+                *config = Config::load(&self.home).map_err(stopped)?;
+            }
+            None => {
+                config.interface = Some("127.0.0.1:8377".into());
+                config.save(&self.home).map_err(stopped)?;
+            }
+        }
+        let said = match (&config.interface_reached_at, &config.interface) {
+            (Some(reached), _) => format!(
+                "{}\n  {reached}\n{}",
+                language.say(
+                    "\nYour agent will be reached in a browser at:",
+                    "\nTon agent sera joignable dans un navigateur à :"
+                ),
+                language.say(
+                    "from the devices of your Tailscale network, encrypted. Nobody else reaches it. ✓",
+                    "depuis les appareils de ton réseau Tailscale, en chiffré. Personne d'autre n'y accède. ✓"
+                ),
+            ),
+            (None, served) => format!(
+                "{}\n  http://{}\n{}",
+                language.say(
+                    "\nYour agent will be reached in a browser on this machine, at:",
+                    "\nTon agent sera joignable dans un navigateur sur cette machine, à :"
+                ),
+                served.as_deref().unwrap_or_default(),
+                language.say(
+                    "To reach it from your phone too, put this machine and your phone on Tailscale \
+                     (tailscale.com), then run: sudo orbite interface on",
+                    "Pour y accéder aussi depuis ton téléphone, mets cette machine et ton téléphone \
+                     sur Tailscale (tailscale.com), puis lance : sudo orbite interface on"
+                ),
+            ),
+        };
+        self.say(&said)
+    }
+
     async fn telegram(
         &mut self,
         config: &mut Config,
@@ -655,11 +749,14 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         language: Language,
     ) -> Result<(), SetupError> {
         let name = config.agent_name.clone().unwrap_or_else(|| "Orbite".into());
-        let (Some(owner), Some(token)) =
-            (config.telegram_owner, secrets.get(TELEGRAM_TOKEN).map_err(stopped)?)
-        else {
-            return Ok(());
+        let telegram = match (config.telegram_owner, secrets.get(TELEGRAM_TOKEN).map_err(stopped)?)
+        {
+            (Some(owner), Some(token)) => Some((owner, token)),
+            _ => None,
         };
+        if telegram.is_none() && config.interface.is_none() {
+            return Ok(());
+        }
         let greeting = if language == Language::French {
             format!(
                 "Bonjour, je suis {name}, ton agent. Je vis sur ta machine, je me souviens de ce \
@@ -672,12 +769,38 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                  ask before anything that changes something. Tell me what you need."
             )
         };
-        let _ =
-            self.bot(&token, "sendMessage", json!({ "chat_id": owner, "text": greeting })).await;
+        if let Some((owner, token)) = &telegram {
+            let _ =
+                self.bot(token, "sendMessage", json!({ "chat_id": owner, "text": greeting })).await;
+        }
+        let Some(served) = &config.interface else {
+            return self.say(&format!(
+                "\n{} {name} {}",
+                language.say("All set.", "Tout est prêt."),
+                language.say("is waiting for you in Telegram.", "t'attend dans Telegram.")
+            ));
+        };
+        // In a browser: greeted there too, and let in by a link that
+        // carries the code of a first device.
+        crate::interface::greet(&self.home, &greeting).map_err(stopped)?;
+        let code = crate::pairing_code(&self.home).map_err(stopped)?;
+        let at = config.interface_reached_at.clone().unwrap_or(format!("http://{served}"));
         self.say(&format!(
-            "\n{} {name} {}",
+            "\n{} {name} {}\n\n  {at}/#{code}\n\n{}{}",
             language.say("All set.", "Tout est prêt."),
-            language.say("is waiting for you in Telegram.", "t'attend dans Telegram.")
+            language.say(
+                "is waiting for you. Open this on your phone or your computer:",
+                "t'attend. Ouvre ceci sur ton téléphone ou ton ordinateur :"
+            ),
+            language.say(
+                "The link lets one device in, for ten minutes. For another, ask your agent to add a device.",
+                "Le lien autorise un appareil, pendant dix minutes. Pour un autre, demande à ton agent d'ajouter un appareil."
+            ),
+            if telegram.is_some() {
+                language.say("\nIt is in Telegram too.", "\nIl est aussi dans Telegram.")
+            } else {
+                ""
+            },
         ))
     }
 

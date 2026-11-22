@@ -1,6 +1,6 @@
 # Installing Orbite
 
-Orbite installs on a machine you control and keeps running there: a spare computer, a mini PC, a VPS. This page takes you from nothing to an agent that answers you in Telegram.
+Orbite installs on a machine you control and keeps running there: a spare computer, a mini PC, a VPS. This page takes you from nothing to an agent that answers you, in a browser or in Telegram.
 
 Orbite is in early development: versions before 1.0 are for trying it out, and things will change.
 
@@ -8,11 +8,11 @@ Orbite is in early development: versions before 1.0 are for trying it out, and t
 
 - A machine running **Linux with systemd**, as freshly installed: Debian 12 or later, Ubuntu 22.04 or later, Fedora, Arch, openSUSE, AlmaLinux and the systems made from them (Linux Mint, Kali, Raspberry Pi OS, Manjaro). Nothing has to be installed beforehand: what the installer needs and the system lacks, it installs itself. On a system whose packages it does not know, Orbite is installed all the same, and you add the agent's computer by hand, on an x86_64 or aarch64 processor, where you can run commands as root. The installer checks all of this before changing anything, and warns when the machine has little memory.
 - **An AI to think with**: an API key from a provider, a ChatGPT Plus or Pro plan, or a model running on the machine itself with Ollama or LM Studio (see [Providers](providers.md)).
-- **A Telegram account.** Telegram is where you talk to your agent.
+- **Somewhere to talk to it**: a browser, or a Telegram account, or both. For the browser on your phone, the machine and the phone on [Tailscale](https://tailscale.com); see [the web interface](interface.md).
 
-## 1. Create your Telegram bot
+## 1. If you want it in Telegram, create your bot
 
-Your agent speaks through a bot that belongs to you.
+Skip this to talk to your agent in a browser only. In Telegram, your agent speaks through a bot that belongs to you.
 
 1. In Telegram, open a chat with **@BotFather**.
 2. Send `/newbot`, and answer its two questions: a display name, then a username ending in `bot`.
@@ -39,7 +39,7 @@ The installer:
 - checks the machine, and stops with an explanation if it cannot host Orbite;
 - downloads Orbite and verifies that it is signed by Orbite's key;
 - creates an account called `orbite`, which the agent runs as, and its folder `/var/lib/orbite`;
-- lets the agent's account, which is not root, do a named few things as root (update Orbite, restart its service, restart or stop the machine) and nothing else; whether it does them without asking you is the permission level's to say;
+- lets the agent's account, which is not root, do a named few things as root (update Orbite, restart its service, restart or stop the machine, turn the web interface on or off) and nothing else; whether it does them without asking you is the permission level's to say;
 - installs a service that starts with the machine and comes back by itself after a crash, and a daily check for updates;
 - sets up the agent's own computer: a virtual screen (`xvfb`, `xdotool`), fonts, and Firefox from Mozilla's own package repository, which it adds to the machine's package sources. To install Orbite without it, put `ORBITE_WITHOUT_COMPUTER=1` before `sh`. If this part fails, Orbite is installed all the same, and running the installer again later adds it.
 
@@ -51,12 +51,12 @@ The installer ends with a short guided setup, in the terminal:
 
 1. **Language**: English or French, for Orbite's own words. Your agent answers in whatever language you write to it.
 2. **Provider**: its name from the list shown, then your API key (typed without being shown, and checked at once) or, for a ChatGPT plan, a link to sign in with and the address your browser ends on to paste back, then a model. A model nobody has tried before is tried out on a few real tasks, which takes about a minute, and you are told what to expect of it; see [Choosing a model](providers.md#choosing-a-model).
-3. **Telegram**: the bot's token. Setup then shows a **code**: send that code to your bot from your own Telegram account. Whoever sends the code becomes the Owner, the only person the agent will ever listen to.
+3. **Where you will talk to it**: in a browser, in Telegram, or both. For Telegram, the bot's token; setup then shows a **code**: send that code to your bot from your own Telegram account. Whoever sends the code becomes the Owner, the only person the agent will ever listen to.
 4. **A name** for your agent.
 
-Your agent then says hello in Telegram. That is it.
+Your agent then says hello in Telegram, and for the browser setup shows a **link**: open it on your computer or your phone within ten minutes and you are in. That is it.
 
-If you close the terminal half-way, run `sudo orbite setup` to carry on where you stopped. To redo one part later, add its name: `setup language`, `setup provider`, `setup telegram` or `setup name`. To add a second AI that takes over when the first cannot answer, `sudo orbite providers add` (see [Providers](providers.md#several-providers-in-order)).
+If you close the terminal half-way, run `sudo orbite setup` to carry on where you stopped. To redo one part later, add its name: `setup language`, `setup provider`, `setup telegram`, `setup interface` or `setup name`. To add a second AI that takes over when the first cannot answer, `sudo orbite providers add` (see [Providers](providers.md#several-providers-in-order)).
 
 ## Afterwards
 

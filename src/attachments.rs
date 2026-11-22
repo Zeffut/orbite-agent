@@ -12,6 +12,26 @@ pub fn attached(file: &Path) -> String {
     format!("[attached: {}]", file.display())
 }
 
+/// Saves `content` in `inbox` under `name`, or a name close to it: only the
+/// last part of the name is kept, so that it cannot lead elsewhere, and
+/// nothing already there is replaced.
+pub(crate) fn save_in(inbox: &Path, name: &str, content: &[u8]) -> std::io::Result<PathBuf> {
+    let name = Path::new(name).file_name().and_then(|name| name.to_str()).unwrap_or("file");
+    let (stem, extension) = match name.rsplit_once('.') {
+        Some((stem, extension)) if !stem.is_empty() => (stem, format!(".{extension}")),
+        _ => (name, String::new()),
+    };
+    std::fs::create_dir_all(inbox)?;
+    let mut place = inbox.join(name);
+    let mut copy = 2;
+    while place.exists() {
+        place = inbox.join(format!("{stem}-{copy}{extension}"));
+        copy += 1;
+    }
+    std::fs::write(&place, content)?;
+    Ok(place)
+}
+
 /// The files named in `text` as sent with it.
 pub(crate) fn attachments(text: &str) -> impl Iterator<Item = PathBuf> + '_ {
     text.lines().filter_map(|line| {
