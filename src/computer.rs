@@ -640,8 +640,9 @@ pub(crate) struct Desk {
     taken_until: std::sync::Mutex<Option<Instant>>,
 }
 
-/// How long after its last gesture the Agent still holds this computer's
-/// mouse and keyboard without asking again.
+/// How long the Owner's say lets the Agent hold this computer's mouse and
+/// keyboard, from the first gesture it covers: working there does not make
+/// it last.
 const HELD_FOR: Duration = Duration::from_secs(600);
 
 impl Drop for Desk {
@@ -727,8 +728,11 @@ impl Desk {
     /// which then holds for a while after each gesture.
     pub(crate) fn taken(&self) {
         if matches!(self.which(), Which::This(_)) {
-            *self.taken_until.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-                Some(Instant::now() + HELD_FOR);
+            let mut until =
+                self.taken_until.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if until.is_none_or(|until| Instant::now() > until) {
+                *until = Some(Instant::now() + HELD_FOR);
+            }
         }
     }
 
@@ -739,7 +743,12 @@ impl Desk {
 
     /// Keeps to a Computer of the Agent's own, or not, as the Owner says.
     pub(crate) fn keep_to_its_own(&self, keep: bool) {
-        self.keeps_to_its_own.store(keep, std::sync::atomic::Ordering::Relaxed);
+        let kept = self.keeps_to_its_own.swap(keep, std::sync::atomic::Ordering::Relaxed);
+        // Sent back to a Computer of its own, the Agent has let go: coming
+        // back to this one is asked again.
+        if keep && !kept {
+            *self.taken_until.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
     }
 
     /// Does `something` on this computer's desktop when one is offered and

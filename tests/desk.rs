@@ -67,8 +67,17 @@ async fn a_desktop_offered_by_its_account_is_the_agents_computer_until_its_owner
     // The desktop of the machine: wider than a Computer of the Agent's own.
     let desktop = std::sync::Arc::new(Screen::start(1000, 500).unwrap());
     let name = socket("lent");
+    // Orbite's own page is served on this machine.
+    orbite::Config { interface: Some("127.0.0.1:8377".into()), ..Default::default() }
+        .save(home.path())
+        .unwrap();
     let provider = ScriptedProvider::default();
     provider
+        .then_acts([(
+            "computer_open",
+            json!({ "url": "http://127.0.0.1:8377/#ABCD-EFGH", "purpose": "look" }),
+        )])
+        .then(Ok("Refused.".into()))
         .then_acts([("computer", json!({ "do": "click", "x": 426, "y": 213 }))])
         .then(Ok("Clicked.".into()))
         .then_acts([("computer", json!({ "do": "look" }))])
@@ -97,6 +106,13 @@ async fn a_desktop_offered_by_its_account_is_the_agents_computer_until_its_owner
     });
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
+    // The page its Owner talks to it in is refused outright, on this
+    // computer as on its own: not put to the Owner under a wider question.
+    owner.says("Open our own page.");
+    assert_eq!(heard(&mut owner).await, "Refused.");
+    assert!(owner.was_asked_nothing());
+    assert!(format!("{:?}", provider.last_asked()).contains("theirs alone to open"));
+
     owner.says("Click in the middle of the screen.");
     // On their own desktop a gesture can do whatever they can: taking its
     // mouse and keyboard is theirs to allow.
@@ -105,6 +121,8 @@ async fn a_desktop_offered_by_its_account_is_the_agents_computer_until_its_owner
         .expect("the desktop was taken without asking");
     assert!(asked.summary.contains("Use this computer"), "{}", asked.summary);
     assert!(asked.detail.contains("in your session"), "{}", asked.detail);
+    // Asked every time it comes back to it, never allowed once and for all.
+    assert!(asked.critical);
     owner.allows();
     assert_eq!(heard(&mut owner).await, "Clicked.");
     // The Agent knows whose desktop it is on, and acted on that one: the

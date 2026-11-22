@@ -751,25 +751,55 @@ impl Host {
             Action::Computer(_) if self.computer.is_none() => Review::Refuse(NO_COMPUTER.into()),
             // This computer's mouse and keyboard do whatever its Owner can:
             // taking them is asked, and again once the Agent has let go.
-            Action::Computer(_)
+            Action::Computer(gesture)
                 if self.computer.as_ref().is_some_and(|desk| desk.asks_before_taking()) =>
             {
+                // What is refused on any Computer is refused here first, and
+                // what is asked on any Computer is said in this one request:
+                // nothing gets through under a more general question.
+                let about = match &gesture {
+                    Gesture::Open { url, purpose } => match web_address(url) {
+                        Err(problem) => return Review::Refuse(problem),
+                        Ok(address) if self.is_the_interface(&address) => {
+                            return Review::Refuse(
+                                "That is the page your Owner talks to you in: it is theirs alone \
+                                 to open."
+                                    .into(),
+                            );
+                        }
+                        Ok(address) => format!(
+                            "\n\n{}\n{}",
+                            address.host_str().unwrap_or_default(),
+                            purpose.trim()
+                        ),
+                    },
+                    Gesture::Type { text } if text.contains("{{") => format!(
+                        "\n\n{text}\n{}",
+                        self.language.say(
+                            "The value of that secret is typed in place of its name.",
+                            "La valeur de ce secret est tapée à la place de son nom.",
+                        )
+                    ),
+                    _ => String::new(),
+                };
                 Review::Ask(Approval {
                     summary: self
                         .language
                         .say("Use this computer", "Utiliser cet ordinateur")
                         .into(),
-                    detail: self
-                        .language
-                        .say(
+                    detail: format!(
+                        "{}{about}",
+                        self.language.say(
                             "Your agent takes this computer's mouse and keyboard, in your session, with \
-                             the accounts you are signed in to. It keeps them while it works, and asks \
-                             again later.",
+                             the accounts you are signed in to. It keeps them for ten minutes, then asks \
+                             again.",
                             "Ton agent prend la souris et le clavier de cet ordinateur, dans ta session, \
-                             avec les comptes où tu es connecté. Il les garde le temps de travailler, et \
-                             redemande plus tard.",
+                             avec les comptes où tu es connecté. Il les garde dix minutes, puis redemande.",
                         )
-                        .into(),
+                    ),
+                    // Asked every time, at every level but the free one, and
+                    // never allowed once and for all.
+                    critical: true,
                     ..Approval::default()
                 })
             }

@@ -152,12 +152,21 @@ pub fn listen(name: &str, trusted: u32, lent: Lent) -> io::Result<()> {
             },
         };
         for offering in listening.incoming() {
-            let Ok(offering) = offering else { continue };
-            // Who it is comes first, before a word of theirs is read; and
-            // each is heard apart, so that none keeps the others waiting.
-            let known = account_of(&offering).is_ok_and(|account| account == trusted);
+            let Ok(mut offering) = offering else { continue };
+            // Who it is comes first, before a word of theirs is read. Anyone
+            // else is told no at once and costs nothing more: not a thread,
+            // not a wait.
+            if !account_of(&offering).is_ok_and(|account| account == trusted) {
+                let _ = offering.set_write_timeout(Some(Duration::from_millis(200)));
+                let refused =
+                    json!({ "ok": false, "why": "not the account Orbite was installed by" });
+                let _ = send(&mut offering, refused.to_string().as_bytes());
+                continue;
+            }
+            // The account it listens to is heard apart, so that a helper
+            // that is slow keeps no other waiting.
             let lent = lent.clone();
-            std::thread::spawn(move || welcome(offering, known, &lent));
+            let _ = std::thread::Builder::new().spawn(move || welcome(offering, &lent));
         }
     });
     match failed {
@@ -168,7 +177,7 @@ pub fn listen(name: &str, trusted: u32, lent: Lent) -> io::Result<()> {
 
 /// Hears one caller out: the account whose desktop Orbite takes is lent
 /// from, anyone else is told no.
-fn welcome(mut offering: UnixStream, known: bool, lent: &Lent) {
+fn welcome(mut offering: UnixStream, lent: &Lent) {
     let _ = offering.set_read_timeout(Some(Duration::from_secs(5)));
     let _ = offering.set_write_timeout(Some(Duration::from_secs(20)));
     // Heard out before being answered: an answer sent before the other
@@ -176,11 +185,7 @@ fn welcome(mut offering: UnixStream, known: bool, lent: &Lent) {
     let said = receive_at_most(&mut offering, WORDS)
         .ok()
         .and_then(|said| serde_json::from_slice::<Value>(&said).ok());
-    let (Some(said), true) = (said, known) else {
-        let refused = json!({ "ok": false, "why": "not the account Orbite was installed by" });
-        let _ = send(&mut offering, refused.to_string().as_bytes());
-        return;
-    };
+    let Some(said) = said else { return };
     if said["session"] != "x11" {
         // Told plainly, and nothing is lent: the Agent keeps a computer of its own.
         let _ =
@@ -250,7 +255,9 @@ pub fn offer(
         _ => (0, 0),
     };
     let hello = json!({ "account": account, "session": session, "width": width, "height": height });
-    send(&mut service, hello.to_string().as_bytes()).map_err(other)?;
+    // Sent even to one that has already answered no and gone: its answer is
+    // still there to be read.
+    let _ = send(&mut service, hello.to_string().as_bytes());
     let welcomed: Value = serde_json::from_slice(&receive(&mut service).map_err(other)?)
         .map_err(|e| other(e.into()))?;
     if welcomed["ok"] != true {
