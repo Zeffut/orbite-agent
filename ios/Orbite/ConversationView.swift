@@ -45,6 +45,8 @@ struct ConversationView: View {
         .background(Color(page: "#0d0d0d").ignoresSafeArea())
         .safeAreaInset(edge: .top) { top }
         .safeAreaInset(edge: .bottom) { bottom }
+        .task { recorder.prepare() }
+        .onDisappear { recorder.rest() }
         .photosPicker(isPresented: .constant(false), selection: $picked)
         .onChange(of: picked) { takePhotos() }
         .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { chosen in
@@ -148,59 +150,85 @@ struct ConversationView: View {
             || (!attached.isEmpty && attached.allSatisfy { $0.token != nil })
     }
 
-    /// While the microphone is held: how long, and how to give up.
+    /// While the microphone is held: how long, the voice as it is heard,
+    /// and how to give up.
     private var recordingBar: some View {
         HStack(spacing: 12) {
             Circle().fill(.red).frame(width: 10, height: 10)
+                .opacity(away ? 0.3 : 1)
             if let held {
                 Text(held, style: .timer).monospacedDigit().font(.body.weight(.medium))
+                    .frame(minWidth: 44, alignment: .leading)
             }
-            Spacer()
-            Text(away
-                ? say("Release to cancel", "Relâche pour annuler")
-                : say("Slide left to cancel", "Glisse à gauche pour annuler"))
-                .font(.footnote).foregroundStyle(away ? .red : .secondary)
+            if away {
+                Spacer()
+                Text(say("Release to cancel", "Relâche pour annuler"))
+                    .font(.footnote.weight(.medium)).foregroundStyle(.red)
+            } else {
+                HStack(spacing: 3) {
+                    ForEach(Array(recorder.levels.enumerated()), id: \.offset) { _, level in
+                        Capsule().fill(.primary.opacity(0.85)).frame(width: 3, height: 4 + 26 * level)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .animation(.linear(duration: 0.06), value: recorder.levels)
+                Image(systemName: "chevron.left").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 18).frame(height: 48)
         .glassEffect(.regular, in: .capsule)
+        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
     }
 
-    /// Held, it records; let go, it sends; slid away, it gives up.
+    /// Held, it records; let go, it sends; slid away, it gives up. It
+    /// records from the instant it is touched.
     private var microphone: some View {
         Image(systemName: "mic.fill").font(.title3.weight(.medium))
             .foregroundStyle(held == nil ? Color.primary : Color.white)
             .frame(width: 48, height: 48)
             .glassEffect(held == nil ? .regular.interactive() : .regular.tint(away ? .gray : .red), in: .circle)
-            .scaleEffect(held == nil ? 1 : 1.35)
-            .animation(.spring(duration: 0.25), value: held == nil)
+            .scaleEffect(held == nil ? 1 : (away ? 1.1 : 1.4))
+            .animation(.spring(duration: 0.22, bounce: 0.35), value: held == nil)
+            .animation(.spring(duration: 0.2), value: away)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { finger in
                         if held == nil {
-                            held = Date()
-                            away = false
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            Task {
-                                if await !recorder.begin() {
-                                    held = nil
-                                    agent.trouble = say(
-                                        "Orbite may not use the microphone: allow it in Settings.",
-                                        "Orbite n'a pas accès au micro : autorise-le dans Réglages.")
+                            // The first touch ever asks for the microphone: nothing is recorded yet.
+                            guard recorder.allowed else {
+                                Task {
+                                    if await !recorder.ask() {
+                                        agent.trouble = say(
+                                            "Orbite may not use the microphone: allow it in Settings.",
+                                            "Orbite n'a pas accès au micro : autorise-le dans Réglages.")
+                                    }
                                 }
+                                return
                             }
+                            agent.trouble = nil
+                            writing = false
+                            away = false
+                            recorder.begin()
+                            withAnimation(.spring(duration: 0.22)) { held = Date() }
                         }
-                        away = finger.translation.width < -80
+                        let now = finger.translation.width < -90
+                        if now != away {
+                            away = now
+                            recorder.crossed()
+                        }
                     }
                     .onEnded { _ in
-                        guard let began = held else { return }
-                        held = nil
+                        guard held != nil else { return }
                         let kept = recorder.end(keeping: !away)
-                        if Date().timeIntervalSince(began) < 0.5 {
-                            agent.trouble = say("Keep it pressed to record.", "Reste appuyé pour enregistrer.")
+                        let gave_up = away
+                        withAnimation(.spring(duration: 0.22)) { held = nil }
+                        away = false
+                        guard let (spoken, name) = kept else {
+                            if !gave_up {
+                                agent.trouble = say("Keep it pressed to record.", "Reste appuyé pour enregistrer.")
+                            }
                             return
                         }
-                        guard let (spoken, name) = kept else { return }
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
                         Task {
                             if let token = await agent.upload(spoken, named: name) {
                                 await agent.send("", files: [token])
