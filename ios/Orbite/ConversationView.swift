@@ -52,6 +52,7 @@ struct ConversationView: View {
             recorder.prepare()
             // Started on its settings, when it is being tried out.
             if UserDefaults.standard.string(forKey: "show") == "settings" { settings = true }
+            if let draft = UserDefaults.standard.string(forKey: "draft") { text = draft }
         }
         .onDisappear { recorder.rest() }
         .photosPicker(isPresented: .constant(false), selection: $picked)
