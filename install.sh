@@ -39,12 +39,6 @@ FANCY=no
 if [ -t 1 ] && [ -z "${ORBITE_PLAIN:-}" ]; then
     case "${TERM:-dumb}" in dumb | linux) ;; *) FANCY=yes ;; esac
 fi
-# What it shows there is in French for whoever's session is: the plain
-# lines stay in English, as what reads them may be a program.
-FRENCH=no
-case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in fr*) [ "$FANCY" = yes ] && FRENCH=yes ;; esac
-# `$1`, or `$2` where French is spoken.
-t() { if [ "$FRENCH" = yes ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
 TURNING=""
 # Stops the mark that turns while something is being done.
 settle() {
@@ -117,7 +111,7 @@ if [ "$FANCY" = yes ]; then
             ▀▀▀▀▀▀▀
 MASCOT
     printf '\n  \033[1mo r b i t e\033[0m\n  \033[2m%s\033[0m\n\n' \
-        "$(t "Your own agent, on your own machine." "Ton agent à toi, sur ta machine.")"
+        "Your own agent, on your own machine."
 fi
 # What the installer is doing, to say where it stopped.
 STEP="checking the machine"
@@ -320,7 +314,7 @@ STEP="downloading Orbite"
 FILE="orbite-$ARCH-linux"
 
 did "$PRETTY_NAME, $ARCH"
-doing "$(t "Downloading Orbite for $ARCH" "Téléchargement d'Orbite pour $ARCH")"
+doing "Downloading Orbite for $ARCH"
 for name in "$FILE" SHA256SUMS SHA256SUMS.sig; do
     fetch "$RELEASE/$name" "$WORK/$name" || refuse "$name could not be downloaded from $RELEASE."
 done
@@ -353,14 +347,14 @@ if [ -x "$ROOT$PROGRAM" ] && [ "${ORBITE_ALLOW_OLDER:-}" != 1 ] &&
     fi
 fi
 
-did "$(t "Orbite downloaded, and signed by its key" "Orbite téléchargé, et bien signé par sa clé")"
+did "Orbite downloaded, and signed by its key"
 
 # --- Now the machine is changed ---
 
 UPDATING=no
 [ -f "$ROOT$SERVICE" ] && UPDATING=yes
 if [ "$FANCY" = yes ]; then
-    doing "$(t "Installing Orbite" "Installation d'Orbite")"
+    doing "Installing Orbite"
 fi
 
 STEP="creating the agent's account"
@@ -511,7 +505,7 @@ UNIT
 systemctl daemon-reload
 systemctl enable orbite >/dev/null 2>&1 || systemctl enable orbite
 systemctl enable --now orbite-update.timer >/dev/null 2>&1 || systemctl enable --now orbite-update.timer
-did "$(t "Installed: an account of its own, and a service that keeps itself up to date" "Installé : un compte à lui, et un service qui se met à jour tout seul")"
+did "Installed: an account of its own, and a service that keeps itself up to date"
 
 # --- The Agent's Computer: a screen of its own, a browser, and fonts ---
 #
@@ -601,9 +595,9 @@ if [ "${ORBITE_WITHOUT_COMPUTER:-}" = "1" ]; then
     say "Left out, as asked: the agent's own computer. Without it the agent cannot use sites that need"
     say "signing in or a person's gestures. Run this installer again without ORBITE_WITHOUT_COMPUTER to add it."
 else
-    doing "$(t "Setting up the agent's own computer (a screen, Firefox and fonts)" "Préparation de l'ordinateur de l'agent (un écran, Firefox et des polices)")"
+    doing "Setting up the agent's own computer (a screen, Firefox and fonts)"
     computer && SET_UP=0 || SET_UP=$?
-    [ "$SET_UP" != 0 ] || did "$(t "The agent's own computer: a screen, Firefox and fonts" "L'ordinateur de l'agent : un écran, Firefox et des polices")"
+    [ "$SET_UP" != 0 ] || did "The agent's own computer: a screen, Firefox and fonts"
     if [ "$SET_UP" = 2 ]; then
         say "Note: this installer does not know how to install packages on $PRETTY_NAME, so the agent's"
         say "computer was not set up. Orbite works without it. To give it one, install Xvfb, xdotool and"
@@ -620,7 +614,7 @@ if [ "$UPDATING" = yes ]; then
     # An Orbite that was never set up has nothing to run yet.
     if [ -f "$ROOT$HOME_DIR/config.json" ]; then
         systemctl restart orbite
-        ended "$(t "Orbite is updated and running." "Orbite est à jour et tourne.")"
+        ended "Orbite is updated and running."
     else
         say "Orbite is updated. Set it up with: sudo orbite setup"
     fi
@@ -646,25 +640,20 @@ if ! runuser -u orbite -- env ORBITE_HOME="$HOME_DIR" "$PROGRAM" setup </dev/tty
     exit 1
 fi
 systemctl start orbite
-# From here on, in the language chosen at setup.
-if [ "$FANCY" = yes ]; then
-    FRENCH=no
-    grep -Eq '"language": *"fr"' "$ROOT$HOME_DIR/config.json" 2>/dev/null && FRENCH=yes
-fi
-ended "$(t "Orbite is running, and will start again by itself after a restart." "Orbite tourne, et redémarrera tout seul après un redémarrage de la machine.")"
+ended "Orbite is running, and will start again by itself after a restart."
 # Reached at the server's own address: the certificate is waited for, so
 # that the link above answers, or the Owner knows why it does not.
 if grep -q '"interface_public"' "$ROOT$HOME_DIR/config.json" 2>/dev/null; then
-    doing "$(t "Asking Let's Encrypt for the certificate of this server's address" "Demande à Let's Encrypt du certificat de l'adresse de ce serveur")"
+    doing "Asking Let's Encrypt for the certificate of this server's address"
     WAITED=0
     while [ "$WAITED" -lt 90 ] && [ ! -s "$ROOT$HOME_DIR/door/cert.pem" ] && [ ! -s "$ROOT$HOME_DIR/door/trouble" ]; do
         sleep 1
         WAITED=$((WAITED + 1))
     done
     if [ -s "$ROOT$HOME_DIR/door/cert.pem" ]; then
-        ended "$(t "The certificate is given: the link above answers." "Le certificat est donné : le lien ci-dessus répond.")"
+        ended "The certificate is given: the link above answers."
     else
-        say "$(t "The certificate is not given yet:" "Le certificat n'est pas encore donné :") $(cat "$ROOT$HOME_DIR/door/trouble" 2>/dev/null || t "no answer so far" "pas de réponse pour l'instant")."
-        say "$(t "Orbite keeps asking. Open ports 80 and 443 of this server to the Internet, then see: sudo orbite interface" "Orbite continue de demander. Ouvre les ports 80 et 443 de ce serveur vers Internet, puis regarde : sudo orbite interface")"
+        say "The certificate is not given yet: $(cat "$ROOT$HOME_DIR/door/trouble" 2>/dev/null || echo "no answer so far")."
+        say "Orbite keeps asking. Open ports 80 and 443 of this server to the Internet, then see: sudo orbite interface"
     fi
 fi

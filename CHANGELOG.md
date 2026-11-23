@@ -6,6 +6,8 @@ What changed in each version of Orbite, for the people who run it.
 
 Not released yet.
 
+- **A code to scan when your agent adds a device**: on its page on a computer, under the link, and in the terminal with `orbite pair`. Not on a phone, which is what would read it.
+- **The installer speaks English only.** Setup still asks which language Orbite's own words are in.
 - **Your agent has a look of its own**: a shape with two eyes, among twelve, in one of eleven colours. Setup ends on that choice, each shape and colour shown as you point at it, and your agent then stands where Orbite's planet stood: in the terminal, and at the top of its page, where it breathes at rest and sways while it works. Change it by asking your agent ("be a teal star"), or with `sudo orbite setup look`. The planet with a ring stays Orbite's own mark.
 
 ## 0.7.1
