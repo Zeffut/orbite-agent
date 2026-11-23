@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.8.4
+
+Released on 2026-11-23.
+
+- **On a ChatGPT plan, the model is asked to think before it answers.** Orbite sent nothing about that, and the model answered at once; it is now asked for a medium effort of reasoning for what you ask, and a low one for summaries and wake-ups. A plan that refuses being told so is asked the plain way, as before. Not tried on a real plan before release.
+
 ## 0.8.3
 
 Released on 2026-11-23.

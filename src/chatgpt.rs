@@ -722,8 +722,19 @@ impl Provider for ChatGpt {
             }]);
         }
 
+        // The model is asked to think before it answers: more for what the
+        // Owner asked than for the light work of summaries and wake-ups.
+        body["reasoning"] = json!({ "effort": if request.light { "low" } else { "medium" } });
+
         let access = self.access(None).await?;
-        match self.ask(&body, &access).await {
+        let mut asked = self.ask(&body, &access).await;
+        // A plan that does not take being told how much to think is asked
+        // the plain way, as it was before.
+        if let Err((400, _)) = &asked {
+            body.as_object_mut().map(|body| body.remove("reasoning"));
+            asked = self.ask(&body, &access).await;
+        }
+        match asked {
             Ok(reply) => Ok(reply),
             // What let the Agent in may only have run out early: once more,
             // renewed.

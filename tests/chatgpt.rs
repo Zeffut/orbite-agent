@@ -778,3 +778,37 @@ async fn the_model_is_shown_the_pictures_that_come_with_a_notice_such_as_the_com
     assert_eq!(notice[1]["type"], "input_image", "{notice}");
     assert!(notice[1]["image_url"].as_str().unwrap().starts_with("data:image/png;base64,"));
 }
+
+#[tokio::test]
+async fn the_model_is_asked_to_think_and_a_plan_that_refuses_that_is_asked_plainly() {
+    let server = MockServer::start().await;
+    let (_home, chatgpt) = signed_in(&server, 3600).await;
+    // A plan that refuses being told how much to think, and answers without.
+    Mock::given(method("POST"))
+        .and(path("/responses"))
+        .respond_with(|request: &wiremock::Request| {
+            let asked: Value = serde_json::from_slice(&request.body).unwrap();
+            if asked.get("reasoning").is_some() {
+                return ResponseTemplate::new(400)
+                    .set_body_json(json!({ "error": { "message": "Unsupported parameter" } }));
+            }
+            saying("Answered plainly.")
+        })
+        .mount(&server)
+        .await;
+    let conversation = [Message::from_owner("Hello")];
+
+    let reply = chatgpt.reply(question(&conversation, &[])).await.unwrap();
+
+    assert_eq!(reply.text, "Answered plainly.");
+    let asked: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path() == "/responses")
+        .map(|request| serde_json::from_slice(&request.body).unwrap())
+        .collect();
+    assert_eq!(asked[0]["reasoning"]["effort"], "medium", "{}", asked[0]);
+    assert!(asked[1].get("reasoning").is_none(), "{}", asked[1]);
+}
