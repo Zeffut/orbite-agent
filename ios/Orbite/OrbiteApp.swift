@@ -13,6 +13,9 @@ struct OrbiteApp: App {
             Group {
                 if agent.paired && !agent.adding {
                     ConversationView()
+                        .fullScreenCover(isPresented: Binding(get: { agent.welcoming }, set: { _ in })) {
+                            WelcomeView().environment(agent)
+                        }
                 } else {
                     PairingView()
                 }

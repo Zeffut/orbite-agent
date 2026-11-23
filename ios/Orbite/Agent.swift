@@ -83,6 +83,8 @@ final class Agent {
     /// Every Agent this phone knows, and whether one more is being added.
     var known: [Known] = []
     var adding = false
+    /// True until the Owner has been shown round this Agent, on any device.
+    var welcoming = false
     var paired = false
     var name = "Orbite"
     var look: Look?
@@ -256,6 +258,8 @@ final class Agent {
             return
         }
         name = me["agent"] as? String ?? "Orbite"
+        // An Agent that says nothing of it is older than being shown round.
+        welcoming = (me["welcomed"] as? Bool) == false
         if let look = me["look"] as? [String: Any], let outline = look["outline"] as? String {
             self.look = Look(
                 outline: outline, colour: look["colour"] as? String ?? "#f2f2f0",
@@ -439,5 +443,13 @@ final class Agent {
                 eyes: look["eyes"] as? Double ?? 36)
         }
         remember()
+    }
+
+    /// The Owner was shown round: it is not shown again, here or elsewhere.
+    func welcomed() async {
+        welcoming = false
+        if let asking = request("/api/welcomed", method: "POST", body: Data("{}".utf8)) {
+            _ = try? await session.data(for: asking)
+        }
     }
 }
