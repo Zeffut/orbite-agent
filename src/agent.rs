@@ -931,6 +931,14 @@ impl<P: Provider + 'static> Agent<P> {
                     None => {}
                 }
             }
+            // Something read at start was changed from a device (a service
+            // connected): Orbite starts again to take it, as its service does.
+            if !by_the_agent && text.trim() == "/reload" {
+                if self.restarted {
+                    return;
+                }
+                continue;
+            }
             // A setting changed where settings are shown as an app shows
             // them: changed, and nothing said unless it could not be.
             if !by_the_agent && let Some(asked) = text.trim().strip_prefix("/set ") {

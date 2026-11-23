@@ -11,6 +11,7 @@ mod channel;
 mod chatgpt;
 mod computer;
 mod config;
+mod connectors;
 mod desk;
 mod door;
 mod extensions;
@@ -57,6 +58,7 @@ pub use channel::{Answer, Approval, Channel};
 pub use chatgpt::ChatGpt;
 pub use computer::{Computer, Screen};
 pub use config::{Config, ProviderChoice, Transcription};
+pub use connectors::{CONNECTORS, Connector};
 pub use desk::{
     NotOffered, SOCKET as DESK_SOCKET, lending as lending_this_computer,
     offer as offer_this_computer,

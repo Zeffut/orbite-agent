@@ -107,6 +107,8 @@ pub(crate) struct Mcp {
     http: reqwest::Client,
     /// The sign-in the Owner is in the middle of, when there is one.
     signing_in: std::sync::Mutex<Option<SigningIn>>,
+    /// Where a sign-in ends: the address the Owner's browser is sent to.
+    ends_at: String,
     /// The servers whose sign-in was found to have ended, and what there
     /// is to tell the Owner of it: said once for each.
     ended: std::sync::Mutex<Vec<String>>,
@@ -307,9 +309,23 @@ impl Mcp {
             problem,
             http: reqwest::Client::new(),
             signing_in: std::sync::Mutex::new(None),
+            ends_at: SIGN_IN_ENDS_AT.to_owned(),
             ended: std::sync::Mutex::new(Vec::new()),
             reports: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Has sign-ins end at `at` rather than on the Owner's own device: on
+    /// the Agent's own page, where it is reached by a browser anywhere, so
+    /// that nothing is carried back by hand.
+    pub(crate) fn ending_sign_ins_at(mut self, at: impl Into<String>) -> Self {
+        self.ends_at = at.into();
+        self
+    }
+
+    /// True when a sign-in to the server called `name` is kept in `home`.
+    pub(crate) fn is_kept_signed_in_to(home: &Path, name: &str) -> bool {
+        Secrets::kept_in(home).get(&Self::kept_as(name)).ok().flatten().is_some()
     }
 
     /// Starts every server not tried yet, all at once, and asks each what it
@@ -665,7 +681,7 @@ impl Mcp {
             asked
                 .append_pair("response_type", "code")
                 .append_pair("client_id", &client)
-                .append_pair("redirect_uri", SIGN_IN_ENDS_AT)
+                .append_pair("redirect_uri", &self.ends_at)
                 .append_pair("code_challenge", &challenge)
                 .append_pair("code_challenge_method", "S256")
                 .append_pair("state", &state)
@@ -699,11 +715,13 @@ impl Mcp {
         };
         let myself = json!({
             "client_name": "Orbite",
-            "redirect_uris": [SIGN_IN_ENDS_AT],
+            "redirect_uris": [self.ends_at],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
-            "application_type": "native",
+            // A page of the web where it ends on one; a program of the
+            // Owner's own device where it ends there.
+            "application_type": if self.ends_at.starts_with("https://") { "web" } else { "native" },
         });
         let known = self
             .http
@@ -726,7 +744,7 @@ impl Mcp {
 
     /// True when `text` is the address a sign-in under way ended on.
     pub(crate) fn is_signing_in(&self, text: &str) -> bool {
-        text.trim().starts_with(SIGN_IN_ENDS_AT) && self.signing_in.lock().unwrap().is_some()
+        text.trim().starts_with(&self.ends_at) && self.signing_in.lock().unwrap().is_some()
     }
 
     /// Finishes the sign-in under way with the address the Owner's browser
@@ -756,7 +774,7 @@ impl Mcp {
         let mut form = vec![
             ("grant_type", "authorization_code"),
             ("code", code.as_str()),
-            ("redirect_uri", SIGN_IN_ENDS_AT),
+            ("redirect_uri", self.ends_at.as_str()),
             ("client_id", begun.client.as_str()),
             ("code_verifier", begun.verifier.as_str()),
             ("resource", begun.resource.as_str()),

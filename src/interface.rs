@@ -67,6 +67,13 @@ struct Shared {
     inbox: PathBuf,
     /// The installation's folder, where its settings are read.
     home: PathBuf,
+    /// Where the Owner's devices reach the interface, when it is encrypted
+    /// there: a sign-in to a service can end on it.
+    reached_at: Option<String>,
+    /// The services connected with a touch.
+    connectors: Vec<crate::Connector>,
+    /// The sign-in to a service that is under way, begun from a device.
+    signing_in: tokio::sync::Mutex<Option<crate::mcp::Mcp>>,
     /// Files received and not yet sent with a message, oldest first.
     waiting: Mutex<Vec<Waiting>>,
     /// The Agent's screen as last seen, and how many times it was: kept in
@@ -273,6 +280,16 @@ impl Interface {
     /// Serves the interface of the installation in `home` at `address`, in
     /// `language` ("en" or "fr"). Port 0 takes any free one.
     pub async fn serving(home: &Path, address: SocketAddr, language: &str) -> io::Result<Self> {
+        Self::serving_with(home, address, language, crate::CONNECTORS).await
+    }
+
+    /// The same, offering `connectors` as the services connected with a touch.
+    pub async fn serving_with(
+        home: &Path,
+        address: SocketAddr,
+        language: &str,
+        offered: &[crate::Connector],
+    ) -> io::Result<Self> {
         let database = kept_in(home)?;
         let files = home.join("interface-files");
         std::fs::create_dir_all(&files)?;
@@ -285,6 +302,12 @@ impl Interface {
             files,
             inbox: home.join("workspace/inbox"),
             home: home.to_owned(),
+            reached_at: crate::Config::load(home)
+                .ok()
+                .and_then(|config| config.interface_reached_at)
+                .filter(|reached| reached.starts_with("https://")),
+            connectors: offered.to_vec(),
+            signing_in: tokio::sync::Mutex::new(None),
             waiting: Mutex::new(Vec::new()),
             screen: Mutex::new((0, Vec::new())),
             encrypted: crate::Config::load(home)
@@ -346,6 +369,8 @@ impl Interface {
             .route("/api/answer", post(answer))
             .route("/api/settings", get(settings).post(set))
             .route("/api/welcomed", post(welcomed))
+            .route("/api/connectors", get(connectors).post(connect))
+            .route("/signed-in", get(signed_in))
             .route("/api/file", get(file))
             .route("/api/screen", get(screen))
             .route(
@@ -765,6 +790,125 @@ async fn answer(
         Ok(()) => Json(json!({ "sent": true })).into_response(),
         Err(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "the agent is not listening"),
     }
+}
+
+/// The services connected with a touch, and where each stands: connected,
+/// or only waiting to be.
+async fn connectors(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let french = shared.language == "fr";
+    let all: Vec<Value> = shared
+        .connectors
+        .iter()
+        .map(|connector| {
+            json!({
+                "name": connector.name,
+                "label": connector.label,
+                "does": if french { connector.french } else { connector.english },
+                "connected": crate::mcp::Mcp::is_kept_signed_in_to(&shared.home, connector.name),
+            })
+        })
+        .collect();
+    // With a touch only where a sign-in can end on the Agent's own page.
+    Json(json!({ "connectors": all, "with_a_touch": shared.reached_at.is_some() })).into_response()
+}
+
+/// Begins connecting a service: it is added to those the Agent knows, and
+/// the link to sign in with is given back.
+async fn connect(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(sent): Json<Value>,
+) -> Response {
+    if !from_the_page(&headers, &shared.names) || shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let Some(connector) =
+        shared.connectors.iter().find(|connector| Some(connector.name) == sent["name"].as_str())
+    else {
+        return refused(StatusCode::BAD_REQUEST, "not a service known here");
+    };
+    let Some(reached_at) = &shared.reached_at else {
+        return refused(
+            StatusCode::CONFLICT,
+            "the agent's page is not reached encrypted: ask the agent to connect it instead",
+        );
+    };
+    if !crate::mcp::listed(&shared.home).iter().any(|listed| listed == connector.name)
+        && let Err(problem) =
+            crate::mcp::add_server(&shared.home, connector.name, connector.address)
+    {
+        return refused(StatusCode::INTERNAL_SERVER_ERROR, &problem);
+    }
+    let signing = crate::mcp::Mcp::configured_in(&shared.home)
+        .ending_sign_ins_at(format!("{reached_at}/signed-in"));
+    match signing.sign_in(connector.name).await {
+        Ok(link) => {
+            *shared.signing_in.lock().await = Some(signing);
+            Json(json!({ "link": link })).into_response()
+        }
+        Err(problem) => refused(StatusCode::BAD_GATEWAY, &problem),
+    }
+}
+
+/// Where a sign-in to a service ends: the Owner's browser comes back here
+/// with what the service gave. Only the answer to the link that was sent
+/// is taken; anything else changes nothing and reaches nobody.
+async fn signed_in(
+    State(shared): State<Arc<Shared>>,
+    axum::extract::RawQuery(asked): axum::extract::RawQuery,
+) -> Response {
+    let french = shared.language == "fr";
+    let page = |well: bool, said: &str| {
+        let mark = if well { "✓" } else { "✗" };
+        let back = if french { "Tu peux revenir à Orbite." } else { "You can go back to Orbite." };
+        axum::response::Html(format!(
+            "<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, \
+             initial-scale=1\"><title>Orbite</title><body style=\"margin:0;min-height:100vh;display:grid;\
+             place-items:center;background:#0d0d0d;color:#ededed;font:17px/1.5 system-ui,sans-serif;\
+             text-align:center\"><div><div style=\"font-size:54px\">{mark}</div><p><strong>{}</strong></p>\
+             <p style=\"color:#8b8b8b\">{back}</p></div>",
+            html_text(said)
+        ))
+        .into_response()
+    };
+    let Some(signing) = shared.signing_in.lock().await.take() else {
+        return page(
+            false,
+            if french { "Aucune connexion en cours." } else { "No sign-in is under way." },
+        );
+    };
+    let Some(reached_at) = &shared.reached_at else {
+        return page(false, "No sign-in is under way.");
+    };
+    let ended_on = format!("{reached_at}/signed-in?{}", asked.unwrap_or_default());
+    match signing.signed_in_at(&ended_on).await {
+        Ok((name, _)) => {
+            // The Agent starts again to take the service it now has.
+            let _ = shared.to_agent.send(Incoming::Said("/reload".into(), None));
+            let label = shared
+                .connectors
+                .iter()
+                .find(|connector| connector.name == name)
+                .map_or(name.as_str(), |connector| connector.label)
+                .to_owned();
+            page(
+                true,
+                &format!("{label} {}", if french { "est connecté." } else { "is connected." }),
+            )
+        }
+        Err(_) => page(
+            false,
+            if french { "La connexion n'a pas abouti." } else { "The sign-in did not go through." },
+        ),
+    }
+}
+
+/// `text` as it may stand in a page, whatever it holds.
+fn html_text(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 /// The Owner was shown round their Agent, on the device that says so: it

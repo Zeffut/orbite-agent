@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.0
+
+Not released yet.
+
+- **A service is connected with a touch**, from a device: Notion, Calendly, Trello, Linear, Jira and Confluence, ClickUp, Airtable, Stripe, PayPal, Sentry, Supabase, Cloudflare. You sign in in a browser and come back: the sign-in ends on your agent's own page, and nothing is copied by hand. Where your agent's page is not reached encrypted, connecting goes through the conversation as before.
+
 ## 0.8.5
 
 Released on 2026-11-23.

@@ -781,3 +781,124 @@ async fn what_the_agent_does_for_its_owner_is_all_done_though_one_of_them_restar
     assert!(second.contains("far") && second.contains("turned off"), "{second}");
     let _ = running.await;
 }
+
+#[tokio::test]
+async fn a_service_is_connected_with_a_touch_and_the_sign_in_ends_on_the_agents_own_page() {
+    let challenge = Arc::new(Mutex::new(String::new()));
+    let server = service(challenge.clone()).await;
+    let home = tempfile::tempdir().unwrap();
+    // An Agent whose page is reached encrypted, at a name of its own.
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({ "interface": "127.0.0.1:8377", "interface_reached_at": "https://agent.example.ts.net:8377" })
+            .to_string(),
+    )
+    .unwrap();
+    let address: &'static str = Box::leak(format!("{}/mcp", server.uri()).into_boxed_str());
+    let offered = [orbite::Connector {
+        name: "notes",
+        label: "Notes",
+        address,
+        english: "Find your notes",
+        french: "Retrouver tes notes",
+    }];
+    let interface = orbite::Interface::serving_with(
+        home.path(),
+        "127.0.0.1:0".parse().unwrap(),
+        "en",
+        &offered,
+    )
+    .await
+    .unwrap();
+    let at = format!("http://{}", interface.address());
+    let http = reqwest::Client::new();
+    // A device let in, as the page or an app is.
+    let code = orbite::pairing_code(home.path()).unwrap();
+    let paired = http
+        .post(format!("{at}/api/pair"))
+        .header("x-orbite", "1")
+        .json(&json!({ "code": code, "name": "phone" }))
+        .send()
+        .await
+        .unwrap();
+    let kept =
+        paired.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+    let listed = || async {
+        let all: Value = http
+            .get(format!("{at}/api/connectors"))
+            .header("cookie", &kept)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        all
+    };
+
+    // Offered, not connected yet, and connectable with a touch.
+    let before = listed().await;
+    assert_eq!(before["with_a_touch"], true);
+    assert_eq!(before["connectors"][0]["label"], "Notes");
+    assert_eq!(before["connectors"][0]["connected"], false);
+    // A stranger is told nothing, and begins nothing.
+    assert_eq!(http.get(format!("{at}/api/connectors")).send().await.unwrap().status(), 401);
+
+    // Touched: the link to sign in with, which ends on the Agent's own page.
+    let begun: Value = http
+        .post(format!("{at}/api/connectors"))
+        .header("x-orbite", "1")
+        .header("cookie", &kept)
+        .json(&json!({ "name": "notes" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let link: std::collections::HashMap<String, String> =
+        url::Url::parse(begun["link"].as_str().expect("no link"))
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+    assert_eq!(link["redirect_uri"], "https://agent.example.ts.net:8377/signed-in");
+    *challenge.lock().unwrap() = link["code_challenge"].clone();
+
+    // Someone who is not the answer to that link changes nothing.
+    let stranger =
+        http.get(format!("{at}/signed-in?code=guessed&state=guessed")).send().await.unwrap();
+    assert!(stranger.text().await.unwrap().contains("did not go through"));
+    assert_eq!(listed().await["connectors"][0]["connected"], false);
+
+    // Begun again, and this time the Owner's browser comes back from the service.
+    let begun: Value = http
+        .post(format!("{at}/api/connectors"))
+        .header("x-orbite", "1")
+        .header("cookie", &kept)
+        .json(&json!({ "name": "notes" }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let link: std::collections::HashMap<String, String> =
+        url::Url::parse(begun["link"].as_str().unwrap())
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+    *challenge.lock().unwrap() = link["code_challenge"].clone();
+    let back = http
+        .get(format!("{at}/signed-in?code=the-code&state={}&iss={}", link["state"], server.uri()))
+        .send()
+        .await
+        .unwrap();
+    let page = back.text().await.unwrap();
+    assert!(page.contains("Notes is connected."), "{page}");
+    assert!(!page.contains("the-code"), "{page}");
+    assert_eq!(listed().await["connectors"][0]["connected"], true);
+    // And it is among the services the Agent knows from its next start.
+    assert!(std::fs::read_to_string(home.path().join("mcp.json")).unwrap().contains("notes"));
+}
