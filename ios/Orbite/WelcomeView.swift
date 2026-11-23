@@ -14,7 +14,7 @@ struct WelcomeView: View {
     @State private var name = ""
     @State private var voice: Bool?
 
-    private let steps = 5
+    private let steps = 6
 
     private func value(_ key: String) -> String { settings.first { $0.key == key }?.value ?? "" }
 
@@ -49,7 +49,8 @@ struct WelcomeView: View {
                 look.tag(1)
                 leave.tag(2)
                 speaking.tag(3)
-                ready.tag(4)
+                services.tag(4)
+                ready.tag(5)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .animation(.snappy, value: step)
@@ -240,6 +241,19 @@ struct WelcomeView: View {
                     .buttonStyle(.glass)
                 }
             }
+        }
+    }
+
+    private var services: some View {
+        page(
+            title: say("Connect your services", "Connecte tes services"),
+            told: say(
+                "\(agent.name) works where your things are. Sign in once; you can add or remove any of them later.",
+                "\(agent.name) travaille là où sont tes affaires. Connecte-toi une fois ; tu pourras en ajouter ou en retirer plus tard.")
+        ) {
+            Image(systemName: "point.3.connected.trianglepath.dotted").font(.system(size: 76)).foregroundStyle(.secondary)
+        } rest: {
+            ConnectorsList()
         }
     }
 

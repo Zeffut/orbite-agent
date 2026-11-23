@@ -145,6 +145,13 @@ struct SettingsView: View {
                         Toggle(label("updates"), isOn: Binding(
                             get: { value("updates") == "on" }, set: { change("updates", to: $0 ? "on" : "off") }))
                     }
+                    Section {
+                        NavigationLink {
+                            ConnectorsScreen()
+                        } label: {
+                            Label(say("Services", "Services"), systemImage: "point.3.connected.trianglepath.dotted")
+                        }
+                    }
                     Section(say("Thinks with", "Réfléchit avec")) {
                         LabeledContent(label("model"), value: value("model"))
                         LabeledContent(label("light"), value: worded(value("light")))

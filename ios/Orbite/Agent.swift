@@ -452,4 +452,41 @@ final class Agent {
             _ = try? await session.data(for: asking)
         }
     }
+
+    /// The services connected with a touch, and whether that is possible
+    /// from here (the Agent's page reached encrypted).
+    func connectors() async -> ([Connector], Bool)? {
+        guard let asking = request("/api/connectors"), let (told, answer) = try? await session.data(for: asking),
+              (answer as? HTTPURLResponse)?.statusCode == 200,
+              let all = try? JSONSerialization.jsonObject(with: told) as? [String: Any]
+        else { return nil }
+        let connectors = (all["connectors"] as? [[String: Any]] ?? []).compactMap { one -> Connector? in
+            guard let name = one["name"] as? String else { return nil }
+            return Connector(
+                name: name, label: one["label"] as? String ?? name, does: one["does"] as? String ?? "",
+                connected: one["connected"] as? Bool ?? false)
+        }
+        return (connectors, all["with_a_touch"] as? Bool ?? false)
+    }
+
+    /// Begins connecting a service: the link to sign in with.
+    func connect(_ name: String) async -> URL? {
+        let body = try? JSONSerialization.data(withJSONObject: ["name": name])
+        guard let asking = request("/api/connectors", method: "POST", body: body),
+              let (told, answer) = try? await session.data(for: asking),
+              (answer as? HTTPURLResponse)?.statusCode == 200,
+              let begun = try? JSONSerialization.jsonObject(with: told) as? [String: Any],
+              let link = begun["link"] as? String
+        else { return nil }
+        return URL(string: link)
+    }
+}
+
+/// A service the Agent can be connected to.
+struct Connector: Identifiable, Equatable {
+    let name: String
+    let label: String
+    let does: String
+    var connected: Bool
+    var id: String { name }
 }
