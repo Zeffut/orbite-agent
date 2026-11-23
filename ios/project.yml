@@ -16,15 +16,20 @@ targets:
     type: application
     platform: iOS
     sources: [Orbite]
+    info:
+      path: Orbite/Info.plist
+      properties:
+        CFBundleDisplayName: Orbite
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSCameraUsageDescription: To read the code your agent shows, so that this device is let in.
+        NSMicrophoneUsageDescription: To record the voice messages you send your agent.
+        NSLocalNetworkUsageDescription: To reach your agent when it is on your own network.
+        # An agent on the Owner's own private network is reached as it serves itself.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.zeffut.orbite
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Orbite
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
-        INFOPLIST_KEY_NSCameraUsageDescription: To read the code your agent shows, so that this device is let in.
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: To record the voice messages you send your agent.
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: To reach your agent when it is on your own network.

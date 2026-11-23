@@ -73,6 +73,11 @@ final class Agent {
 
     /// Opens the Conversation again where the app was pointed last.
     func start() async {
+        // Given a link as it is started (by a link opened, or when tried out).
+        if let link = UserDefaults.standard.string(forKey: "link") {
+            await pair(with: link)
+            return
+        }
         guard let kept = UserDefaults.standard.string(forKey: "agent"), let kept = URL(string: kept)
         else { return }
         address = kept
