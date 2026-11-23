@@ -449,3 +449,14 @@ fn which_computer_the_agent_uses_is_chosen_once_and_stays() {
     assert!(shown(&again).contains("a computer of its own") && shown(&again).contains("stays"));
     assert_eq!(std::fs::read_to_string(&written).unwrap().trim(), "own");
 }
+
+#[test]
+fn a_version_says_what_it_brings_in_a_few_words_each() {
+    let told = Command::new(env!("CARGO_BIN_EXE_orbite")).arg("news").output().unwrap();
+    assert!(told.status.success(), "{}", shown(&told));
+    let lines: Vec<String> = shown(&told).lines().map(str::to_owned).collect();
+    assert!(!lines.is_empty(), "this version has no entry in the list of changes");
+    for line in &lines {
+        assert!(!line.contains("**") && line.chars().count() <= 110, "{line}");
+    }
+}

@@ -74,7 +74,7 @@ async fn asked() -> ExitCode {
         "update" => env::args().nth(2).is_none(),
         // Which computer the Agent uses is written as root, once.
         "setup" => env::args().nth(2).as_deref() == Some("computer"),
-        "uninstall" | "export" | "restore" | "version" | "providers" => true,
+        "uninstall" | "export" | "restore" | "version" | "providers" | "news" => true,
         // Offered from the session of whoever opened the desktop, as them;
         // and whose desktop it may be is written as root, out of the
         // Agent's reach.
@@ -95,6 +95,12 @@ async fn asked() -> ExitCode {
             Ok(())
         }
         Some("chat") => chat().await,
+        Some("news") => {
+            for line in news() {
+                println!("{line}");
+            }
+            Ok(())
+        }
         Some("secret") => secret(),
         Some("update") => update().await,
         Some("settings") => settings(),
@@ -1607,13 +1613,159 @@ async fn update() -> Result<(), Failure> {
         None => RELEASE_KEY,
     };
     let program = format!("{}/usr/local/bin/orbite", setting("ORBITE_ROOT").unwrap_or_default());
-    let done = Updater::new(env!("CARGO_PKG_VERSION"), release, key)
-        .installed_at(program)
-        .telling_the_owner_in(home)
+    let updater = Updater::new(env!("CARGO_PKG_VERSION"), release, key)
+        .installed_at(program.clone())
+        .telling_the_owner_in(home.clone());
+    // Run by hand, in a terminal: each thing is shown as it is done. Run by
+    // the daily timer, one line says what happened.
+    if !orbite::Welcome::fits_here() {
+        println!("{}", updater.run(&Systemd).await?);
+        return Ok(());
+    }
+    let french = Config::load(&home).is_ok_and(|config| config.language.as_deref() == Some("fr"));
+    let say = move |english: &str, french_words: &str| {
+        if french { french_words.to_owned() } else { english.to_owned() }
+    };
+    let steps = std::sync::Arc::new(Steps::default());
+    println!("\n  \x1b[1mo r b i t e\x1b[0m\n");
+    let watching = steps.clone();
+    let done = updater
+        .watched_by(move |what| {
+            let (step, version) = what.split_once(' ').unwrap_or((what, ""));
+            watching.begin(&match step {
+                "looking" => say("Looking for a new version", "Recherche d'une nouvelle version"),
+                "downloading" => {
+                    format!("{} {version}", say("Downloading Orbite", "Téléchargement d'Orbite"))
+                }
+                "installing" => say(
+                    "Signed by Orbite's key: installing it",
+                    "Bien signé par la clé d'Orbite : installation",
+                ),
+                _ => format!("{} {version}", say("Starting Orbite", "Démarrage d'Orbite")),
+            });
+        })
         .run(&Systemd)
-        .await?;
-    println!("{done}");
+        .await;
+    let say = move |english: &str, french_words: &str| {
+        if french { french_words.to_owned() } else { english.to_owned() }
+    };
+    let done = match done {
+        Ok(done) => done,
+        Err(error) => {
+            steps.end(
+                false,
+                &say("The update did not go through.", "La mise à jour n'a pas abouti."),
+            );
+            return Err(error.into());
+        }
+    };
+    let running = env!("CARGO_PKG_VERSION");
+    if let Some(version) =
+        done.strip_prefix("Updated to ").map(|version| version.trim_end_matches('.'))
+    {
+        steps.end(
+            true,
+            &format!(
+                "{} {version} ({} {running})",
+                say("Orbite is now on", "Orbite est maintenant en"),
+                say("it was on", "c'était la"),
+            ),
+        );
+        // What the new one brings, as it says itself.
+        let brought = std::process::Command::new(&program).arg("news").output();
+        let lines: Vec<String> = brought
+            .ok()
+            .filter(|told| told.status.success())
+            .map(|told| String::from_utf8_lossy(&told.stdout).lines().map(str::to_owned).collect())
+            .unwrap_or_default();
+        if !lines.is_empty() {
+            println!("\n  \x1b[1m{}\x1b[0m", say("What is new", "Ce qui change"));
+            for line in lines.iter().take(8) {
+                println!("  \x1b[2m•\x1b[0m {line}");
+            }
+        }
+    } else if done.contains("up to date") {
+        steps.end(true, &format!("Orbite {running} {}", say("is up to date.", "est à jour.")));
+    } else {
+        steps.end(true, &done);
+    }
+    println!();
     Ok(())
+}
+
+/// What is being done, shown with a mark that turns until it is.
+#[derive(Default)]
+struct Steps {
+    turning: std::sync::Mutex<
+        Option<(
+            std::sync::Arc<std::sync::atomic::AtomicBool>,
+            std::thread::JoinHandle<()>,
+            String,
+        )>,
+    >,
+}
+
+impl Steps {
+    /// Ticks off what was being done, and shows what is begun.
+    fn begin(&self, what: &str) {
+        self.settle(true);
+        let over = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (stop, text) = (over.clone(), what.to_owned());
+        let turning = std::thread::spawn(move || {
+            use std::io::Write;
+            const MARKS: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut at = 0;
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                print!("\r  \x1b[38;5;75m{}\x1b[0m \x1b[2m{text}\x1b[0m", MARKS[at % 10]);
+                let _ = std::io::stdout().flush();
+                at += 1;
+                std::thread::sleep(std::time::Duration::from_millis(90));
+            }
+        });
+        *self.turning.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) =
+            Some((over, turning, what.to_owned()));
+    }
+
+    /// Stops the mark; what was being done is ticked off when it went well.
+    fn settle(&self, well: bool) {
+        let was = self.turning.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+        if let Some((over, turning, what)) = was {
+            over.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = turning.join();
+            let mark = if well { "\x1b[38;5;78m✓\x1b[0m" } else { "\x1b[38;5;210m✗\x1b[0m" };
+            println!("\r\x1b[K  {mark} \x1b[2m{what}\x1b[0m");
+        }
+    }
+
+    /// The last word: how it ended.
+    fn end(&self, well: bool, said: &str) {
+        self.settle(well);
+        let mark = if well { "\x1b[38;5;78m✓\x1b[0m" } else { "\x1b[38;5;210m✗\x1b[0m" };
+        println!("  {mark} \x1b[1m{said}\x1b[0m");
+    }
+}
+
+/// What this version of Orbite brings, as its list of changes says: the
+/// first words of each thing, without what marks them.
+fn news() -> Vec<String> {
+    const CHANGES: &str = include_str!("../CHANGELOG.md");
+    let heading = format!("## {}", env!("CARGO_PKG_VERSION"));
+    let Some(from) = CHANGES.find(&heading) else { return Vec::new() };
+    let entry = &CHANGES[from + heading.len()..];
+    let entry = entry.find("\n## ").map_or(entry, |end| &entry[..end]);
+    entry
+        .lines()
+        .filter_map(|line| line.strip_prefix("- "))
+        .map(|line| {
+            // The part in bold says it; failing that, the first sentence.
+            let plain = line.replace("**", "");
+            let told = match line.strip_prefix("**").and_then(|rest| rest.split_once("**")) {
+                Some((bold, _)) => bold.trim_end_matches(['.', ':']).to_owned(),
+                None => plain.split(". ").next().unwrap_or(&plain).to_owned(),
+            };
+            told.chars().take(110).collect()
+        })
+        .collect()
 }
 
 /// The key in a public key file as openssl writes one.

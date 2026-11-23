@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.8.3
+
+Released on 2026-11-23.
+
+- **An update run by hand shows what it does**: looking for a new version, downloading it, checking its signature, installing, starting, each ticked off as it is done, then what the new version brings. It used to say one line at the end. The daily update still says its one line. You see this from the update after this one, since an update is carried out by the version being replaced.
+
 ## 0.8.2
 
 Released on 2026-11-23.

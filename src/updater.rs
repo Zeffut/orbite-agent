@@ -47,6 +47,8 @@ pub struct Updater {
     home: Option<PathBuf>,
     wait: Duration,
     http: reqwest::Client,
+    /// Told each thing as it is begun, for whoever is watching.
+    watched: Option<Box<dyn Fn(&str) + Send + Sync>>,
 }
 
 impl Updater {
@@ -61,6 +63,7 @@ impl Updater {
             home: None,
             wait: Duration::from_secs(15),
             http: reqwest::Client::new(),
+            watched: None,
         }
     }
 
@@ -75,6 +78,19 @@ impl Updater {
     pub fn telling_the_owner_in(mut self, home: impl Into<PathBuf>) -> Self {
         self.home = Some(home.into());
         self
+    }
+
+    /// Tells `watching` each thing as it is begun: someone ran the update
+    /// by hand and is looking at it.
+    pub fn watched_by(mut self, watching: impl Fn(&str) + Send + Sync + 'static) -> Self {
+        self.watched = Some(Box::new(watching));
+        self
+    }
+
+    fn begins(&self, what: &str) {
+        if let Some(watching) = &self.watched {
+            watching(what);
+        }
     }
 
     /// How long the service is given to start with the new program.
@@ -93,6 +109,7 @@ impl Updater {
 
         // The list of checksums is what Orbite's key signs: nothing is
         // believed before that signature holds.
+        self.begins("looking");
         let sums = self.download("SHA256SUMS").await?;
         let signature = self.download("SHA256SUMS.sig").await?;
         let key = VerifyingKey::from_bytes(&self.key)
@@ -125,6 +142,7 @@ impl Updater {
             ));
         }
 
+        self.begins(&format!("downloading {version}"));
         let file = format!("orbite-{}-linux", std::env::consts::ARCH);
         let program = self.download(&file).await?;
         check(&sums, &file, &program)?;
@@ -142,6 +160,7 @@ impl Updater {
         }
         // The new program takes the place of the old in one move, and the
         // old one is kept beside it.
+        self.begins(&format!("installing {version}"));
         let was_running = service.is_running();
         let arriving = sibling(&self.program, "new");
         let previous = sibling(&self.program, "previous");
@@ -170,6 +189,7 @@ impl Updater {
         if !was_running {
             return Ok(format!("Updated to {version}."));
         }
+        self.begins(&format!("starting {version}"));
         service.restart().map_err(|error| failed("could not restart Orbite", error))?;
         tokio::time::sleep(self.wait).await;
         // Looked at more than once: a program that starts and falls over is
