@@ -48,6 +48,10 @@ pub struct Config {
     /// when something serves it to them encrypted: `https://…`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface_reached_at: Option<String>,
+    /// The Host's own address on the Internet, when the web interface is
+    /// reached there, encrypted under a certificate given to that address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface_public: Option<String>,
 }
 
 /// What writes down what the Owner says aloud.

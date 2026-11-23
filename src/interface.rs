@@ -75,6 +75,8 @@ struct Shared {
     screen: Mutex<(u64, Vec<u8>)>,
     /// The names the interface is served under, beside its address.
     names: Vec<String>,
+    /// True when the Owner's devices reach the interface encrypted.
+    encrypted: bool,
     /// What the Owner called their Agent.
     agent: String,
     language: String,
@@ -283,6 +285,10 @@ impl Interface {
             inbox: home.join("workspace/inbox"),
             waiting: Mutex::new(Vec::new()),
             screen: Mutex::new((0, Vec::new())),
+            encrypted: crate::Config::load(home)
+                .ok()
+                .and_then(|config| config.interface_reached_at)
+                .is_some_and(|reached| reached.starts_with("https://")),
             names: crate::Config::load(home)
                 .ok()
                 .and_then(|config| config.interface_reached_at)
@@ -576,10 +582,11 @@ async fn pair(
         return refused(StatusCode::UNAUTHORIZED, "wrong code");
     }
     // Sent back by the browser to this place only, and never read by a page.
-    let secure = headers
-        .get("x-forwarded-proto")
-        .and_then(|proto| proto.to_str().ok())
-        .is_some_and(|proto| proto == "https");
+    let secure = shared.encrypted
+        || headers
+            .get("x-forwarded-proto")
+            .and_then(|proto| proto.to_str().ok())
+            .is_some_and(|proto| proto == "https");
     let cookie = format!(
         "orbite_device={token}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict{}",
         if secure { "; Secure" } else { "" }

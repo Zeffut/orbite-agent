@@ -2,6 +2,14 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.7.0
+
+Not released yet. Your agent's page is always reached from your other devices, and setup asks which way.
+
+- **A server on the Internet is reached at its own address**, encrypted, under a certificate Let's Encrypt gives to that address: no domain name, nothing to configure. Orbite asks for the certificate, proves the address, and asks again every few days. Ports 80 and 443 of the server must be open to the Internet and free of any other web server. See [the web interface](docs/interface.md). Tried for real against Let's Encrypt's own test authority on one machine; not yet on a server on the Internet.
+- **Setup asks one thing about access**: through Tailscale, set up by itself when it is on the machine, or at the server's public address. The choice "this machine only" is gone.
+- Installing again over an earlier Orbite lets its service listen on ports 80 and 443, which the public address takes.
+
 ## 0.6.5
 
 Released on 2026-11-23. The installer and the setup have Orbite's own look, and ask less.

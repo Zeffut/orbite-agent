@@ -669,12 +669,13 @@ async fn the_interface_can_be_turned_on_later_without_going_through_setup_again(
 }
 
 #[tokio::test]
-async fn tailscale_serves_the_page_to_other_devices_only_when_the_owner_says_so() {
+async fn the_owner_says_how_their_devices_reach_the_agent_and_nothing_else_is_touched() {
     let provider = provider().await;
     let telegram = telegram(vec![]).await;
     // Each time: English, the Provider, its key and model, the browser,
-    // where to open it from, a name.
-    for (answer, served_by_tailscale) in [("2", false), ("1", true)] {
+    // how it is reached, a name. On a machine that is on Tailscale and
+    // carries the public address 203.0.113.7.
+    for (answer, through_tailscale) in [("1", true), ("2", false)] {
         let home = tempfile::tempdir().unwrap();
         let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let typed = format!("1\ncustom\n{}\n1\n1\n{answer}\nNova\n", api_key());
@@ -683,6 +684,7 @@ async fn tailscale_serves_the_page_to_other_devices_only_when_the_owner_says_so(
             .reaching_providers_at(provider.uri())
             .reaching_telegram_at(telegram.uri())
             .where_tailscale_is(true)
+            .where_the_public_address_is(Some("203.0.113.7".parse().unwrap()))
             .turning_the_interface_on_with({
                 let (asked, home) = (asked.clone(), home.path().to_owned());
                 move || {
@@ -698,12 +700,44 @@ async fn tailscale_serves_the_page_to_other_devices_only_when_the_owner_says_so(
             .unwrap();
         let shown = String::from_utf8(shown).unwrap();
 
-        assert!(shown.contains("adds one entry to your Tailscale"), "{shown}");
-        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), served_by_tailscale);
+        assert!(shown.contains("How will your devices reach your agent?"), "{shown}");
+        // Tailscale is asked to serve the page only when it was chosen.
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), through_tailscale);
         let config = Config::load(home.path()).unwrap();
+        // Either way the interface itself stays on the machine, behind what encrypts.
         assert_eq!(config.interface.as_deref(), Some("127.0.0.1:8377"));
-        assert_eq!(config.interface_reached_at.is_some(), served_by_tailscale, "{shown}");
+        if through_tailscale {
+            assert_eq!(config.interface_public, None);
+            assert!(shown.contains("https://host.example.ts.net:8377/#"), "{shown}");
+        } else {
+            assert_eq!(config.interface_public.as_deref(), Some("203.0.113.7"));
+            assert!(shown.contains("https://203.0.113.7/#"), "{shown}");
+            assert!(shown.contains("Ports 80 and 443"), "{shown}");
+        }
     }
+}
+
+#[tokio::test]
+async fn a_server_behind_anothers_address_is_asked_for_its_public_one() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![]).await;
+    // The public way, an address of a private network, a word, then a real one.
+    let typed = format!("1\ncustom\n{}\n1\n1\n2\n10.0.0.4\nhere\n198.51.100.20\nNova\n", api_key());
+    let mut shown = Vec::new();
+    Setup::in_home(home.path(), typed.as_bytes(), &mut shown)
+        .reaching_providers_at(provider.uri())
+        .reaching_telegram_at(telegram.uri())
+        .turning_the_interface_on_with(|| Ok(()))
+        .run(None)
+        .await
+        .unwrap();
+    let shown = String::from_utf8(shown).unwrap();
+
+    assert!(shown.contains("private network") && shown.contains("not an address"), "{shown}");
+    let config = Config::load(home.path()).unwrap();
+    assert_eq!(config.interface_public.as_deref(), Some("198.51.100.20"));
+    assert_eq!(config.interface_reached_at.as_deref(), Some("https://198.51.100.20"));
 }
 
 #[tokio::test]

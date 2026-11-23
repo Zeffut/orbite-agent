@@ -76,6 +76,8 @@ pub struct Setup<F> {
     /// True when this machine is on a Tailscale network, which can serve
     /// the web interface to the Owner's other devices.
     tailscale_here: bool,
+    /// The address this Host carries on the Internet, when it has one.
+    public_address: Option<std::net::IpAddr>,
     providers_at: Option<String>,
     /// True when the Provider being set up is added to those there are.
     adding: bool,
@@ -111,6 +113,7 @@ impl<F: Front> Setup<F> {
             front,
             turn_interface_on: None,
             tailscale_here: false,
+            public_address: None,
             providers_at: None,
             adding: false,
             telegram_at: "https://api.telegram.org".into(),
@@ -135,6 +138,12 @@ impl<F: Front> Setup<F> {
     /// then asked before the web interface is served through it.
     pub fn where_tailscale_is(mut self, here: bool) -> Self {
         self.tailscale_here = here;
+        self
+    }
+
+    /// Says which address of the Internet this machine carries, if any.
+    pub fn where_the_public_address_is(mut self, address: Option<std::net::IpAddr>) -> Self {
+        self.public_address = address;
         self
     }
 
@@ -640,50 +649,91 @@ impl<F: Front> Setup<F> {
         })
     }
 
-    /// Turns the web interface on; done on its own, says where it will be
-    /// reached, which a whole setup says at its end.
+    /// Turns the web interface on, reached from the Owner's devices the
+    /// way they choose: through their Tailscale network, or at the address
+    /// this Host has on the Internet. Done on its own, says where it will
+    /// be reached, which a whole setup says at its end.
     fn interface(
         &mut self,
         config: &mut Config,
         language: Language,
         alone: bool,
     ) -> Result<(), SetupError> {
-        // Serving it through the Owner's Tailscale network changes that
-        // network's settings: it is theirs to say, unless they already did.
-        let mut by_tailscale = self.turn_interface_on.is_some();
-        if by_tailscale && self.tailscale_here && config.interface_reached_at.is_none() {
-            let choices = [
-                Choice::of(language.say("From all my devices", "Depuis tous mes appareils"))
-                    .hinted(
-                        language.say("through Tailscale, encrypted", "par Tailscale, en chiffré"),
-                    )
-                    .also(&["tailscale"]),
-                Choice::of(
-                    language.say("From this machine only", "Depuis cette machine seulement"),
+        // Asked where there is a real machine to open: either way changes
+        // something of the Owner's, which is theirs to say.
+        let mut public = None;
+        if self.turn_interface_on.is_some() {
+            let on_tailscale = if self.tailscale_here {
+                language.say(
+                    "already on this machine, set up by itself",
+                    "déjà sur cette machine, réglé tout seul",
                 )
-                .also(&["local"]),
+            } else {
+                language.say(
+                    "a private network between your devices",
+                    "un réseau privé entre tes appareils",
+                )
+            };
+            let choices = [
+                Choice::of(language.say("Through Tailscale", "Par Tailscale"))
+                    .hinted(on_tailscale)
+                    .also(&["tailscale"]),
+                Choice::of(language.say(
+                    "At this server's public address",
+                    "Par l'adresse publique de ce serveur",
+                ))
+                .hinted(
+                    language.say("for a server on the Internet", "pour un serveur sur Internet"),
+                )
+                .also(&["public"]),
             ];
-            let question =
-                language.say("Where do you want to open it from?", "D'où veux-tu l'ouvrir ?");
-            self.front.say(language.say(
-                "This machine is on Tailscale. Orbite can have it serve your agent's page to                  your other devices, and to nobody else: that adds one entry to your Tailscale                  settings, which turning the web interface off removes.",
-                "Cette machine est sur Tailscale. Orbite peut lui faire servir la page de ton                  agent à tes autres appareils, et à personne d'autre : cela ajoute une entrée à                  tes réglages Tailscale, que la désactivation de l'interface web retire.",
-            ));
-            by_tailscale = self.front.choose(question, &choices, 0, None)? == Picked::Choice(0);
+            // What the machine has comes first.
+            let suggested = usize::from(!self.tailscale_here && self.public_address.is_some());
+            let question = language.say(
+                "How will your devices reach your agent?",
+                "Par où tes appareils rejoindront-ils ton agent ?",
+            );
+            if self.front.choose(question, &choices, suggested, None)? == Picked::Choice(1) {
+                public = Some(self.public(language)?);
+            }
         }
         self.front.working(language.say("Opening the page...", "Ouverture de la page..."));
-        match self.turn_interface_on.as_mut().filter(|_| by_tailscale || !self.tailscale_here) {
-            Some(turn_on) => {
+        match (public, &mut self.turn_interface_on) {
+            (Some(address), _) => {
+                let named = match address {
+                    std::net::IpAddr::V4(address) => address.to_string(),
+                    std::net::IpAddr::V6(address) => format!("[{address}]"),
+                };
+                config.interface = Some("127.0.0.1:8377".into());
+                config.interface_reached_at = Some(format!("https://{named}"));
+                config.interface_public = Some(address.to_string());
+                config.save(&self.home).map_err(stopped)?;
+            }
+            (None, Some(turn_on)) if self.tailscale_here => {
                 turn_on().map_err(stopped)?;
                 *config = Config::load(&self.home).map_err(stopped)?;
             }
-            None => {
+            // Nothing to reach it through yet: on this machine meanwhile.
+            (None, _) => {
                 config.interface = Some("127.0.0.1:8377".into());
                 config.save(&self.home).map_err(stopped)?;
             }
         }
-        match (&config.interface_reached_at, &config.interface) {
-            (Some(reached), _) => {
+        match (&config.interface_public, &config.interface_reached_at, &config.interface) {
+            (Some(_), reached, _) => {
+                self.front.good(language.say(
+                    "Reached at this server's address, encrypted",
+                    "Joignable à l'adresse de ce serveur, en chiffré",
+                ));
+                if alone {
+                    self.front.show(reached.as_deref().unwrap_or_default());
+                    self.front.say(language.say(
+                        "Ports 80 and 443 of this server must be open to the Internet.",
+                        "Les ports 80 et 443 de ce serveur doivent être ouverts vers Internet.",
+                    ));
+                }
+            }
+            (None, Some(reached), _) => {
                 self.front.good(language.say(
                     "Reached from the devices of your Tailscale network, encrypted",
                     "Joignable depuis les appareils de ton réseau Tailscale, en chiffré",
@@ -692,26 +742,56 @@ impl<F: Front> Setup<F> {
                     self.front.show(reached);
                 }
             }
-            (None, served) => {
+            (None, None, served) => {
                 self.front.good(language.say(
-                    "Reached in a browser on this machine",
-                    "Joignable dans un navigateur sur cette machine",
+                    "Reached in a browser on this machine, for now",
+                    "Joignable dans un navigateur sur cette machine, pour l'instant",
                 ));
                 if alone {
                     self.front.show(&format!("http://{}", served.as_deref().unwrap_or_default()));
-                }
-                if alone {
-                    self.front.say(language.say(
-                        "To reach it from your phone too, put this machine and your phone on \
-                         Tailscale (tailscale.com), then tell your agent: turn the web interface on.",
-                        "Pour y accéder aussi depuis ton téléphone, mets cette machine et ton \
-                         téléphone sur Tailscale (tailscale.com), puis dis à ton agent : active \
-                         l'interface web.",
-                    ));
+                    self.front.say(self.to_reach_it_from_elsewhere(language));
                 }
             }
         }
         Ok(())
+    }
+
+    /// What to do for the page to be reached from other devices, where
+    /// Tailscale is not on this machine yet.
+    fn to_reach_it_from_elsewhere(&self, language: Language) -> &'static str {
+        language.say(
+            "To reach it from your phone, put Tailscale on this machine and on your phone \
+             (tailscale.com/download), then tell your agent: turn the web interface on.",
+            "Pour y accéder depuis ton téléphone, mets Tailscale sur cette machine et sur ton \
+             téléphone (tailscale.com/download), puis dis à ton agent : active l'interface web.",
+        )
+    }
+
+    /// The address this Host has on the Internet: the one it carries, or
+    /// the one its Owner gives when it sits behind another's.
+    fn public(&mut self, language: Language) -> Result<std::net::IpAddr, SetupError> {
+        if let Some(address) = self.public_address {
+            return Ok(address);
+        }
+        loop {
+            let answer = self.front.ask(language.say(
+                "This server's public address (the one you connect to it by)",
+                "L'adresse publique de ce serveur (celle par laquelle tu t'y connectes)",
+            ))?;
+            match answer.trim().parse::<std::net::IpAddr>() {
+                Ok(address) if !crate::is_private(&std::net::SocketAddr::new(address, 0)) => {
+                    return Ok(address);
+                }
+                Ok(_) => self.front.wrong(language.say(
+                    "That is an address of a private network: nothing on the Internet reaches it.",
+                    "C'est une adresse de réseau privé : rien sur Internet ne l'atteint.",
+                )),
+                Err(_) => self.front.wrong(language.say(
+                    "That is not an address: it looks like 203.0.113.7.",
+                    "Ce n'est pas une adresse : elle ressemble à 203.0.113.7.",
+                )),
+            }
+        }
     }
 
     async fn telegram(
@@ -879,35 +959,29 @@ impl<F: Front> Setup<F> {
         let code = crate::pairing_code(&self.home).map_err(stopped)?;
         let at = config.interface_reached_at.clone().unwrap_or(format!("http://{served}"));
         // Reached from other devices, or from this machine only for now.
-        let (open_it, more) = match config.interface_reached_at {
-            Some(_) => (
+        let on_other_devices = language.say(
+            "is waiting for you. Open this on your phone or your computer:",
+            "t'attend. Ouvre ceci sur ton téléphone ou ton ordinateur :",
+        );
+        let (open_it, more) = match (&config.interface_public, &config.interface_reached_at) {
+            (Some(_), _) => (
+                on_other_devices,
                 language.say(
-                    "is waiting for you. Open this on your phone or your computer:",
-                    "t'attend. Ouvre ceci sur ton téléphone ou ton ordinateur :",
-                ),
-                "",
+                    "\nPorts 80 and 443 of this server must be open to the Internet. The page \
+                     answers a few seconds after Orbite starts, once its certificate is given.",
+                    "\nLes ports 80 et 443 de ce serveur doivent être ouverts vers Internet. La \
+                     page répond quelques secondes après le démarrage d'Orbite, le temps que \
+                     son certificat soit donné.",
+                )
+                .to_owned(),
             ),
-            None => (
+            (None, Some(_)) => (on_other_devices, String::new()),
+            (None, None) => (
                 language.say(
                     "is waiting for you. Open this in a browser on this machine:",
                     "t'attend. Ouvre ceci dans un navigateur sur cette machine :",
                 ),
-                if self.tailscale_here {
-                    language.say(
-                        "\nTo reach it from your other devices later, tell your agent: turn the \
-                         web interface on.",
-                        "\nPour y accéder plus tard depuis tes autres appareils, dis à ton \
-                         agent : active l'interface web.",
-                    )
-                } else {
-                    language.say(
-                        "\nTo reach it from your phone too, put this machine and your phone on \
-                         Tailscale (tailscale.com), then tell your agent: turn the web interface on.",
-                        "\nPour y accéder aussi depuis ton téléphone, mets cette machine et ton \
-                         téléphone sur Tailscale (tailscale.com), puis dis à ton agent : active \
-                         l'interface web.",
-                    )
-                },
+                format!("\n{}", self.to_reach_it_from_elsewhere(language)),
             ),
         };
         self.front.finish(

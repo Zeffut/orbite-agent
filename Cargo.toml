@@ -16,6 +16,7 @@ ed25519-dalek = "3.0.0"
 flate2 = "1.1.11"
 getrandom = "0.4.3"
 html2text = "0.17.4"
+instant-acme = { version = "0.8", features = ["rcgen"] }
 libc = "0.2.191"
 pulldown-cmark = { version = "0.13.6", default-features = false }
 qrcode = { version = "0.15.0", default-features = false }
@@ -23,18 +24,21 @@ reqwest = { version = "0.13.5", default-features = false, features = ["json", "r
 rpassword = "7.5.5"
 rquickjs = "0.14.0"
 rusqlite = { version = "0.43.0", features = ["bundled"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
 scraper = "0.29.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
 tar = "0.4.46"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "io-std", "time", "process", "signal"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 url = "2.5.8"
 x11rb = { version = "0.14.0", features = ["xtest"] }
 
 [dev-dependencies]
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
+rcgen = "0.14"
 tempfile = "3.27.0"
 wiremock = "0.6.5"
 

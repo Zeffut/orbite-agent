@@ -157,6 +157,42 @@ async fn run() -> Result<(), Failure> {
         Some(address) => Some(interface_at(&home, &address, &config).await?),
         None => None,
     };
+    // On a Host with an address on the Internet, the door there: opened
+    // beside the Conversation, which goes on whether or not it opens.
+    let public = config.interface_public.as_deref().and_then(|address| address.parse().ok());
+    if let (Some(interface), Some(public)) = (&interface, public) {
+        let mut door = orbite::Door::of(&home, public, interface.address());
+        // For trying it out against an authority of one's own, on ports
+        // that take no privilege.
+        if let Some(directory) = setting("ORBITE_ACME_DIRECTORY") {
+            door = door.asking(directory, setting("ORBITE_ACME_ROOT").map(PathBuf::from));
+        }
+        if let Some(ports) = setting("ORBITE_DOOR_PORTS")
+            && let Some((plain, encrypted)) = ports.split_once(',')
+            && let (Ok(plain), Ok(encrypted)) = (plain.parse(), encrypted.parse())
+        {
+            let on = |port| std::net::SocketAddr::new(public, port);
+            door = door.listening_on(on(plain), on(encrypted));
+        }
+        let kept = home.join("door");
+        tokio::spawn(async move {
+            if let Err(error) = door.open().await {
+                let trouble = match error.kind() {
+                    std::io::ErrorKind::AddrInUse => format!(
+                        "something else on this machine already listens on port 80 or 443 \
+                         ({error}): they must be left to Orbite"
+                    ),
+                    _ => format!(
+                        "ports 80 and 443 of this machine could not be listened on ({error}): \
+                         run the installer again, which lets Orbite's service use them"
+                    ),
+                };
+                eprintln!("The web interface is not reached from the Internet: {trouble}");
+                let _ = fs::create_dir_all(&kept);
+                let _ = fs::write(kept.join("trouble"), trouble);
+            }
+        });
+    }
     let agent = agent()?;
     let terminal = env::args()
         .any(|argument| argument == "--terminal")
@@ -451,7 +487,8 @@ fn reach() -> Option<Result<String, String>> {
     let tailscale = orbite::tailscale()?;
     match asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["on"] => Some(orbite::open_on_tailscale(&tailscale, DEFAULT_INTERFACE.parse().ok()?)),
-        ["off"] => {
+        // Off, or reached another way: what Tailscale served is closed.
+        ["off"] | ["public"] | ["public", _] => {
             let _ = orbite::close_on_tailscale(&tailscale, DEFAULT_INTERFACE.parse().ok()?);
             None
         }
@@ -469,10 +506,18 @@ fn interface(reach: Option<Result<String, String>>) -> Result<(), Failure> {
     let asked: Vec<String> = env::args().skip(2).collect();
     match asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => match &config.interface {
-            Some(address) => println!(
-                "The web interface is served at {}\nLet a device in: orbite pair",
-                config.interface_reached_at.clone().unwrap_or(format!("http://{address}"))
-            ),
+            Some(address) => {
+                println!(
+                    "The web interface is served at {}\nLet a device in: orbite pair",
+                    config.interface_reached_at.clone().unwrap_or(format!("http://{address}"))
+                );
+                // What kept it from being reached from the Internet, if anything.
+                if config.interface_public.is_some()
+                    && let Ok(trouble) = fs::read_to_string(home.join("door/trouble"))
+                {
+                    println!("It is not reached yet: {trouble}.");
+                }
+            }
             None => println!("The web interface is off. Turn it on: orbite interface on"),
         },
         ["on"] | ["on", _] => {
@@ -491,6 +536,7 @@ fn interface(reach: Option<Result<String, String>>) -> Result<(), Failure> {
             }
             config.interface = Some(address.to_owned());
             config.interface_reached_at = reach.clone().and_then(Result::ok);
+            config.interface_public = None;
             config.save(&home)?;
             let applies = "It applies at the next start of Orbite (as a service: sudo systemctl \
                            restart orbite).\nThen let a device in: orbite pair";
@@ -515,16 +561,51 @@ fn interface(reach: Option<Result<String, String>>) -> Result<(), Failure> {
                 "The web interface is reached at {reached}\nIt applies at the next start of Orbite."
             );
         }
+        // On the Host's own address on the Internet, encrypted under a
+        // certificate asked for that address.
+        ["public"] | ["public", _] => {
+            let address = match asked.get(1) {
+                Some(given) => given.parse().map_err(|_| format!("{given} is not an address."))?,
+                None => orbite::public_address().ok_or(
+                    "This machine carries no address of the Internet itself. If it is reached \
+                     at one all the same, say which: orbite interface public ADDRESS",
+                )?,
+            };
+            if orbite::is_private(&std::net::SocketAddr::new(address, 0)) {
+                return Err(format!(
+                    "{address} is an address of a private network: nothing on the Internet \
+                     reaches it. Use Tailscale there: orbite interface on"
+                )
+                .into());
+            }
+            let named = match address {
+                std::net::IpAddr::V4(address) => address.to_string(),
+                std::net::IpAddr::V6(address) => format!("[{address}]"),
+            };
+            config.interface = Some(DEFAULT_INTERFACE.to_owned());
+            config.interface_reached_at = Some(format!("https://{named}"));
+            config.interface_public = Some(address.to_string());
+            config.save(&home)?;
+            println!(
+                "The web interface will be reached at https://{named}\nencrypted, under a \
+                 certificate Let's Encrypt gives to that address. Ports 80 and 443 of this \
+                 machine must be open to the Internet.\nIt applies at the next start of Orbite \
+                 (as a service: sudo systemctl restart orbite).\nThen let a device in: orbite pair"
+            );
+        }
         ["off"] => {
             config.interface = None;
             config.interface_reached_at = None;
+            config.interface_public = None;
             config.save(&home)?;
             println!("The web interface is off. It applies at the next start of Orbite.");
         }
         _ => {
-            return Err("Usage: orbite interface | interface on [ADDRESS:PORT] | interface at \
-                 https://NAME (once it is on) | interface off"
-                .into());
+            return Err(
+                "Usage: orbite interface | interface on [ADDRESS:PORT] | interface public \
+                 [ADDRESS] | interface at https://NAME (once it is on) | interface off"
+                    .into(),
+            );
         }
     }
     Ok(())
@@ -833,12 +914,14 @@ async fn setup() -> Result<(), Failure> {
     {
         let setup = Setup::shown_with(home()?, screen)
             .where_tailscale_is(orbite::tailscale().is_some())
+            .where_the_public_address_is(orbite::public_address())
             .turning_the_interface_on_with(|| switch_the_interface(true));
         return Ok(setup.run(only).await?);
     }
     let typed = std::io::BufReader::new(std::io::stdin());
     let mut setup = Setup::in_home(home()?, typed, std::io::stdout())
         .where_tailscale_is(orbite::tailscale().is_some())
+        .where_the_public_address_is(orbite::public_address())
         .turning_the_interface_on_with(|| switch_the_interface(true));
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         setup = setup.reading_secrets_with(|question| rpassword::prompt_password(question));

@@ -406,6 +406,7 @@ Group=orbite
 WorkingDirectory=$HOME_DIR
 Environment=ORBITE_HOME=$HOME_DIR
 ExecStart=$PROGRAM run
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 Restart=always
 RestartSec=3
 
@@ -413,8 +414,10 @@ RestartSec=3
 WantedBy=multi-user.target
 UNIT
 # A service file its Owner changed is not lost without a word.
-grep -v '^#' "$WORK/orbite.service" >"$WORK/service.new"
-[ -f "$ROOT$SERVICE" ] && grep -v '^#' "$ROOT$SERVICE" >"$WORK/service.old"
+# (A line the installer itself added since is no change of theirs.)
+theirs() { grep -v -e '^#' -e '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' "$1"; }
+theirs "$WORK/orbite.service" >"$WORK/service.new"
+[ -f "$ROOT$SERVICE" ] && theirs "$ROOT$SERVICE" >"$WORK/service.old"
 if [ -f "$ROOT$SERVICE" ] && [ "$(cat "$WORK/service.new")" != "$(cat "$WORK/service.old")" ]; then
     cp "$ROOT$SERVICE" "$ROOT$SERVICE.replaced"
     say "The service file had been changed: it is written anew, and the one before is kept as $SERVICE.replaced. Put changes of your own in a drop-in, which is kept: systemctl edit orbite"
@@ -648,3 +651,19 @@ if [ "$FANCY" = yes ]; then
     grep -Eq '"language": *"fr"' "$ROOT$HOME_DIR/config.json" 2>/dev/null && FRENCH=yes
 fi
 ended "$(t "Orbite is running, and will start again by itself after a restart." "Orbite tourne, et redémarrera tout seul après un redémarrage de la machine.")"
+# Reached at the server's own address: the certificate is waited for, so
+# that the link above answers, or the Owner knows why it does not.
+if grep -q '"interface_public"' "$ROOT$HOME_DIR/config.json" 2>/dev/null; then
+    doing "$(t "Asking Let's Encrypt for the certificate of this server's address" "Demande à Let's Encrypt du certificat de l'adresse de ce serveur")"
+    WAITED=0
+    while [ "$WAITED" -lt 90 ] && [ ! -s "$ROOT$HOME_DIR/door/cert.pem" ] && [ ! -s "$ROOT$HOME_DIR/door/trouble" ]; do
+        sleep 1
+        WAITED=$((WAITED + 1))
+    done
+    if [ -s "$ROOT$HOME_DIR/door/cert.pem" ]; then
+        ended "$(t "The certificate is given: the link above answers." "Le certificat est donné : le lien ci-dessus répond.")"
+    else
+        say "$(t "The certificate is not given yet:" "Le certificat n'est pas encore donné :") $(cat "$ROOT$HOME_DIR/door/trouble" 2>/dev/null || t "no answer so far" "pas de réponse pour l'instant")."
+        say "$(t "Orbite keeps asking. Open ports 80 and 443 of this server to the Internet, then see: sudo orbite interface" "Orbite continue de demander. Ouvre les ports 80 et 443 de ce serveur vers Internet, puis regarde : sudo orbite interface")"
+    fi
+fi
