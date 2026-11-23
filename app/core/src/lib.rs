@@ -154,6 +154,8 @@ pub enum Asked {
     Link,
     /// The link pasted in that form.
     Open(String),
+    /// The camera, to read the code the agent shows instead of pasting.
+    Scan,
     /// On to the agent, with the code of a first visit when there is one.
     Go(Option<String>),
 }
@@ -168,6 +170,7 @@ impl Asked {
         match path.trim_matches('/') {
             "link" => Self::Link,
             "open" => Self::Open(given("link").unwrap_or_default()),
+            "scan" => Self::Scan,
             "go" => Self::Go(given("code").filter(|code| is_a_code(code))),
             _ => Self::Start,
         }
@@ -235,6 +238,12 @@ fn page(language: Language, then: Option<&str>, inside: &str) -> String {
 /// The form the Owner pastes their agent's link in; `wrong` says why what
 /// they pasted before, shown again, led nowhere.
 pub fn link_page(language: Language, wrong: Option<(Wrong, &str)>) -> String {
+    link_page_with(language, wrong, false)
+}
+
+/// The same, offering the camera to read the agent's code where the
+/// device has one (`can_scan`).
+pub fn link_page_with(language: Language, wrong: Option<(Wrong, &str)>, can_scan: bool) -> String {
     let said = wrong.map(|(why, _)| match why {
         Wrong::NotAnAddress => language
             .say("That is not a link from your agent.", "Ce n'est pas un lien de ton agent."),
@@ -260,6 +269,17 @@ pub fn link_page(language: Language, wrong: Option<(Wrong, &str)>) -> String {
         let _ = write!(inside, "<p class=\"wrong\" role=\"alert\">{said}</p>");
     }
     inside.push_str("</form>");
+    if can_scan {
+        let _ = write!(
+            inside,
+            "<form action=\"scan\" method=\"get\"><p>{}</p><button>{}</button></form>",
+            language.say(
+                "Or point this device at the code your agent shows.",
+                "Ou vise le code que ton agent affiche.",
+            ),
+            language.say("Scan the code", "Scanner le code"),
+        );
+    }
     page(language, None, &inside)
 }
 
@@ -436,5 +456,13 @@ mod tests {
         assert!(!shown.contains("<script>alert"), "{shown}");
         assert!(shown.contains("&lt;script&gt;"), "{shown}");
         assert!(shown.contains("That is not a link from your agent."));
+    }
+
+    #[test]
+    fn a_device_with_a_camera_is_offered_to_scan_the_agents_code() {
+        let with = link_page_with(Language::French, None, true);
+        assert!(with.contains("action=\"scan\"") && with.contains("Scanner le code"), "{with}");
+        assert!(!link_page(Language::French, None).contains("scan"));
+        assert!(matches!(Asked::of("/scan", ""), Asked::Scan));
     }
 }

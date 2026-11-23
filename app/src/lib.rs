@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use orbite_app_core::{
-    Asked, Language, Unseen, away_page, leaving_page, link_page, reached, reaching_page,
+    Asked, Language, Unseen, away_page, leaving_page, link_page_with, reached, reaching_page,
     something_new, stays_in_the_app,
 };
 use tauri::http::{Request, Response};
@@ -71,11 +71,80 @@ async fn answers(address: String) -> bool {
     .unwrap_or(false)
 }
 
+/// The camera of a phone or a tablet, to read the code an agent shows:
+/// the system's own scanner, asked from here in Rust.
+#[cfg(mobile)]
+mod camera {
+    use tauri::plugin::{Builder, PluginHandle, TauriPlugin};
+    use tauri::{AppHandle, Manager, Wry};
+    // What is linked for it comes with this crate.
+    use tauri_plugin_barcode_scanner as _;
+
+    #[cfg(target_os = "ios")]
+    tauri::ios_plugin_binding!(init_plugin_barcode_scanner);
+
+    struct Camera(PluginHandle<Wry>);
+
+    pub fn init() -> TauriPlugin<Wry> {
+        Builder::new("camera")
+            .setup(|app, api| {
+                #[cfg(target_os = "android")]
+                let handle = api
+                    .register_android_plugin("app.tauri.barcodescanner", "BarcodeScannerPlugin")?;
+                #[cfg(target_os = "ios")]
+                let handle = api.register_ios_plugin(init_plugin_barcode_scanner)?;
+                app.manage(Camera(handle));
+                Ok(())
+            })
+            .build()
+    }
+
+    /// What the code the camera was pointed at says, unless the Owner gave
+    /// up or kept the camera to themselves.
+    pub fn read(app: &AppHandle) -> Option<String> {
+        let camera = app.try_state::<Camera>()?;
+        let _: Result<serde_json::Value, _> = camera.0.run_mobile_plugin("requestPermissions", ());
+        let read: serde_json::Value = camera
+            .0
+            .run_mobile_plugin(
+                "scan",
+                serde_json::json!({ "formats": ["QR_CODE"], "windowed": false }),
+            )
+            .ok()?;
+        read["content"].as_str().map(str::to_owned)
+    }
+}
+
+/// Has the camera read the agent's code, then goes on as if its link had
+/// been pasted.
+#[cfg(mobile)]
+fn scan(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let Some(read) = camera::read(&app) else { return };
+        let asked: String =
+            tauri::Url::parse_with_params(&format!("{OWN_PAGES}open"), [("link", read)])
+                .map(String::from)
+                .unwrap_or_default();
+        if let (Some(window), Ok(to)) = (app.get_webview_window("main"), asked.parse()) {
+            let _ = window.navigate(to);
+        }
+    });
+}
+
+#[cfg(not(mobile))]
+fn scan(_app: &AppHandle) {}
+
 /// The page of the app's that answers what one of its pages asked for.
 async fn shown(app: &AppHandle, path: &str, query: &str) -> String {
     let language = language();
+    let link_page = |language, wrong| link_page_with(language, wrong, cfg!(mobile));
     match Asked::of(path, query) {
         Asked::Link => link_page(language, None),
+        Asked::Scan => {
+            scan(app);
+            link_page(language, None)
+        }
         Asked::Open(pasted) => match reached(&pasted) {
             Err(wrong) => link_page(language, Some((wrong, &pasted))),
             Ok(read) => {
@@ -215,6 +284,9 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init());
+    // The camera, where there is one to read the agent's code with.
+    #[cfg(mobile)]
+    let app = app.plugin(camera::init());
     // One Orbite at a time: opened again, the one that runs comes forward.
     #[cfg(desktop)]
     let app = app
