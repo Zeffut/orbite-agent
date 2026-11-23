@@ -397,3 +397,25 @@ fn a_session_of_another_account_than_the_one_written_down_lends_nothing() {
         assert!(shown(&refused).contains("which is not ana"), "{}", shown(&refused));
     }
 }
+
+#[test]
+fn asked_without_the_right_to_read_an_installed_orbite_says_to_use_sudo() {
+    use std::os::unix::fs::PermissionsExt;
+    let machine = tempfile::tempdir().unwrap();
+    let home = machine.path().join("var/lib/orbite");
+    std::fs::create_dir_all(&home).unwrap();
+    // As the installer leaves it for anyone but the Agent's account.
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let asked = Command::new(env!("CARGO_BIN_EXE_orbite"))
+        .args(["settings"])
+        .env("ORBITE_ROOT", machine.path())
+        .env_remove("ORBITE_HOME")
+        .output()
+        .unwrap();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert!(!asked.status.success());
+    assert!(shown(&asked).contains("sudo orbite settings"), "{}", shown(&asked));
+    assert!(!shown(&asked).contains("orbite setup"), "{}", shown(&asked));
+}

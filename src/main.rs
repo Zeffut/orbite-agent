@@ -1537,8 +1537,20 @@ fn home() -> Result<PathBuf, Failure> {
     }
     let installed =
         PathBuf::from(format!("{}/var/lib/orbite", setting("ORBITE_ROOT").unwrap_or_default()));
-    if fs::read_dir(&installed).is_ok() {
-        return Ok(installed);
+    match fs::read_dir(&installed) {
+        Ok(_) => return Ok(installed),
+        // Installed, and its folder is its own account's: said, rather
+        // than taking this for a machine where nothing was set up.
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let asked: Vec<String> = env::args().skip(1).collect();
+            return Err(format!(
+                "Orbite is installed on this machine, and what it keeps is its own account's to \
+                 read. Run this with sudo: sudo orbite {}",
+                asked.join(" ")
+            )
+            .into());
+        }
+        Err(_) => {}
     }
     Ok(PathBuf::from(required("HOME")?).join(".orbite"))
 }

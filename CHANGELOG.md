@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.8.1
+
+Not released yet.
+
+- **A command run without `sudo` on an installed machine says so**, instead of answering that no AI is set up: what Orbite keeps is readable by its own account alone.
+
 ## 0.8.0
 
 Released on 2026-11-23.
