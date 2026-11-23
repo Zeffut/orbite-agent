@@ -66,6 +66,19 @@ struct SettingsView: View {
             Form {
                 if !loaded {
                     Section { ProgressView().frame(maxWidth: .infinity) }
+                } else if settings.isEmpty {
+                    // An agent older than this screen: it says so, and how to get there.
+                    Section {
+                        Text(say(
+                            "Your agent is on an older version of Orbite, which cannot be set from here yet. Tell it: update yourself.",
+                            "Ton agent est sur une version plus ancienne d'Orbite, qu'on ne peut pas encore régler d'ici. Dis-lui : mets-toi à jour."))
+                            .foregroundStyle(.secondary)
+                    }
+                    Section {
+                        Button(say("Remove this agent from this phone", "Retirer cet agent de ce téléphone"), role: .destructive) {
+                            forgetting = true
+                        }
+                    }
                 } else {
                     Section {
                         HStack {
