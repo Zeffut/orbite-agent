@@ -190,6 +190,20 @@ fn conversation(view: &View, margin: usize, wide: usize) -> Vec<Row> {
                     &[(&format!("\x1b[38;5;{colour}m"), "● "), (BOLD, &view.name)],
                 ));
                 rows.extend(written(text, margin, wide));
+                // A link that lets a device in, as a code to point a phone at.
+                let link = text
+                    .split_whitespace()
+                    .find(|word| word.starts_with("http") && word.contains("/#"))
+                    .filter(|link| {
+                        !["http://127.", "http://localhost"].iter().any(|own| link.starts_with(own))
+                    });
+                if let Some(link) = link {
+                    rows.push(Row::blank());
+                    rows.extend(crate::welcome::square_code(link).into_iter().map(|row| Row {
+                        text: format!("{}{}", " ".repeat(margin), row.text),
+                        width: margin + row.width,
+                    }));
+                }
             }
             Said::Ask { summary, detail, critical, irreversible, ask } => {
                 let waited_on = view.asked().is_some_and(|(asked, _)| asked == *ask);
@@ -752,6 +766,18 @@ mod tests {
         assert!(shown.contains("Plan") && !shown.contains("##"), "{shown}");
         assert!(shown.contains("• First thing") && !shown.contains("**"), "{shown}");
         assert!(shown.contains("1. one") && shown.contains("code here"), "{shown}");
+    }
+
+    #[test]
+    fn a_link_that_lets_a_device_in_is_drawn_as_a_code_to_point_a_phone_at() {
+        let pairing =
+            "On the device, open https://host.example.ts.net:8377/#ABCD-EFGH\n\nIt works once.";
+        let shown = letters(&frame(&talking(vec![Said::Agent(pairing.into())]), 100, 50, 0));
+        assert!(shown.contains("█▀▀▀▀▀█"), "{shown}");
+        // One this machine alone can follow is of no use to a phone.
+        let local = "On the device, open http://127.0.0.1:8377/#ABCD-EFGH";
+        let shown = letters(&frame(&talking(vec![Said::Agent(local.into())]), 100, 50, 0));
+        assert!(!shown.contains("█▀▀▀▀▀█"), "{shown}");
     }
 
     #[test]

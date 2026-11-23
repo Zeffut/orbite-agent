@@ -6,6 +6,7 @@ What changed in each version of Orbite, for the people who run it.
 
 Released on 2026-11-23.
 
+- **The terminal's conversation draws the code to scan** when your agent gives a link that lets a device in.
 - **Settings can be shown as an app shows its own**: a device reads them and changes them without a word in the conversation. The iPhone app's settings screen is built on it.
 - **Which computer your agent uses is chosen once, when Orbite is installed**: this machine's own desktop, or a computer of its own. It is written where only root writes; the setting is gone, and your agent cannot change it. An Orbite installed before keeps what it had.
 
