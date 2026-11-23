@@ -76,7 +76,7 @@ SECOND=$(systemctl show -p MainPID --value orbite)
 # Installing again keeps the Owner's data and leaves the service running.
 # This time as the guide says to: the script read by sh from its input.
 sh < "$RELEASE/install.sh"
-grep -q '"telegram_owner":1' /var/lib/orbite/config.json
+grep -Eq '"telegram_owner": *1' /var/lib/orbite/config.json
 sleep 3
 [ "$(systemctl is-active orbite)" = "active" ]
 
@@ -192,7 +192,7 @@ done
 env -u ORBITE_SKIP_SETUP setsid sh "$RELEASE/install.sh" </dev/null | tee /root/install.out
 grep -q "no terminal here" /root/install.out
 ORBITE_HOME=/var/lib/orbite /usr/local/bin/orbite restore /root/orbite-export.tar.gz
-grep -q '"telegram_owner":1' /var/lib/orbite/config.json
+grep -Eq '"telegram_owner": *1' /var/lib/orbite/config.json
 [ -z "$(find /var/lib/orbite ! -user orbite)" ]
 as_orbite /usr/local/bin/orbite secret list | grep -q ORBITE_TELEGRAM_TOKEN
 systemctl restart orbite
