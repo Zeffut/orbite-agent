@@ -94,6 +94,8 @@ struct WelcomeView: View {
                 looks = drawn
                 name = value("name")
             }
+            // Started on one of its pages, when it is being tried out.
+            step = min(max(UserDefaults.standard.integer(forKey: "page"), 0), steps - 1)
         }
     }
 
