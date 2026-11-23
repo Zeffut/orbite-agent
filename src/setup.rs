@@ -200,16 +200,16 @@ impl<F: Front> Setup<F> {
             self.adding = true;
             self.provider(&mut config, &secrets, language).await?;
         }
-        // Where the Conversation is held: in a browser, in Telegram, or both.
+        // The Conversation is held in a browser, reached from the Owner's
+        // devices. Telegram is for whoever wants it too, and asks for it.
         let linked = config.telegram_owner.is_some() && has(TELEGRAM_TOKEN)?;
         let (in_a_browser, in_telegram) = match only {
-            None if config.interface.is_none() && !linked => {
-                self.front.step(3, STEPS);
-                self.place(language)?
-            }
-            None => (false, false),
+            None => (config.interface.is_none() && !linked, false),
             Some(only) => (only == Step::Interface, only == Step::Telegram),
         };
+        if in_a_browser && only.is_none() {
+            self.front.step(3, STEPS);
+        }
         if in_a_browser {
             self.interface(&mut config, language, only.is_some())?;
         }
@@ -626,29 +626,6 @@ impl<F: Front> Setup<F> {
         models.iter().filter_map(|model| model["id"].as_str().map(str::to_owned)).take(15).collect()
     }
 
-    /// Asks where the Owner will talk to their Agent: in a browser, in
-    /// Telegram, in that order.
-    fn place(&mut self, language: Language) -> Result<(bool, bool), SetupError> {
-        let choices =
-            [
-                Choice::of(language.say("In a browser", "Dans un navigateur"))
-                    .hinted(language.say(
-                        "on your computer and your phone",
-                        "sur ton ordinateur et ton téléphone",
-                    ))
-                    .also(&["browser", "web", "navigateur"]),
-                Choice::of(language.say("In Telegram", "Dans Telegram")).also(&["telegram"]),
-                Choice::of(language.say("Both", "Les deux")).also(&["both", "les deux"]),
-            ];
-        let question =
-            language.say("Where will you talk to your agent?", "Où parleras-tu à ton agent ?");
-        Ok(match self.front.choose(question, &choices, 0, None)? {
-            Picked::Choice(1) => (false, true),
-            Picked::Choice(2) => (true, true),
-            _ => (true, false),
-        })
-    }
-
     /// Turns the web interface on, reached from the Owner's devices the
     /// way they choose: through their Tailscale network, or at the address
     /// this Host has on the Internet. Done on its own, says where it will
@@ -682,9 +659,7 @@ impl<F: Front> Setup<F> {
                     "At this server's public address",
                     "Par l'adresse publique de ce serveur",
                 ))
-                .hinted(
-                    language.say("for a server on the Internet", "pour un serveur sur Internet"),
-                )
+                .hinted(language.say("a server on the Internet", "serveur sur Internet"))
                 .also(&["public"]),
             ];
             // What the machine has comes first.
@@ -761,6 +736,18 @@ impl<F: Front> Setup<F> {
     /// What to do for the page to be reached from other devices, where
     /// Tailscale is not on this machine yet.
     fn to_reach_it_from_elsewhere(&self, language: Language) -> &'static str {
+        // Tailscale is there and would not serve the page: most often its
+        // certificates are not turned on for the Owner's network yet.
+        if self.tailscale_here {
+            return language.say(
+                "Tailscale could not serve it to your other devices. Turn on HTTPS Certificates \
+                 in Tailscale's admin console (under DNS), then tell your agent: turn the web \
+                 interface on.",
+                "Tailscale n'a pas pu la servir à tes autres appareils. Active « HTTPS \
+                 Certificates » dans la console d'administration de Tailscale (sous DNS), puis \
+                 dis à ton agent : active l'interface web.",
+            );
+        }
         language.say(
             "To reach it from your phone, put Tailscale on this machine and on your phone \
              (tailscale.com/download), then tell your agent: turn the web interface on.",

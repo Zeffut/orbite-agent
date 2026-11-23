@@ -156,10 +156,15 @@ async fn set_up(
 }
 
 /// What an Owner types on a first run: English, the Provider "custom", its
-/// key, the first model offered, Telegram, the bot's token, then a name of
-/// their own.
+/// key, the first model offered, then a name of their own.
 fn first_run() -> String {
-    format!("1\ncustom\n{}\n1\n2\n{}\nNova\n", api_key(), bot_token())
+    format!("1\ncustom\n{}\n1\nNova\n", api_key())
+}
+
+/// What an Owner who wants their Agent in Telegram too does afterwards:
+/// that part of setup, and the bot's token. What was shown.
+async fn link_telegram(home: &Path, provider: &MockServer, telegram: &MockServer) -> String {
+    set_up(home, &format!("{}\n", bot_token()), provider, telegram, Some(Step::Telegram)).await
 }
 
 async fn sent_to_owner(telegram: &MockServer) -> Vec<String> {
@@ -183,7 +188,13 @@ async fn a_first_setup_ends_with_everything_kept_and_a_first_message_from_the_na
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
 
-    let shown = set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    let mut shown = set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    // Telegram is not asked about: the Agent is talked to in a browser.
+    assert!(!shown.contains("Telegram"), "{shown}");
+    assert!(shown.contains("Nova is waiting for you"), "{shown}");
+    assert_eq!(Config::load(home.path()).unwrap().interface.as_deref(), Some("127.0.0.1:8377"));
+    // Whoever wants it there too sets that part up.
+    shown.push_str(&link_telegram(home.path(), &provider, &telegram).await);
 
     let config = Config::load(home.path()).unwrap();
     assert_eq!(config.language.as_deref(), Some("en"));
@@ -196,8 +207,8 @@ async fn a_first_setup_ends_with_everything_kept_and_a_first_message_from_the_na
         "the Owner is shown which bot was recognised: {shown}"
     );
     assert!(shown.contains(CODE), "{shown}");
-    let greetings = sent_to_owner(&telegram).await;
-    assert!(greetings.last().unwrap().contains("Nova"), "{greetings:?}");
+    let said = sent_to_owner(&telegram).await;
+    assert!(said.last().unwrap().contains("Linked"), "{said:?}");
 }
 
 #[tokio::test]
@@ -206,7 +217,8 @@ async fn keys_and_tokens_are_sealed_and_appear_in_no_file_in_the_clear() {
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
 
-    let shown = set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    let mut shown = set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    shown.push_str(&link_telegram(home.path(), &provider, &telegram).await);
 
     let secrets = Secrets::kept_in(home.path());
     assert_eq!(secrets.get("ORBITE_PROVIDER_KEY").unwrap(), Some(api_key()));
@@ -228,7 +240,7 @@ async fn a_wrong_api_key_is_explained_and_asked_for_again() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\nwrong-key\n{}\n1\n\n2\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\nwrong-key\n{}\n1\nNova\n", api_key());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -244,9 +256,9 @@ async fn a_wrong_bot_token_is_explained_and_asked_for_again() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\n{}\n1\n\n2\nnot-a-token\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("not-a-token\n{}\n", bot_token());
 
-    let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
+    let shown = set_up(home.path(), &typed, &provider, &telegram, Some(Step::Telegram)).await;
 
     assert!(shown.contains("BotFather"), "the Owner is told where a token comes from: {shown}");
     assert_eq!(
@@ -267,7 +279,7 @@ async fn the_owner_is_whoever_sends_the_code_and_nobody_else() {
     ])
     .await;
 
-    set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    link_telegram(home.path(), &provider, &telegram).await;
 
     assert_eq!(Config::load(home.path()).unwrap().telegram_owner, Some(OWNER));
 }
@@ -289,9 +301,7 @@ async fn a_setup_cut_short_resumes_where_it_stopped() {
     assert!(outcome.is_err(), "setup cannot finish without the rest");
     let asked_before = provider.received_requests().await.unwrap().len();
 
-    let shown =
-        set_up(home.path(), &format!("2\n{}\nNova\n", bot_token()), &provider, &telegram, None)
-            .await;
+    let shown = set_up(home.path(), "Nova\n", &provider, &telegram, None).await;
 
     assert_eq!(
         provider.received_requests().await.unwrap().len(),
@@ -308,6 +318,7 @@ async fn one_part_can_be_done_again_without_touching_the_rest() {
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
     set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    link_telegram(home.path(), &provider, &telegram).await;
 
     set_up(home.path(), "Sol\n", &provider, &telegram, Some(Step::Name)).await;
 
@@ -322,13 +333,13 @@ async fn setup_speaks_the_language_the_owner_chooses() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("2\ncustom\n{}\n1\n\n2\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("2\ncustom\n{}\n1\nNova\n", api_key());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
     assert_eq!(Config::load(home.path()).unwrap().language.as_deref(), Some("fr"));
     assert!(shown.contains("clé d'API"), "{shown}");
-    assert!(sent_to_owner(&telegram).await.last().unwrap().contains("Bonjour"));
+    assert!(shown.contains("Tout est prêt. Nova t'attend"), "{shown}");
 }
 
 #[tokio::test]
@@ -336,7 +347,7 @@ async fn a_name_can_be_picked_from_the_suggestions_and_a_model_typed_by_hand() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\n{}\nmodel-of-my-own\n\n2\n{}\n1\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\n{}\nmodel-of-my-own\n1\n", api_key());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -352,7 +363,7 @@ async fn the_code_is_not_left_for_the_agent_to_take_for_a_message() {
     let provider = provider().await;
     let telegram = telegram(vec![message(100, 666, "hello"), message(101, OWNER, CODE)]).await;
 
-    set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    link_telegram(home.path(), &provider, &telegram).await;
 
     // Telegram forgets what was delivered once the next one is asked for.
     let asked = telegram.received_requests().await.unwrap();
@@ -369,7 +380,7 @@ async fn the_model_is_not_a_question_where_the_provider_has_a_usual_one() {
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
 
     // English, Groq, its key; then where to talk and a name: no model.
-    let typed = format!("1\ngroq\n{}\n2\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("1\ngroq\n{}\nNova\n", api_key());
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
     let config = Config::load(home.path()).unwrap();
@@ -409,7 +420,7 @@ async fn a_model_known_not_to_act_is_chosen_only_after_the_owner_insists() {
     orbite::keep_rating(home.path(), "custom", "model-mute", &verdict).unwrap();
 
     // The mute model, declined at the warning; then the first one offered.
-    let typed = format!("1\ncustom\n{}\nmodel-mute\nno\n1\n2\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\n{}\nmodel-mute\nno\n1\nNova\n", api_key());
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
     assert!(shown.contains("cannot act") && shown.contains("Strongly discouraged"), "{shown}");
     assert_eq!(Config::load(home.path()).unwrap().provider.unwrap().model, "model-large");
@@ -523,8 +534,7 @@ async fn an_owner_with_a_chatgpt_plan_signs_in_by_a_link_instead_of_giving_a_key
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
     // English, the ChatGPT plan, a wrong paste then the right address,
     // Telegram, the bot's token, a name: the plan's own model is taken.
-    let bot = bot_token();
-    let typed = ["1", "chatgpt", "nonsense", "<address>", "2", bot.as_str(), "Nova"];
+    let typed = ["1", "chatgpt", "nonsense", "<address>", "Nova"];
     let owner = Answering {
         lines: typed.iter().map(|line| line.to_string()).collect(),
         shown: shown.clone(),
@@ -553,7 +563,7 @@ async fn an_owner_with_a_chatgpt_plan_signs_in_by_a_link_instead_of_giving_a_key
     let secrets = Secrets::kept_in(home.path());
     assert!(secrets.get("ORBITE_CHATGPT").unwrap().unwrap().contains("refresh-of-the-plan"));
     assert!(secrets.get(orbite::PROVIDER_KEY).unwrap().is_none());
-    assert!(sent_to_owner(&telegram).await.last().unwrap().contains("Nova"));
+    assert!(shown.contains("Nova is waiting for you"), "{shown}");
 }
 
 #[tokio::test]
@@ -600,7 +610,7 @@ async fn an_owner_who_chooses_the_browser_needs_no_telegram_and_ends_with_a_link
     let provider = provider().await;
     let telegram = telegram(vec![]).await;
     // English, the Provider, its key and model, no lighter model, the browser, a name.
-    let typed = format!("1\ncustom\n{}\n1\n\n1\nNova\n", api_key());
+    let typed = format!("1\ncustom\n{}\n1\nNova\n", api_key());
 
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
@@ -638,20 +648,21 @@ async fn an_owner_who_chooses_the_browser_needs_no_telegram_and_ends_with_a_link
 }
 
 #[tokio::test]
-async fn an_owner_may_choose_both_and_is_greeted_in_each() {
+async fn telegram_is_added_afterwards_by_whoever_wants_it_and_the_browser_stays() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    let typed = format!("1\ncustom\n{}\n1\n\n3\n{}\nNova\n", api_key(), bot_token());
+    let shown = set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    assert!(shown.contains("http://127.0.0.1:8377/#"), "{shown}");
+    assert_eq!(Config::load(home.path()).unwrap().telegram_owner, None);
 
-    let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
+    let linking = link_telegram(home.path(), &provider, &telegram).await;
 
     let config = Config::load(home.path()).unwrap();
     assert_eq!(config.interface.as_deref(), Some("127.0.0.1:8377"));
     assert_eq!(config.telegram_owner, Some(OWNER));
-    assert!(shown.contains("http://127.0.0.1:8377/#"), "{shown}");
-    assert!(shown.contains("in Telegram too"), "{shown}");
-    assert!(sent_to_owner(&telegram).await.last().unwrap().contains("Nova"));
+    assert!(linking.contains("Your Telegram account is linked"), "{linking}");
+    assert!(sent_to_owner(&telegram).await.last().unwrap().contains("Linked"));
 }
 
 #[tokio::test]
@@ -659,7 +670,8 @@ async fn the_interface_can_be_turned_on_later_without_going_through_setup_again(
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    set_up(home.path(), &first_run(), &provider, &telegram, None).await;
+    // An Agent set up before the browser was the place to talk to it.
+    link_telegram(home.path(), &provider, &telegram).await;
     assert_eq!(Config::load(home.path()).unwrap().interface, None);
 
     let shown = set_up(home.path(), "", &provider, &telegram, Some(Step::Interface)).await;
@@ -678,7 +690,7 @@ async fn the_owner_says_how_their_devices_reach_the_agent_and_nothing_else_is_to
     for (answer, through_tailscale) in [("1", true), ("2", false)] {
         let home = tempfile::tempdir().unwrap();
         let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let typed = format!("1\ncustom\n{}\n1\n1\n{answer}\nNova\n", api_key());
+        let typed = format!("1\ncustom\n{}\n1\n{answer}\nNova\n", api_key());
         let mut shown = Vec::new();
         Setup::in_home(home.path(), typed.as_bytes(), &mut shown)
             .reaching_providers_at(provider.uri())
@@ -723,7 +735,7 @@ async fn a_server_behind_anothers_address_is_asked_for_its_public_one() {
     let provider = provider().await;
     let telegram = telegram(vec![]).await;
     // The public way, an address of a private network, a word, then a real one.
-    let typed = format!("1\ncustom\n{}\n1\n1\n2\n10.0.0.4\nhere\n198.51.100.20\nNova\n", api_key());
+    let typed = format!("1\ncustom\n{}\n1\n2\n10.0.0.4\nhere\n198.51.100.20\nNova\n", api_key());
     let mut shown = Vec::new();
     Setup::in_home(home.path(), typed.as_bytes(), &mut shown)
         .reaching_providers_at(provider.uri())
@@ -745,12 +757,12 @@ async fn a_telegram_that_cannot_be_reached_is_said_without_the_token() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     // Telegram at an address nothing listens on, then the Owner leaves.
-    let typed = format!("1\ncustom\n{}\n1\n2\n{}\n", api_key(), bot_token());
+    let typed = format!("{}\n", bot_token());
     let mut shown = Vec::new();
     let ended = Setup::in_home(home.path(), typed.as_bytes(), &mut shown)
         .reaching_providers_at(provider.uri())
         .reaching_telegram_at("http://127.0.0.1:9")
-        .run(None)
+        .run(Some(Step::Telegram))
         .await;
 
     assert!(ended.is_err(), "setup went on without Telegram");

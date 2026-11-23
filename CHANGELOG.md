@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.7.1
+
+Released on 2026-11-23.
+
+- **Setup no longer asks where you will talk to your agent.** It is talked to in a browser, on the page Orbite serves; setup only asks how your devices reach it. Telegram is for whoever wants it too: `sudo orbite setup telegram`.
+
 ## 0.7.0
 
 Released on 2026-11-23. Your agent's page is always reached from your other devices, and setup asks which way.
