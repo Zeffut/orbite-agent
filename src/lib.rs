@@ -59,7 +59,7 @@ pub use desk::{
     NotOffered, SOCKET as DESK_SOCKET, lending as lending_this_computer,
     offer as offer_this_computer,
 };
-pub use door::{Door, public_address};
+pub use door::{Door, is_of_the_internet, public_address};
 pub use front::{Choice, Front, Left, Lines, Mood, Picked};
 pub use hearing::{Advice, MODELS, Machine, Model, chosen as chosen_transcriber, transcription};
 pub use interface::{

@@ -407,6 +407,7 @@ WorkingDirectory=$HOME_DIR
 Environment=ORBITE_HOME=$HOME_DIR
 ExecStart=$PROGRAM run
 AmbientCapabilities=CAP_NET_BIND_SERVICE
+LimitNOFILE=8192
 Restart=always
 RestartSec=3
 
@@ -415,7 +416,7 @@ WantedBy=multi-user.target
 UNIT
 # A service file its Owner changed is not lost without a word.
 # (A line the installer itself added since is no change of theirs.)
-theirs() { grep -v -e '^#' -e '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' "$1"; }
+theirs() { grep -v -e '^#' -e '^AmbientCapabilities=CAP_NET_BIND_SERVICE$' -e '^LimitNOFILE=8192$' "$1"; }
 theirs "$WORK/orbite.service" >"$WORK/service.new"
 [ -f "$ROOT$SERVICE" ] && theirs "$ROOT$SERVICE" >"$WORK/service.old"
 if [ -f "$ROOT$SERVICE" ] && [ "$(cat "$WORK/service.new")" != "$(cat "$WORK/service.old")" ]; then

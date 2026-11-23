@@ -25,9 +25,6 @@ use crate::{Answer, Approval, Channel, Step};
 
 /// How long a pairing code can be used, in seconds.
 const CODE_LASTS: i64 = 600;
-/// How many wrong codes are taken before every code is void: nobody finds
-/// one by trying them all.
-const WRONG_CODES: i64 = 8;
 /// The largest file a device may send, in bytes.
 const UPLOAD_LIMIT: usize = 50_000_000;
 /// How many files may wait to be sent with a message.
@@ -543,16 +540,12 @@ async fn pair(
     };
     let let_in = {
         let database = shared.database.lock().expect("not poisoned");
-        let tried: i64 = database
-            .query_row("SELECT COUNT(*) FROM wrong_codes", (), |row| row.get(0))
-            .unwrap_or_default();
-        let good = tried < WRONG_CODES
-            && database
-                .execute(
-                    "DELETE FROM codes WHERE code = ?1 AND until >= ?2",
-                    (hashed(&code), now()),
-                )
-                .is_ok_and(|used| used == 1);
+        // The right code is let in whatever was tried before it: a
+        // stranger who guesses at random must not be able to keep the
+        // Owner out. What stops guessing is how many codes there are.
+        let good = database
+            .execute("DELETE FROM codes WHERE code = ?1 AND until >= ?2", (hashed(&code), now()))
+            .is_ok_and(|used| used == 1);
         if good {
             // A name is a device's own: a second of the same name is numbered.
             let taken = |name: &str| {
@@ -571,14 +564,13 @@ async fn pair(
                 )
                 .is_ok()
         } else {
-            let _ = database.execute("INSERT INTO wrong_codes (at) VALUES (?1)", [now()]);
-            if tried + 1 >= WRONG_CODES {
-                let _ = database.execute("DELETE FROM codes", ());
-            }
             false
         }
     };
     if !let_in {
+        // A wrong code is answered slowly: of the million million there
+        // are, few can be tried in the ten minutes one lasts.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         return refused(StatusCode::UNAUTHORIZED, "wrong code");
     }
     // Sent back by the browser to this place only, and never read by a page.

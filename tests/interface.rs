@@ -144,7 +144,7 @@ async fn a_device_that_was_not_paired_sees_nothing_and_sends_nothing() {
 }
 
 #[tokio::test]
-async fn a_pairing_code_works_once_and_trying_many_voids_them_all() {
+async fn a_pairing_code_works_once_and_a_stranger_guessing_cannot_keep_the_owner_out() {
     let home = tempfile::tempdir().unwrap();
     let provider = ScriptedProvider::default();
     let first = agent_with_a_paired_browser(home.path(), &provider).await;
@@ -155,18 +155,22 @@ async fn a_pairing_code_works_once_and_trying_many_voids_them_all() {
     assert_eq!(Browser::at(address).pairs_with(&code).await, 200);
     assert_eq!(Browser::at(address).pairs_with(&code).await, 401);
 
-    // Guessing is given up on: after a few wrong ones, even the right one is void.
+    // Guesses are answered slowly, and void nothing: whoever reaches the
+    // page from the Internet cannot keep the Owner's own device out.
     let code = orbite::pairing_code(home.path()).unwrap();
+    let began = std::time::Instant::now();
     for _ in 0..8 {
         assert_eq!(Browser::at(address).pairs_with("ZZZZ-ZZZZ").await, 401);
     }
+    assert!(began.elapsed() >= std::time::Duration::from_secs(2), "{:?}", began.elapsed());
+    assert_eq!(Browser::at(address).pairs_with(&code).await, 200);
+    // Used, it is gone like any other.
     assert_eq!(Browser::at(address).pairs_with(&code).await, 401);
-    // A fresh code, asked for on the Host, works again.
     let code = orbite::pairing_code(home.path()).unwrap();
     assert_eq!(Browser::at(address).pairs_with(&code).await, 200);
     let names: Vec<String> =
         orbite::interface_devices(home.path()).unwrap().into_iter().map(|one| one.name).collect();
-    assert_eq!(names.len(), 3, "{names:?}");
+    assert_eq!(names.len(), 4, "{names:?}");
 }
 
 #[tokio::test]

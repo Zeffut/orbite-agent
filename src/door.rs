@@ -26,7 +26,70 @@ const ASKED_AGAIN_AFTER: Duration = Duration::from_secs(60 * 3600);
 
 /// How many devices may be connected at once: more are turned away rather
 /// than left to take everything the Host has.
-const AT_ONCE: usize = 256;
+const AT_ONCE: usize = 1024;
+
+/// And how many of those one address may hold.
+const FROM_ONE_ADDRESS: usize = 32;
+
+/// A connection nothing passes through for this long is closed: the
+/// interface itself says something to a device every few seconds.
+const IDLE: Duration = Duration::from_secs(120);
+
+/// How many connections each address holds.
+#[derive(Default)]
+struct Visitors(Mutex<HashMap<IpAddr, usize>>);
+
+/// One connection of an address, counted until it ends.
+struct Visit {
+    among: Arc<Visitors>,
+    from: IpAddr,
+}
+
+impl Visitors {
+    /// Counts one more connection from `from`, unless it holds `most`.
+    fn admit(self: &Arc<Self>, from: IpAddr, most: usize) -> Option<Visit> {
+        let mut held = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count = held.entry(from).or_default();
+        if *count >= most {
+            return None;
+        }
+        *count += 1;
+        Some(Visit { among: self.clone(), from })
+    }
+}
+
+impl Drop for Visit {
+    fn drop(&mut self) {
+        let mut held = self.among.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = held.get_mut(&self.from) {
+            *count -= 1;
+            if *count == 0 {
+                held.remove(&self.from);
+            }
+        }
+    }
+}
+
+/// The next connection to `listening`, when there is room for it and for
+/// the address it comes from.
+async fn admitted(
+    listening: &TcpListener,
+    at_once: &Arc<tokio::sync::Semaphore>,
+    visitors: &Arc<Visitors>,
+    from_one: usize,
+) -> Option<(TcpStream, tokio::sync::OwnedSemaphorePermit, Visit)> {
+    let (stream, from) = match listening.accept().await {
+        Ok(accepted) => accepted,
+        // Out of something the system gives: waited for, not spun on.
+        Err(_) => {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            return None;
+        }
+    };
+    let place = at_once.clone().try_acquire_owned().ok()?;
+    let visit = visitors.admit(from.ip(), from_one)?;
+    Some((stream, place, visit))
+}
 
 /// What Let's Encrypt is told to prove the address is ours, by its token.
 type Proofs = Arc<Mutex<HashMap<String, String>>>;
@@ -90,10 +153,16 @@ impl Door {
     pub async fn open(self) -> io::Result<()> {
         let proving = TcpListener::bind(self.proving_on).await?;
         let serving = TcpListener::bind(self.serving_on).await?;
-        std::fs::create_dir_all(self.kept())?;
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let made = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(self.kept());
+            made?;
+        }
         let proofs: Proofs = Arc::default();
         let encrypting: Encrypting = Arc::default();
-        if let Ok(config) = encrypting_with(&self.kept()) {
+        if self.is_fresh()
+            && let Ok(config) = encrypting_with(&self.kept())
+        {
             *encrypting.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(config);
         }
         tokio::spawn(prove(proving, proofs.clone(), self.address, self.serving_on.port()));
@@ -128,11 +197,15 @@ impl Door {
 
     /// True when there is a certificate young enough to keep.
     fn is_fresh(&self) -> bool {
+        // Given to another address, it is of no use at this one.
+        let for_this = std::fs::read_to_string(self.kept().join("address"))
+            .is_ok_and(|given_to| given_to.trim() == self.address.to_string());
         let given =
             std::fs::metadata(self.kept().join("cert.pem")).and_then(|kept| kept.modified());
-        given.is_ok_and(|given| {
-            SystemTime::now().duration_since(given).is_ok_and(|age| age < ASKED_AGAIN_AFTER)
-        })
+        for_this
+            && given.is_ok_and(|given| {
+                SystemTime::now().duration_since(given).is_ok_and(|age| age < ASKED_AGAIN_AFTER)
+            })
     }
 
     /// Asks the authority for a certificate for the address, proving the
@@ -179,7 +252,9 @@ impl Door {
         // The key first, and readable by the Agent's account alone.
         let kept = self.kept();
         write_private(&kept.join("key.pem"), key.as_bytes()).map_err(|error| error.to_string())?;
-        std::fs::write(kept.join("cert.pem"), chain).map_err(|error| error.to_string())
+        write_private(&kept.join("cert.pem"), chain.as_bytes())
+            .and_then(|()| std::fs::write(kept.join("address"), self.address.to_string()))
+            .map_err(|error| error.to_string())
     }
 
     /// This installation's account at the authority: the one it has, or a
@@ -243,12 +318,16 @@ fn encrypting_with(kept: &Path) -> Result<Arc<rustls::ServerConfig>, String> {
 /// prove the address, and for anything else, the way to the encrypted side.
 async fn prove(listening: TcpListener, proofs: Proofs, address: IpAddr, encrypted_port: u16) {
     let at_once = Arc::new(tokio::sync::Semaphore::new(AT_ONCE));
+    let visitors = Arc::<Visitors>::default();
     loop {
-        let Ok((mut asking, _)) = listening.accept().await else { continue };
-        let Ok(place) = at_once.clone().try_acquire_owned() else { continue };
+        // Few from one address: the authority asks from several of its own.
+        let Some((mut asking, place, visit)) = admitted(&listening, &at_once, &visitors, 8).await
+        else {
+            continue;
+        };
         let proofs = proofs.clone();
         tokio::spawn(async move {
-            let _place = place;
+            let _held = (place, visit);
             let answer = async {
                 // The first line says what is asked; nothing more is read.
                 let mut head = vec![0u8; 2048];
@@ -302,9 +381,13 @@ async fn prove(listening: TcpListener, proofs: Proofs, address: IpAddr, encrypte
 /// to the interface behind, and its answers encrypted back.
 async fn serve(listening: TcpListener, encrypting: Encrypting, behind: SocketAddr) {
     let at_once = Arc::new(tokio::sync::Semaphore::new(AT_ONCE));
+    let visitors = Arc::<Visitors>::default();
     loop {
-        let Ok((device, _)) = listening.accept().await else { continue };
-        let Ok(place) = at_once.clone().try_acquire_owned() else { continue };
+        let Some((device, place, visit)) =
+            admitted(&listening, &at_once, &visitors, FROM_ONE_ADDRESS).await
+        else {
+            continue;
+        };
         // Until there is a certificate, nobody is answered.
         let Some(config) =
             encrypting.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
@@ -312,16 +395,52 @@ async fn serve(listening: TcpListener, encrypting: Encrypting, behind: SocketAdd
             continue;
         };
         tokio::spawn(async move {
-            let _place = place;
+            let _held = (place, visit);
             let greeted = tokio_rustls::TlsAcceptor::from(config).accept(device);
-            let Ok(Ok(mut device)) = tokio::time::timeout(Duration::from_secs(15), greeted).await
+            let Ok(Ok(device)) = tokio::time::timeout(Duration::from_secs(15), greeted).await
             else {
                 return;
             };
             let Ok(mut interface) = TcpStream::connect(behind).await else { return };
-            let _ = tokio::io::copy_bidirectional(&mut device, &mut interface).await;
+            let (mut from_device, mut to_device) = tokio::io::split(device);
+            let (mut from_interface, mut to_interface) = interface.split();
+            let (mut said, mut answered) = (vec![0u8; 16 * 1024], vec![0u8; 16 * 1024]);
+            // Passed on both ways, until one side ends or nothing passes
+            // for too long.
+            loop {
+                let passing = async {
+                    tokio::select! {
+                        read = from_device.read(&mut said) => match read {
+                            Ok(read) if read > 0 => to_interface.write_all(&said[..read]).await.is_ok(),
+                            _ => false,
+                        },
+                        read = from_interface.read(&mut answered) => match read {
+                            Ok(read) if read > 0 => to_device.write_all(&answered[..read]).await.is_ok(),
+                            _ => false,
+                        },
+                    }
+                };
+                if tokio::time::timeout(IDLE, passing).await != Ok(true) {
+                    break;
+                }
+            }
+            let _ = to_device.shutdown().await;
         });
     }
+}
+
+/// True when `address` is one a device on the Internet could reach.
+pub fn is_of_the_internet(address: IpAddr) -> bool {
+    let special = match address {
+        IpAddr::V4(address) => {
+            address.is_unspecified() || address.is_broadcast() || address.is_multicast()
+        }
+        // One of the older kind written as the newer is given as the older.
+        IpAddr::V6(address) => {
+            address.is_unspecified() || address.is_multicast() || address.to_ipv4_mapped().is_some()
+        }
+    };
+    !special && !crate::is_private(&SocketAddr::new(address, 0))
 }
 
 /// The address this Host has on the Internet, when one of its own network

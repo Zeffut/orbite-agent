@@ -189,6 +189,9 @@ async fn below_the_free_level_critical_actions_ask_and_are_never_allowed_for_alw
         "sqlite3 ../interface.db \"INSERT INTO devices VALUES (NULL,'x','y',0,0)\"",
         "python3 -c \"import sqlite3; sqlite3.connect('../interface.db')\"",
         // The place the Agent is lent a desktop at.
+        // What opens the web interface to the Internet.
+        "orbite interface public",
+        "sed -i 's/\"interface\"/\"interface_public\":\"198.51.100.2\",\"interface\"/' ../config.json",
         "python3 -c \"import socket; socket.socket(socket.AF_UNIX).bind('\\0orbite-desk')\"",
     ] {
         dictate(&owner, "run_command", json!({ "command": command }));

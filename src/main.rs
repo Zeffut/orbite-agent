@@ -49,8 +49,23 @@ Read from the environment:
 
 type Failure = Box<dyn std::error::Error>;
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    // The service is let listen on the ports the Internet expects, and
+    // nothing it starts is: the right is kept from passing on, before any
+    // other thread exists to pass it.
+    // SAFETY: a plain system call, on this process alone.
+    unsafe { libc::prctl(libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) };
+    match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime.block_on(asked()),
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Does what was asked on the command line.
+async fn asked() -> ExitCode {
     // Everything but what changes the machine itself is done as the Agent's
     // own account, even when asked as root.
     let command = env::args().nth(1).unwrap_or_default();
@@ -571,10 +586,10 @@ fn interface(reach: Option<Result<String, String>>) -> Result<(), Failure> {
                      at one all the same, say which: orbite interface public ADDRESS",
                 )?,
             };
-            if orbite::is_private(&std::net::SocketAddr::new(address, 0)) {
+            if !orbite::is_of_the_internet(address) {
                 return Err(format!(
-                    "{address} is an address of a private network: nothing on the Internet \
-                     reaches it. Use Tailscale there: orbite interface on"
+                    "{address} is not an address the Internet reaches a machine at. On a \
+                     private network, use Tailscale: orbite interface on"
                 )
                 .into());
             }

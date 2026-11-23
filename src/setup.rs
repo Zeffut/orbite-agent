@@ -716,6 +716,8 @@ impl<F: Front> Setup<F> {
             // Nothing to reach it through yet: on this machine meanwhile.
             (None, _) => {
                 config.interface = Some("127.0.0.1:8377".into());
+                config.interface_reached_at = None;
+                config.interface_public = None;
                 config.save(&self.home).map_err(stopped)?;
             }
         }
@@ -779,9 +781,7 @@ impl<F: Front> Setup<F> {
                 "L'adresse publique de ce serveur (celle par laquelle tu t'y connectes)",
             ))?;
             match answer.trim().parse::<std::net::IpAddr>() {
-                Ok(address) if !crate::is_private(&std::net::SocketAddr::new(address, 0)) => {
-                    return Ok(address);
-                }
+                Ok(address) if crate::is_of_the_internet(address) => return Ok(address),
                 Ok(_) => self.front.wrong(language.say(
                     "That is an address of a private network: nothing on the Internet reaches it.",
                     "C'est une adresse de réseau privé : rien sur Internet ne l'atteint.",

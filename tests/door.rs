@@ -35,9 +35,14 @@ async fn a_device_reaches_the_interface_encrypted_and_is_sent_there_from_the_pla
     std::fs::create_dir_all(home.path().join("door")).unwrap();
     std::fs::write(home.path().join("door/cert.pem"), made.cert.pem()).unwrap();
     std::fs::write(home.path().join("door/key.pem"), made.signing_key.serialize_pem()).unwrap();
+    std::fs::write(home.path().join("door/address"), "127.0.0.1").unwrap();
     let address: IpAddr = "127.0.0.1".parse().unwrap();
     tokio::spawn(
-        Door::of(home.path(), address, *behind.address()).listening_on(plain, encrypted).open(),
+        // No authority is ever asked here: the certificate is young.
+        Door::of(home.path(), address, *behind.address())
+            .asking("http://127.0.0.1:9/directory", None)
+            .listening_on(plain, encrypted)
+            .open(),
     );
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -60,6 +65,44 @@ async fn a_device_reaches_the_interface_encrypted_and_is_sent_there_from_the_pla
     );
     // And nothing of the interface is served there.
     assert_eq!(behind.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn one_address_holds_only_so_many_connections_and_the_others_are_still_served() {
+    let home = tempfile::tempdir().unwrap();
+    let behind = interface().await;
+    let (plain, encrypted) = (free_port(), free_port());
+    let made = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_owned()]).unwrap();
+    std::fs::create_dir_all(home.path().join("door")).unwrap();
+    std::fs::write(home.path().join("door/cert.pem"), made.cert.pem()).unwrap();
+    std::fs::write(home.path().join("door/key.pem"), made.signing_key.serialize_pem()).unwrap();
+    std::fs::write(home.path().join("door/address"), "127.0.0.1").unwrap();
+    tokio::spawn(
+        Door::of(home.path(), "127.0.0.1".parse().unwrap(), *behind.address())
+            .asking("http://127.0.0.1:9/directory", None)
+            .listening_on(plain, encrypted)
+            .open(),
+    );
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Connections that say nothing, as many as one address may hold.
+    let mut silent = Vec::new();
+    for _ in 0..32 {
+        silent.push(tokio::net::TcpStream::connect(encrypted).await.unwrap());
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // One more from there is closed at once, rather than kept.
+    use tokio::io::AsyncReadExt;
+    let mut more = tokio::net::TcpStream::connect(encrypted).await.unwrap();
+    let closed = tokio::time::timeout(Duration::from_secs(3), more.read(&mut [0u8; 8])).await;
+    assert!(matches!(closed, Ok(Ok(0)) | Ok(Err(_))), "it was kept: {closed:?}");
+    // Once those give up their places, the address is served again.
+    drop(silent);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let trusting = reqwest::Certificate::from_pem(made.cert.pem().as_bytes()).unwrap();
+    let device = reqwest::Client::builder().add_root_certificate(trusting).build().unwrap();
+    let page = device.get(format!("https://127.0.0.1:{}/", encrypted.port())).send().await.unwrap();
+    assert_eq!(page.text().await.unwrap(), "the interface");
 }
 
 /// Run against a certificate authority of one's own (Let's Encrypt's

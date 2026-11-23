@@ -22,7 +22,8 @@ The service is let listen on ports 80 and 443 (one capability, `CAP_NET_BIND_SER
 
 ## Consequences
 
-- On the Internet the pairing code is all that stands between a stranger and the Conversation: what limits wrong codes matters there as nowhere else.
+- On the Internet the pairing code is all that stands between a stranger and the Conversation. Wrong codes void nothing, or a stranger would keep the Owner out at will: they are answered slowly, and there are too many codes (two to the fortieth) for guessing to find one in the ten minutes it lasts. One address holds only so many connections, and a silent one is closed.
+- The right to listen on those ports is the service's alone: it is kept from passing to what the Agent runs.
 - Ports 80 and 443 must be open to the Internet, at the provider's firewall too, and free of any other web server. The installer waits for the certificate and says so when it is not given.
 - A Host behind another's address (most home connections, some clouds) does not carry its public address: the Owner gives it, and the ports must be passed on to the machine.
 - An install made before this decision has a service that may not listen on those ports: running the installer again writes it anew.

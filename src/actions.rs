@@ -1395,6 +1395,9 @@ fn names_orbites_own(command: &str) -> bool {
         "orbite.db",
         // Where the Agent is lent a desktop.
         "orbite-desk",
+        // What opens the web interface to the Internet.
+        "interface public",
+        "interface_public",
     ];
     // As the shell will read it: quotes and backslashes inside a name hide
     // nothing.
