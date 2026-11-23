@@ -1696,14 +1696,11 @@ async fn update() -> Result<(), Failure> {
 /// What is being done, shown with a mark that turns until it is.
 #[derive(Default)]
 struct Steps {
-    turning: std::sync::Mutex<
-        Option<(
-            std::sync::Arc<std::sync::atomic::AtomicBool>,
-            std::thread::JoinHandle<()>,
-            String,
-        )>,
-    >,
+    turning: std::sync::Mutex<Option<Turning>>,
 }
+
+/// A mark that turns: what stops it, what draws it, and what it says.
+type Turning = (std::sync::Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<()>, String);
 
 impl Steps {
     /// Ticks off what was being done, and shows what is begun.

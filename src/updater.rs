@@ -39,6 +39,9 @@ fn failed(what: &str, error: impl fmt::Display) -> UpdateError {
     UpdateError(format!("{what}: {error}"))
 }
 
+/// Told each thing an update begins.
+type Watching = Box<dyn Fn(&str) + Send + Sync>;
+
 pub struct Updater {
     running: String,
     release: String,
@@ -48,7 +51,7 @@ pub struct Updater {
     wait: Duration,
     http: reqwest::Client,
     /// Told each thing as it is begun, for whoever is watching.
-    watched: Option<Box<dyn Fn(&str) + Send + Sync>>,
+    watched: Option<Watching>,
 }
 
 impl Updater {
