@@ -419,3 +419,33 @@ fn asked_without_the_right_to_read_an_installed_orbite_says_to_use_sudo() {
     assert!(shown(&asked).contains("sudo orbite settings"), "{}", shown(&asked));
     assert!(!shown(&asked).contains("orbite setup"), "{}", shown(&asked));
 }
+
+#[test]
+fn which_computer_the_agent_uses_is_chosen_once_and_stays() {
+    let machine = tempfile::tempdir().unwrap();
+    let choose = |typed: &str| {
+        let mut asked = Command::new(env!("CARGO_BIN_EXE_orbite"))
+            .args(["setup", "computer"])
+            .env("ORBITE_ROOT", machine.path())
+            .env_remove("ORBITE_HOME")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        asked.stdin.take().unwrap().write_all(typed.as_bytes()).unwrap();
+        asked.wait_with_output().unwrap()
+    };
+    let written = machine.path().join("usr/local/share/orbite/computer");
+
+    // A computer of its own, the second of the two offered.
+    let chosen = choose("2\n");
+    assert!(chosen.status.success(), "{}", shown(&chosen));
+    assert!(shown(&chosen).contains("chosen once"), "{}", shown(&chosen));
+    assert_eq!(std::fs::read_to_string(&written).unwrap().trim(), "own");
+
+    // Asked again, it says what was chosen and changes nothing.
+    let again = choose("1\n");
+    assert!(shown(&again).contains("a computer of its own") && shown(&again).contains("stays"));
+    assert_eq!(std::fs::read_to_string(&written).unwrap().trim(), "own");
+}

@@ -1311,8 +1311,6 @@ impl<P: Provider + 'static> Agent<P> {
                 .replace(" it always asks", " you always ask")
         ));
         if let Some(desk) = &self.host.computer {
-            // As the Owner set it, read each time: it may have just changed.
-            desk.keep_to_its_own(matches!(self.store.setting("computer_own"), Ok(Some(_))));
             // Said either way: the Agent is never left to guess where it acts.
             instructions.push_str(&match desk.which() {
                 crate::computer::Which::This(account) => format!(

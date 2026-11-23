@@ -5,7 +5,7 @@ The Agent's Computer comes in two kinds, on the Host:
 - **This computer**: the desktop people see on the machine's screen, with its programs, its windows and the accounts signed in there. What the Agent does, its Owner watches, and can take over with the keyboard.
 - **A computer of its own**: a screen nobody looks at, with a browser that is the Agent's alone. Nothing of the Owner's is on it.
 
-**This computer is used whenever the Host has a desktop to offer**, because most Owners give Orbite a machine of its own, and an agent that works where they can see it is the one they expect. A Host without a desktop (a server in a data centre) has only the second kind. The Owner chooses in plain words, or in the settings, and the Agent is told which one it is on.
+**This computer is used whenever the Host has a desktop to offer**, because most Owners give Orbite a machine of its own, and an agent that works where they can see it is the one they expect. A Host without a desktop (a server in a data centre) has only the second kind. The Owner chooses when Orbite is installed, once: the choice is written where only root writes, and neither a setting nor the Agent changes it afterwards (decided on 2026-11-23, in place of a setting that could be changed in plain words). The Agent is told which one it is on.
 
 ## How the desktop is reached
 

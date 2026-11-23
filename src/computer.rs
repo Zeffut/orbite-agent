@@ -741,16 +741,6 @@ impl Desk {
         self.lent.clone()
     }
 
-    /// Keeps to a Computer of the Agent's own, or not, as the Owner says.
-    pub(crate) fn keep_to_its_own(&self, keep: bool) {
-        let kept = self.keeps_to_its_own.swap(keep, std::sync::atomic::Ordering::Relaxed);
-        // Sent back to a Computer of its own, the Agent has let go: coming
-        // back to this one is asked again.
-        if keep && !kept {
-            *self.taken_until.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        }
-    }
-
     /// Does `something` on this computer's desktop when one is offered and
     /// wanted; `None` otherwise, and once the desktop stopped answering:
     /// the session ended, and the Agent is back on a Computer of its own.

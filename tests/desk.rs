@@ -140,15 +140,6 @@ async fn a_desktop_offered_by_its_account_is_the_agents_computer_until_its_owner
         .expect("no picture was kept");
     assert_eq!(size_of(&shown), (853, 427));
 
-    // Told to keep to a computer of its own, it leaves the desktop alone.
-    owner.says("/settings computer own");
-    heard(&mut owner).await;
-    owner.says("Look at your screen.");
-    assert_eq!(heard(&mut owner).await, "Looked.");
-    let told = provider.last_instructions();
-    assert!(told.contains("Your Computer is your own"), "{told}");
-    assert!(!told.contains("this machine's own desktop"), "{told}");
-
     // Once Orbite stops, the helper has nothing to serve and ends with it.
     drop(owner);
     tokio::time::timeout(Duration::from_secs(20), running).await.unwrap().unwrap();

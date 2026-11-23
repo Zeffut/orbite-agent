@@ -144,6 +144,7 @@ impl Machine {
             "etc/systemd/system/orbite-update.timer",
             "etc/xdg/autostart/orbite-desk.desktop",
             "usr/local/share/orbite/desk",
+            "usr/local/share/orbite/computer",
             "var/lib/orbite/orbite.db",
             "var/lib/orbite/memory/owner.md",
         ] {

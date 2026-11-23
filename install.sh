@@ -456,7 +456,29 @@ fi
 # helper offers it from the graphical session of whoever installed Orbite,
 # and of nobody else. Where no desktop is ever opened, it never runs.
 OWNER_ACCOUNT="${SUDO_USER:-}"
-if [ -n "$OWNER_ACCOUNT" ] && [ "$OWNER_ACCOUNT" != root ] && [ -d "$ROOT/etc/xdg/autostart" ] &&
+# Which computer the agent uses is chosen once, here: this machine's own
+# desktop, or a computer of its own. It is written where only root writes,
+# and is not asked again when Orbite is installed over itself.
+COMPUTER_OF=/usr/local/share/orbite/computer
+CHOSEN=$(cat "$ROOT$COMPUTER_OF" 2>/dev/null || true)
+if [ -z "$CHOSEN" ]; then
+    CHOSEN=own
+    if [ -n "$OWNER_ACCOUNT" ] && [ "$OWNER_ACCOUNT" != root ] && [ -d "$ROOT/etc/xdg/autostart" ]; then
+        # A machine with a desktop: its Owner says. Where nobody can be
+        # asked, the desktop it is, as most give Orbite a machine of its own.
+        CHOSEN=this
+        if [ "${ORBITE_SKIP_SETUP:-}" != "1" ] && (: </dev/tty) 2>/dev/null; then
+            settle
+            "$PROGRAM" setup computer </dev/tty || true
+            CHOSEN=$(cat "$ROOT$COMPUTER_OF" 2>/dev/null || echo this)
+        fi
+    fi
+    if mkdir -p "$ROOT${COMPUTER_OF%/*}" && echo "$CHOSEN" >"$ROOT$COMPUTER_OF"; then
+        chmod 755 "$ROOT${COMPUTER_OF%/*}"
+        chmod 644 "$ROOT$COMPUTER_OF"
+    fi
+fi
+if [ "$CHOSEN" = this ] && [ -n "$OWNER_ACCOUNT" ] && [ "$OWNER_ACCOUNT" != root ] && [ -d "$ROOT/etc/xdg/autostart" ] &&
     OWNER_NUMBER=$(id -u "$OWNER_ACCOUNT" 2>/dev/null); then
     # Whose it is is written where only root writes: the agent's account
     # cannot change it, and its own folder stays that of a machine not set
