@@ -5,6 +5,8 @@
 use std::fmt;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
+
+use crate::front::{Choice, Front, Left, Lines, Picked};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -55,15 +57,16 @@ fn stopped(error: impl fmt::Display) -> SetupError {
 /// Orbite is installed that takes more than the Agent's account.
 type TurnOn = Box<dyn FnMut() -> Result<(), String> + Send>;
 
-/// Reads an answer without showing it as it is typed.
-type ReadHidden = Box<dyn FnMut(&str) -> std::io::Result<String> + Send>;
+impl From<Left> for SetupError {
+    fn from(_: Left) -> Self {
+        SetupError("Setup was cut short; run it again to go on from here.".into())
+    }
+}
 
-pub struct Setup<R, W> {
+pub struct Setup<F> {
     home: PathBuf,
-    typed: R,
-    shown: W,
-    /// Reads what must not be shown as it is typed; by default, a line of `typed`.
-    hidden: Option<ReadHidden>,
+    /// What the questions are asked through.
+    front: F,
     turn_interface_on: Option<TurnOn>,
     providers_at: Option<String>,
     /// True when the Provider being set up is added to those there are.
@@ -75,15 +78,29 @@ pub struct Setup<R, W> {
     http: reqwest::Client,
 }
 
-impl<R: BufRead, W: Write> Setup<R, W> {
+impl<R: BufRead + Send, W: Write + Send> Setup<Lines<R, W>> {
     /// Setup of the installation whose folder is `home`, asking in `shown`
-    /// and reading answers from `typed`.
+    /// and reading answers from `typed`, line after line.
     pub fn in_home(home: impl Into<PathBuf>, typed: R, shown: W) -> Self {
+        Self::shown_with(home, Lines::new(typed, shown))
+    }
+
+    /// Reads keys and tokens with `read`, which shows nothing of what is typed.
+    pub fn reading_secrets_with(
+        mut self,
+        read: impl FnMut(&str) -> std::io::Result<String> + Send + 'static,
+    ) -> Self {
+        self.front.reading_secrets_with(Box::new(read));
+        self
+    }
+}
+
+impl<F: Front> Setup<F> {
+    /// Setup of the installation whose folder is `home`, asked through `front`.
+    pub fn shown_with(home: impl Into<PathBuf>, front: F) -> Self {
         Self {
             home: home.into(),
-            typed,
-            shown,
-            hidden: None,
+            front,
             turn_interface_on: None,
             providers_at: None,
             adding: false,
@@ -93,15 +110,6 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             give_up_after: Duration::from_secs(600),
             http: reqwest::Client::new(),
         }
-    }
-
-    /// Reads keys and tokens with `read`, which shows nothing of what is typed.
-    pub fn reading_secrets_with(
-        mut self,
-        read: impl FnMut(&str) -> std::io::Result<String> + Send + 'static,
-    ) -> Self {
-        self.hidden = Some(Box::new(read));
-        self
     }
 
     /// Turns the web interface on with `turn_on` rather than by writing
@@ -150,12 +158,17 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         let secrets = Secrets::kept_in(&self.home);
         let has = |name: &str| secrets.get(name).map(|kept| kept.is_some()).map_err(stopped);
         let wanted = |step: Step, done: bool| only.map_or(!done, |only| only == step);
+        // How far along the Owner is, of the four things a first setup asks.
+        const STEPS: usize = 4;
 
         if wanted(Step::Language, config.language.is_some()) {
+            self.front.step(1, STEPS);
             self.language(&mut config)?;
         }
         let language = Language::of(config.language.as_deref());
+        self.front.speak(language);
         if wanted(Step::Provider, config.provider.is_some()) {
+            self.front.step(2, STEPS);
             self.provider(&mut config, &secrets, language).await?;
         }
         if only == Some(Step::AnotherProvider) {
@@ -165,17 +178,21 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         // Where the Conversation is held: in a browser, in Telegram, or both.
         let linked = config.telegram_owner.is_some() && has(TELEGRAM_TOKEN)?;
         let (in_a_browser, in_telegram) = match only {
-            None if config.interface.is_none() && !linked => self.place(language)?,
+            None if config.interface.is_none() && !linked => {
+                self.front.step(3, STEPS);
+                self.place(language)?
+            }
             None => (false, false),
             Some(only) => (only == Step::Interface, only == Step::Telegram),
         };
         if in_a_browser {
-            self.interface(&mut config, language)?;
+            self.interface(&mut config, language, only.is_some())?;
         }
         if in_telegram {
             self.telegram(&mut config, &secrets, language).await?;
         }
         if wanted(Step::Name, config.agent_name.is_some()) {
+            self.front.step(4, STEPS);
             self.name(&mut config, language)?;
         }
         if only.is_none() {
@@ -185,13 +202,17 @@ impl<R: BufRead, W: Write> Setup<R, W> {
     }
 
     fn language(&mut self, config: &mut Config) -> Result<(), SetupError> {
-        let chosen = loop {
-            let answer = self.ask("Language / Langue\n  1. English\n  2. Français\n> ")?;
-            match answer.to_lowercase().as_str() {
-                "1" | "en" | "english" => break "en",
-                "2" | "fr" | "français" | "francais" => break "fr",
-                _ => {}
-            }
+        // The one the machine was set to comes first, when it is one of ours.
+        let of_the_machine = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .iter()
+            .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
+            .unwrap_or_default();
+        let suggested = usize::from(of_the_machine.to_lowercase().starts_with("fr"));
+        let choices =
+            [Choice::of("English").also(&["en"]), Choice::of("Français").also(&["fr", "francais"])];
+        let chosen = match self.front.choose("Language / Langue", &choices, suggested, None)? {
+            Picked::Choice(1) => "fr",
+            _ => "en",
         };
         config.language = Some(chosen.into());
         config.save(&self.home).map_err(stopped)
@@ -203,160 +224,136 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         secrets: &Secrets,
         language: Language,
     ) -> Result<(), SetupError> {
-        self.say(language.say(
-            "\nWhich AI should your agent think with?",
-            "\nAvec quelle IA ton agent doit-il réfléchir ?",
-        ))?;
-        for (place, known) in known_providers().iter().enumerate() {
-            self.say(&format!("  {}. {} ({})", place + 1, known.label, known.name))?;
-        }
-        self.say(language.say(
-            "  or \"custom\" for any server speaking OpenAI's protocol",
-            "  ou « custom » pour tout serveur parlant le protocole d'OpenAI",
-        ))?;
-        let known = loop {
-            let answer =
-                self.ask(language.say("Number or name > ", "Numéro ou nom > "))?.to_lowercase();
-            let by_number = answer
-                .parse::<usize>()
-                .ok()
-                .and_then(|number| known_providers().get(number.wrapping_sub(1)));
-            let by_name = known_providers().iter().find(|known| known.name == answer);
-            if let Some(known) = by_number.or(by_name) {
-                break *known;
-            }
-            if answer == "custom" {
-                break KnownProvider {
-                    name: "custom",
-                    label: "custom",
-                    speaks: Speaks::OpenAi,
-                    api_root: "",
-                    needs_key: true,
+        let mut choices: Vec<Choice> = known_providers()
+            .iter()
+            .map(|known| {
+                // A name, and what a label says more in brackets.
+                let (label, hint) = match known.label.split_once(" (") {
+                    Some((label, hint)) => (label, hint.trim_end_matches(')')),
+                    None => (known.label, ""),
                 };
-            }
+                let hint = match (language, hint) {
+                    (Language::French, "Plus or Pro, no API key") => {
+                        "forfait Plus ou Pro, sans clé"
+                    }
+                    (Language::French, "many models, one key") => "beaucoup de modèles, une clé",
+                    (Language::French, "on this machine") => "sur cette machine",
+                    (_, hint) => hint,
+                };
+                Choice::of(label).hinted(hint).also(&[known.name])
+            })
+            .collect();
+        choices.push(
+            Choice::of(language.say("Another server", "Un autre serveur"))
+                .hinted(language.say("speaking OpenAI's protocol", "parlant le protocole d'OpenAI"))
+                .also(&["custom"]),
+        );
+        let question = language.say(
+            "Which AI should your agent think with?",
+            "Avec quelle IA ton agent doit-il réfléchir ?",
+        );
+        let known = match self.front.choose(question, &choices, 0, None)? {
+            Picked::Choice(place) if place < known_providers().len() => known_providers()[place],
+            _ => KnownProvider {
+                name: "custom",
+                label: "custom",
+                speaks: Speaks::OpenAi,
+                api_root: "",
+                needs_key: true,
+            },
         };
-        let address = match (&self.providers_at, known.name) {
-            (Some(address), _) => Some(address.clone()),
-            (None, "custom") => Some(self.ask(
-                language.say("Its address (https://…/v1) > ", "Son adresse (https://…/v1) > "),
-            )?),
-            (None, _) => None,
-        };
+        let address =
+            match (&self.providers_at, known.name) {
+                (Some(address), _) => Some(address.clone()),
+                (None, "custom") => Some(self.front.ask(
+                    language.say("Its address (https://…/v1)", "Son adresse (https://…/v1)"),
+                )?),
+                (None, _) => None,
+            };
         let root = address.clone().unwrap_or_else(|| known.api_root.to_owned());
+        let called = known.label.split(" (").next().unwrap_or(known.label);
 
         if known.speaks == Speaks::ChatGptPlan {
             self.continue_with_chatgpt(&root, language).await?;
         }
-        // The key first, checked for real, then the model.
+        // The key first, seen to be accepted, then the model.
         let key = loop {
             if !known.needs_key {
                 break None;
             }
-            let key = self.ask_hidden(
-                language.say("API key (not shown) > ", "Clé d'API (non affichée) > "),
-            )?;
+            let key = self.front.ask_hidden(&match (language, known.name) {
+                (Language::French, "custom") => "Sa clé d'API".to_owned(),
+                (Language::English, "custom") => "Its API key".to_owned(),
+                (Language::French, _) => format!("Ta clé d'API {called}"),
+                (Language::English, _) => format!("Your {called} API key"),
+            })?;
+            self.front.working(language.say("Reaching it...", "Connexion..."));
             match self.check(&known, &key, "", &root).await {
-                Err(ProviderError::Rejected(reason)) => self.say(&format!(
+                Err(ProviderError::Rejected(reason)) => self.front.wrong(&format!(
                     "{} {reason}",
                     language.say(
                         "The provider refused this key:",
                         "Le fournisseur a refusé cette clé :"
                     )
-                ))?,
-                Err(ProviderError::Unreachable(reason)) => self.say(&format!(
+                )),
+                Err(ProviderError::Unreachable(reason)) => self.front.wrong(&format!(
                     "{} {reason}",
                     language.say(
                         "The provider could not be reached:",
                         "Le fournisseur est injoignable :"
                     )
-                ))?,
+                )),
                 // Anything else is about the model, which is not chosen yet.
                 _ => break Some(key),
             }
         };
-        let offered = self.models(&known, key.as_deref(), &root).await;
-        if !offered.is_empty() {
-            self.say(language.say("\nModels:", "\nModèles :"))?;
-            for (place, model) in offered.iter().enumerate() {
-                // What trying it out showed, when it was tried.
-                let known = crate::rating(&self.home, known.name, model)
-                    .map(|verdict| format!(": {}", verdict.in_brief(language)))
-                    .unwrap_or_default();
-                self.say(&format!("  {}. {model}{known}", place + 1))?;
+        let key_of = key.as_deref().unwrap_or_default().to_owned();
+
+        // The model is not a question: the one this Provider is known to
+        // serve an Agent well with is taken, when it answers. The Owner
+        // chooses another later by asking their Agent.
+        let (usual, lighter) = crate::catalogue::usual_models(known.name);
+        let mut model = None;
+        let mut offered = Vec::new();
+        if known.speaks == Speaks::ChatGptPlan {
+            // A plan says itself which models it comes with: the usual one
+            // when it is among them, or the first it names.
+            offered = self.models(&known, None, &root).await;
+            model = usual
+                .iter()
+                .find(|usual| offered.iter().any(|offered| offered == *usual))
+                .map(|usual| (*usual).to_owned())
+                .or_else(|| offered.first().cloned());
+        }
+        for candidate in usual.iter().filter(|_| model.is_none()) {
+            self.front.working(language.say("Reaching it...", "Connexion..."));
+            if self.check(&known, &key_of, candidate, &root).await.is_ok() {
+                model = Some((*candidate).to_owned());
+                break;
             }
         }
-        // What real tryouts say of this Provider's models, to choose by.
-        if let Some(advice) = crate::advice(&self.home, known.name, language) {
-            self.say(&format!("\n{advice}"))?;
-        }
-        let model = loop {
-            let answer =
-                self.ask(language.say("Model (number or name) > ", "Modèle (numéro ou nom) > "))?;
-            let model = answer
-                .parse::<usize>()
-                .ok()
-                .and_then(|number| offered.get(number.wrapping_sub(1)).cloned())
-                .unwrap_or(answer);
-            if let Err(error) =
-                self.check(&known, key.as_deref().unwrap_or_default(), &model, &root).await
+        if model.is_none() {
+            self.front.working(language.say("Reaching it...", "Connexion..."));
+            offered = self.models(&known, key.as_deref(), &root).await;
+            // A Provider with one model to its name has nothing to choose.
+            if let [only] = &offered[..]
+                && self.check(&known, &key_of, only, &root).await.is_ok()
             {
-                self.say(&format!(
-                    "{} {}",
-                    language.say("That did not work:", "Cela n'a pas fonctionné :"),
-                    crate::agent::explain(&error, language)
-                ))?;
-                continue;
+                model = Some(only.clone());
             }
-            // A model nobody rated is tried out on a few real tasks, so that
-            // its Owner knows what to expect before relying on it.
-            let verdict = match crate::rating(&self.home, known.name, &model) {
-                Some(verdict) => Some(verdict),
-                None => {
-                    self.say(language.say(
-                        "Trying this model out on a few real tasks (about a minute)...",
-                        "Essai de ce modèle sur quelques vraies tâches (environ une minute)...",
-                    ))?;
-                    let tried =
-                        connect_in(&self.home, known.name, key.as_deref(), &model, Some(&root))
-                            .map_err(ProviderError::Failed);
-                    let tried = match tried {
-                        Ok(provider) => crate::try_out(&provider).await,
-                        Err(error) => Err(error),
-                    };
-                    match tried {
-                        Ok(verdict) => {
-                            let _ = crate::keep_rating(&self.home, known.name, &model, &verdict);
-                            Some(verdict)
-                        }
-                        // The model answers; it will be tried another time.
-                        Err(error) => {
-                            self.say(&format!(
-                                "{} {}",
-                                language.say(
-                                    "The tryout could not be finished:",
-                                    "L'essai n'a pas pu aller au bout :"
-                                ),
-                                crate::agent::explain(&error, language)
-                            ))?;
-                            None
-                        }
-                    }
-                }
-            };
-            let Some(verdict) = verdict else { break model };
-            self.say(&verdict.told(language))?;
-            if !verdict.strongly_discouraged() {
-                break model;
-            }
-            // Nothing is blocked, but this choice is made knowingly.
-            let insisted = self.ask(language.say(
-                "An Agent on this model can only talk. Choose it anyway? Type yes, or anything else to choose another > ",
-                "Un agent sur ce modèle ne peut que parler. Le choisir quand même ? Tape oui, ou autre chose pour en choisir un autre > ",
-            ))?;
-            if matches!(insisted.trim().to_lowercase().as_str(), "yes" | "oui") {
-                break model;
-            }
+        }
+        let model = match model {
+            Some(model) => model,
+            None => self.model(&known, &key_of, &root, &offered, language).await?,
         };
+        // Summaries and wake-ups do not need the best model.
+        let mut light = None;
+        for candidate in lighter.iter().filter(|candidate| **candidate != model) {
+            if self.check(&known, &key_of, candidate, &root).await.is_ok() {
+                light = Some((*candidate).to_owned());
+                break;
+            }
+        }
 
         let mut chosen = ProviderChoice {
             name: known.name.into(),
@@ -376,6 +373,10 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         } else if let Some(key) = &key {
             secrets.set(PROVIDER_KEY, key).map_err(stopped)?;
         }
+        let answers = match language {
+            Language::French => format!("{called} répond ({model})"),
+            Language::English => format!("{called} answers ({model})"),
+        };
         if self.adding {
             // Last in line, in place of one of the same name.
             let mut all = config.providers();
@@ -392,9 +393,9 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             };
             config.set_providers(all);
             config.save(&self.home).map_err(stopped)?;
-            return self.say(&format!(
-                "{} {} {place}. {}",
-                language.say("The AI answers. ✓", "L'IA répond. ✓"),
+            self.front.good(&answers);
+            self.front.say(&format!(
+                "{} {place}. {}",
                 language.say(
                     "It takes over when those before it cannot answer, at place",
                     "Elle prend le relais quand celles d'avant ne peuvent pas répondre, à la place",
@@ -404,45 +405,77 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                     "`orbite providers` montre l'ordre et comment le changer.",
                 ),
             ));
+            return Ok(());
         }
         // Whatever takes over from the one replaced stays in line.
         let after: Vec<ProviderChoice> =
             config.fallbacks.iter().filter(|other| other.name != chosen.name).cloned().collect();
         config.provider = Some(chosen);
         config.fallbacks = after;
-        config.light_model = None;
+        config.light_model = light;
         config.save(&self.home).map_err(stopped)?;
-        self.say(language.say("The AI answers. ✓", "L'IA répond. ✓"))?;
+        self.front.good(&answers);
+        Ok(())
+    }
 
-        // Summaries and wake-ups do not need the best model. What was chosen
-        // so far is kept even if setup is closed at this question.
-        let Ok(answer) = self.ask_or_pass(language.say(
-            "A lighter model for simple work, such as summaries and wake-ups (number or name; Enter for none) > ",
-            "Un modèle plus léger pour le travail simple, comme les résumés et les réveils (numéro ou nom ; Entrée pour aucun) > ",
-        )) else {
-            return Ok(());
-        };
-        let light = answer
-            .parse::<usize>()
-            .ok()
-            .and_then(|number| offered.get(number.wrapping_sub(1)).cloned())
-            .unwrap_or(answer);
-        if light.trim().is_empty() || light == model {
-            return Ok(());
-        }
-        match self.check(&known, key.as_deref().unwrap_or_default(), &light, &root).await {
-            Ok(()) => {
-                config.light_model = Some(light);
-                config.save(&self.home).map_err(stopped)
+    /// Asks which model to think with, where the Provider has no usual one:
+    /// one it offers, or one typed by name.
+    async fn model(
+        &mut self,
+        known: &KnownProvider,
+        key: &str,
+        root: &str,
+        offered: &[String],
+        language: Language,
+    ) -> Result<String, SetupError> {
+        let choices: Vec<Choice> = offered
+            .iter()
+            .map(|model| {
+                // What trying it out showed, when it was tried.
+                let rated = crate::rating(&self.home, known.name, model)
+                    .map(|verdict| verdict.in_brief(language))
+                    .unwrap_or_default();
+                Choice::of(model.as_str()).hinted(rated)
+            })
+            .collect();
+        loop {
+            let question = language.say("Which model?", "Quel modèle ?");
+            let own = language.say("or the name of another", "ou le nom d'un autre");
+            let model = match self.front.choose(question, &choices, 0, Some(own))? {
+                Picked::Choice(place) => offered[place].clone(),
+                Picked::Typed(name) => name,
+            };
+            self.front.working(language.say("Reaching it...", "Connexion..."));
+            if let Err(error) = self.check(known, key, &model, root).await {
+                self.front.wrong(&format!(
+                    "{} {}",
+                    language.say("That did not work:", "Cela n'a pas fonctionné :"),
+                    crate::agent::explain(&error, language)
+                ));
+                continue;
             }
-            Err(error) => self.say(&format!(
-                "{} {}",
-                language.say(
-                    "That one did not work, so none is used:",
-                    "Celui-ci n'a pas fonctionné, aucun n'est donc utilisé :"
-                ),
-                crate::agent::explain(&error, language)
-            )),
+            // What is known of it is said; nothing is tried here.
+            let Some(verdict) = crate::rating(&self.home, known.name, &model) else {
+                return Ok(model);
+            };
+            if !verdict.strongly_discouraged() {
+                return Ok(model);
+            }
+            // Nothing is blocked, but this choice is made knowingly.
+            self.front.say(&verdict.told(language));
+            let insist = [
+                Choice::of(language.say("Choose another", "En choisir un autre"))
+                    .also(&["no", "non"]),
+                Choice::of(language.say("Take it anyway", "Le prendre quand même"))
+                    .also(&["yes", "oui"]),
+            ];
+            let asked = language.say(
+                "An Agent on this model can only talk.",
+                "Un agent sur ce modèle ne peut que parler.",
+            );
+            if self.front.choose(asked, &insist, 0, None)? == Picked::Choice(1) {
+                return Ok(model);
+            }
         }
     }
 
@@ -458,49 +491,49 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         else {
             return Err(SetupError("The ChatGPT plan could not be prepared.".into()));
         };
-        self.say(language.say(
-            "\nYour agent will think with the usage included in your ChatGPT plan (an eligible \
-             Plus or Pro plan), through OpenAI's sign-in for open-source apps. That programme is \
-             a preview: OpenAI may change it or end it.",
-            "\nTon agent réfléchira avec l'utilisation comprise dans ton forfait ChatGPT \
-             (un forfait Plus ou Pro éligible), par la connexion qu'OpenAI ouvre aux applications \
-             libres. Ce programme est un aperçu : OpenAI peut le modifier ou l'arrêter.",
-        ))?;
         let account = loop {
             let begun = chatgpt.sign_in().map_err(stopped)?;
-            self.say(&format!(
-                "\n{}\n  {}\n{}",
-                language.say(
-                    "Continue with ChatGPT: open this link in a browser, on any device, and sign in.",
-                    "Continuer avec ChatGPT : ouvre ce lien dans un navigateur, sur n'importe \
-                     quel appareil, et connecte-toi.",
-                ),
-                begun.link(),
-                language.say(
-                    "Your browser then ends on a page that does not load, at an address starting \
-                     with http://127.0.0.1:1455 . That is expected: copy that whole address and \
-                     paste it here.",
-                    "Ton navigateur finit alors sur une page qui ne s'affiche pas, à une adresse \
-                     commençant par http://127.0.0.1:1455 . C'est normal : copie cette adresse \
-                     entière et colle-la ici.",
-                ),
-            ))?;
-            let ended_on = self.ask(language.say("Address > ", "Adresse > "))?;
+            self.front.say(language.say(
+                "Your agent will think with the usage included in your ChatGPT plan (an eligible \
+                 Plus or Pro plan), through OpenAI's sign-in for open-source apps. That programme is \
+                 a preview: OpenAI may change it or end it.\n\n\
+                 Continue with ChatGPT: open this link in a browser, on any device, and sign in.",
+                "Ton agent réfléchira avec l'utilisation comprise dans ton forfait ChatGPT \
+                 (un forfait Plus ou Pro éligible), par la connexion qu'OpenAI ouvre aux applications \
+                 libres. Ce programme est un aperçu : OpenAI peut le modifier ou l'arrêter.\n\n\
+                 Continuer avec ChatGPT : ouvre ce lien dans un navigateur, sur n'importe \
+                 quel appareil, et connecte-toi.",
+            ));
+            self.front.show(begun.link());
+            self.front.say(language.say(
+                "Your browser then ends on a page that does not load, at an address starting \
+                 with http://127.0.0.1:1455 . That is expected: copy that whole address and \
+                 paste it here.",
+                "Ton navigateur finit alors sur une page qui ne s'affiche pas, à une adresse \
+                 commençant par http://127.0.0.1:1455 . C'est normal : copie cette adresse \
+                 entière et colle-la ici.",
+            ));
+            let ended_on = self.front.ask(language.say("Address", "Adresse"))?;
+            self.front.working(language.say("Signing in...", "Connexion..."));
             match chatgpt.signed_in_at(&begun, &ended_on).await {
                 Ok(account) => break account,
-                Err(reason) => self.say(&format!(
+                Err(reason) => self.front.wrong(&format!(
                     "{} {reason}.",
                     language.say("That did not work:", "Cela n'a pas fonctionné :")
-                ))?,
+                )),
             }
         };
-        self.say(&format!(
-            "{}{} ✓\n{} {}",
+        self.front.good(&format!(
+            "{}{}",
             language.say("You're using your ChatGPT plan", "Tu utilises ton forfait ChatGPT"),
             if account.is_empty() { String::new() } else { format!(" ({account})") },
+        ));
+        self.front.say(&format!(
+            "{} {}",
             language.say("Manage usage:", "Gérer l'utilisation :"),
             crate::chatgpt::MANAGE_USAGE,
-        ))
+        ));
+        Ok(())
     }
 
     /// Asks the Provider for one word, to see that the key and model work.
@@ -557,29 +590,35 @@ impl<R: BufRead, W: Write> Setup<R, W> {
     /// Asks where the Owner will talk to their Agent: in a browser, in
     /// Telegram, in that order.
     fn place(&mut self, language: Language) -> Result<(bool, bool), SetupError> {
-        self.say(language.say(
-            "\nWhere will you talk to your agent?\n  \
-             1. In a browser, on your computer and your phone\n  \
-             2. In Telegram\n  \
-             3. Both",
-            "\nOù parleras-tu à ton agent ?\n  \
-             1. Dans un navigateur, sur ton ordinateur et ton téléphone\n  \
-             2. Dans Telegram\n  \
-             3. Les deux",
-        ))?;
-        loop {
-            let answer = self.ask(language.say("Number > ", "Numéro > "))?.to_lowercase();
-            match answer.as_str() {
-                "1" | "browser" | "web" | "navigateur" => return Ok((true, false)),
-                "2" | "telegram" => return Ok((false, true)),
-                "3" | "both" | "les deux" => return Ok((true, true)),
-                _ => {}
-            }
-        }
+        let choices =
+            [
+                Choice::of(language.say("In a browser", "Dans un navigateur"))
+                    .hinted(language.say(
+                        "on your computer and your phone",
+                        "sur ton ordinateur et ton téléphone",
+                    ))
+                    .also(&["browser", "web", "navigateur"]),
+                Choice::of(language.say("In Telegram", "Dans Telegram")).also(&["telegram"]),
+                Choice::of(language.say("Both", "Les deux")).also(&["both", "les deux"]),
+            ];
+        let question =
+            language.say("Where will you talk to your agent?", "Où parleras-tu à ton agent ?");
+        Ok(match self.front.choose(question, &choices, 0, None)? {
+            Picked::Choice(1) => (false, true),
+            Picked::Choice(2) => (true, true),
+            _ => (true, false),
+        })
     }
 
-    /// Turns the web interface on, and says where it will be reached.
-    fn interface(&mut self, config: &mut Config, language: Language) -> Result<(), SetupError> {
+    /// Turns the web interface on; done on its own, says where it will be
+    /// reached, which a whole setup says at its end.
+    fn interface(
+        &mut self,
+        config: &mut Config,
+        language: Language,
+        alone: bool,
+    ) -> Result<(), SetupError> {
+        self.front.working(language.say("Opening the page...", "Ouverture de la page..."));
         match &mut self.turn_interface_on {
             Some(turn_on) => {
                 turn_on().map_err(stopped)?;
@@ -590,34 +629,36 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                 config.save(&self.home).map_err(stopped)?;
             }
         }
-        let said = match (&config.interface_reached_at, &config.interface) {
-            (Some(reached), _) => format!(
-                "{}\n  {reached}\n{}",
-                language.say(
-                    "\nYour agent will be reached in a browser at:",
-                    "\nTon agent sera joignable dans un navigateur à :"
-                ),
-                language.say(
-                    "from the devices of your Tailscale network, encrypted. Nobody else reaches it. ✓",
-                    "depuis les appareils de ton réseau Tailscale, en chiffré. Personne d'autre n'y accède. ✓"
-                ),
-            ),
-            (None, served) => format!(
-                "{}\n  http://{}\n{}",
-                language.say(
-                    "\nYour agent will be reached in a browser on this machine, at:",
-                    "\nTon agent sera joignable dans un navigateur sur cette machine, à :"
-                ),
-                served.as_deref().unwrap_or_default(),
-                language.say(
-                    "To reach it from your phone too, put this machine and your phone on Tailscale \
-                     (tailscale.com), then run: sudo orbite interface on",
-                    "Pour y accéder aussi depuis ton téléphone, mets cette machine et ton téléphone \
-                     sur Tailscale (tailscale.com), puis lance : sudo orbite interface on"
-                ),
-            ),
-        };
-        self.say(&said)
+        match (&config.interface_reached_at, &config.interface) {
+            (Some(reached), _) => {
+                self.front.good(language.say(
+                    "Reached from the devices of your Tailscale network, encrypted",
+                    "Joignable depuis les appareils de ton réseau Tailscale, en chiffré",
+                ));
+                if alone {
+                    self.front.show(reached);
+                }
+            }
+            (None, served) => {
+                self.front.good(language.say(
+                    "Reached in a browser on this machine",
+                    "Joignable dans un navigateur sur cette machine",
+                ));
+                if alone {
+                    self.front.show(&format!("http://{}", served.as_deref().unwrap_or_default()));
+                }
+                if alone {
+                    self.front.say(language.say(
+                        "To reach it from your phone too, put this machine and your phone on \
+                         Tailscale (tailscale.com), then tell your agent: turn the web interface on.",
+                        "Pour y accéder aussi depuis ton téléphone, mets cette machine et ton \
+                         téléphone sur Tailscale (tailscale.com), puis dis à ton agent : active \
+                         l'interface web.",
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     async fn telegram(
@@ -626,31 +667,31 @@ impl<R: BufRead, W: Write> Setup<R, W> {
         secrets: &Secrets,
         language: Language,
     ) -> Result<(), SetupError> {
-        self.say(language.say(
-            "\nYou will talk to your agent in Telegram, through a bot of your own:\n  \
+        self.front.say(language.say(
+            "You will talk to your agent in Telegram, through a bot of your own:\n  \
              1. In Telegram, open a chat with @BotFather.\n  \
              2. Send /newbot and follow its two questions (a name, then a username ending in \"bot\").\n  \
              3. BotFather gives you a token: paste it here.",
-            "\nTu parleras à ton agent dans Telegram, par un bot qui t'appartient :\n  \
+            "Tu parleras à ton agent dans Telegram, par un bot qui t'appartient :\n  \
              1. Dans Telegram, ouvre une discussion avec @BotFather.\n  \
              2. Envoie /newbot et réponds à ses deux questions (un nom, puis un identifiant finissant par « bot »).\n  \
              3. BotFather te donne un jeton : colle-le ici.",
-        ))?;
+        ));
         let (token, username) = loop {
-            let token = self.ask_hidden(
-                language.say("Bot token (not shown) > ", "Jeton du bot (non affiché) > "),
-            )?;
+            let token = self.front.ask_hidden(language.say("Bot token", "Jeton du bot"))?;
+            self.front
+                .working(language.say("Asking Telegram...", "Vérification auprès de Telegram..."));
             match self.bot(&token, "getMe", json!({})).await {
                 Ok(bot) => {
                     break (token, bot["username"].as_str().unwrap_or("your bot").to_owned());
                 }
-                Err(reason) => self.say(&format!(
+                Err(reason) => self.front.wrong(&format!(
                     "{} ({reason})",
                     language.say(
                         "Telegram does not know this token. Copy it again from @BotFather",
                         "Telegram ne connaît pas ce jeton. Recopie-le depuis @BotFather",
                     )
-                ))?,
+                )),
             }
         };
         secrets.set(TELEGRAM_TOKEN, &token).map_err(stopped)?;
@@ -661,14 +702,14 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             let _ = getrandom::fill(&mut bytes);
             format!("{:06}", u32::from_le_bytes(bytes) % 1_000_000)
         });
-        self.say(&format!(
-            "{} @{username} ✓\n{} {code}",
-            language.say("Bot recognised:", "Bot reconnu :"),
-            language.say(
-                "Now open its chat in Telegram and send it this code:",
-                "Ouvre maintenant sa discussion dans Telegram et envoie-lui ce code :",
-            )
-        ))?;
+        self.front
+            .good(&format!("{} @{username}", language.say("Bot recognised:", "Bot reconnu :")));
+        self.front.say(language.say(
+            "Now open its chat in Telegram and send it this code:",
+            "Ouvre maintenant sa discussion dans Telegram et envoie-lui ce code :",
+        ));
+        self.front.show(&code);
+        self.front.working(language.say("Waiting for your code...", "En attente de ton code..."));
         let started = Instant::now();
         let mut next_update = 0;
         let owner = 'linking: loop {
@@ -710,38 +751,32 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             "Lié : désormais je t'écoute ici, et personne d'autre.",
         );
         let _ = self.bot(&token, "sendMessage", json!({ "chat_id": owner, "text": linked })).await;
-        self.say(
-            language.say("Your Telegram account is linked. ✓", "Ton compte Telegram est lié. ✓"),
-        )
+        self.front
+            .good(language.say("Your Telegram account is linked", "Ton compte Telegram est lié"));
+        Ok(())
     }
 
     fn name(&mut self, config: &mut Config, language: Language) -> Result<(), SetupError> {
-        self.say(language.say(
-            "\nWhat will you call your agent? Some ideas:",
-            "\nComment appelleras-tu ton agent ? Quelques idées :",
-        ))?;
-        for (place, name) in NAMES.iter().enumerate() {
-            self.say(&format!("  {}. {name}", place + 1))?;
-        }
+        let choices: Vec<Choice> = NAMES.iter().map(|name| Choice::of(*name)).collect();
+        let question =
+            language.say("What will you call your agent?", "Comment appelleras-tu ton agent ?");
+        let own = language.say("or a name of your own", "ou un nom à toi");
         let name = loop {
-            let answer = self.ask(
-                language.say("Number, or a name of your own > ", "Numéro, ou un nom à toi > "),
-            )?;
-            let picked =
-                answer.parse::<usize>().ok().and_then(|number| NAMES.get(number.wrapping_sub(1)));
-            match picked {
-                Some(name) => break (*name).to_owned(),
-                None if answer.chars().any(char::is_alphabetic) && answer.chars().count() <= 40 => {
-                    break answer;
+            match self.front.choose(question, &choices, 0, Some(own))? {
+                Picked::Choice(place) => break NAMES[place].to_owned(),
+                Picked::Typed(name)
+                    if name.chars().any(char::is_alphabetic) && name.chars().count() <= 40 =>
+                {
+                    break name;
                 }
-                None => {}
+                Picked::Typed(_) => {}
             }
         };
         config.agent_name = Some(name);
         config.save(&self.home).map_err(stopped)
     }
 
-    /// The Agent's first words to its Owner, in Telegram.
+    /// The Agent's first words to its Owner, wherever they will talk.
     async fn greet(
         &mut self,
         config: &Config,
@@ -774,34 +809,62 @@ impl<R: BufRead, W: Write> Setup<R, W> {
                 self.bot(token, "sendMessage", json!({ "chat_id": owner, "text": greeting })).await;
         }
         let Some(served) = &config.interface else {
-            return self.say(&format!(
-                "\n{} {name} {}",
-                language.say("All set.", "Tout est prêt."),
-                language.say("is waiting for you in Telegram.", "t'attend dans Telegram.")
-            ));
+            self.front.finish(
+                &format!(
+                    "{} {name} {}",
+                    language.say("All set.", "Tout est prêt."),
+                    language.say("is waiting for you in Telegram.", "t'attend dans Telegram.")
+                ),
+                None,
+                "",
+            );
+            return Ok(());
         };
         // In a browser: greeted there too, and let in by a link that
         // carries the code of a first device.
         crate::interface::greet(&self.home, &greeting).map_err(stopped)?;
         let code = crate::pairing_code(&self.home).map_err(stopped)?;
         let at = config.interface_reached_at.clone().unwrap_or(format!("http://{served}"));
-        self.say(&format!(
-            "\n{} {name} {}\n\n  {at}/#{code}\n\n{}{}",
-            language.say("All set.", "Tout est prêt."),
-            language.say(
-                "is waiting for you. Open this on your phone or your computer:",
-                "t'attend. Ouvre ceci sur ton téléphone ou ton ordinateur :"
+        // Reached from other devices, or from this machine only for now.
+        let (open_it, more) = match config.interface_reached_at {
+            Some(_) => (
+                language.say(
+                    "is waiting for you. Open this on your phone or your computer:",
+                    "t'attend. Ouvre ceci sur ton téléphone ou ton ordinateur :",
+                ),
+                "",
             ),
-            language.say(
-                "The link lets one device in, for ten minutes. For another, ask your agent to add a device.",
-                "Le lien autorise un appareil, pendant dix minutes. Pour un autre, demande à ton agent d'ajouter un appareil."
+            None => (
+                language.say(
+                    "is waiting for you. Open this in a browser on this machine:",
+                    "t'attend. Ouvre ceci dans un navigateur sur cette machine :",
+                ),
+                language.say(
+                    "\nTo reach it from your phone too, put this machine and your phone on \
+                     Tailscale (tailscale.com), then tell your agent: turn the web interface on.",
+                    "\nPour y accéder aussi depuis ton téléphone, mets cette machine et ton \
+                     téléphone sur Tailscale (tailscale.com), puis dis à ton agent : active \
+                     l'interface web.",
+                ),
             ),
-            if telegram.is_some() {
-                language.say("\nIt is in Telegram too.", "\nIl est aussi dans Telegram.")
-            } else {
-                ""
-            },
-        ))
+        };
+        self.front.finish(
+            &format!("{} {name} {open_it}", language.say("All set.", "Tout est prêt.")),
+            Some(&format!("{at}/#{code}")),
+            &format!(
+                "{}{more}{}",
+                language.say(
+                    "The link lets one device in, for ten minutes. For another, ask your agent to add a device.",
+                    "Le lien autorise un appareil, pendant dix minutes. Pour un autre, demande à ton agent d'ajouter un appareil."
+                ),
+                if telegram.is_some() {
+                    language.say("\nIt is in Telegram too.", "\nIl est aussi dans Telegram.")
+                } else {
+                    ""
+                },
+            ),
+        );
+        Ok(())
     }
 
     /// Calls the Bot API as the bot whose token is `token`.
@@ -819,49 +882,6 @@ impl<R: BufRead, W: Write> Setup<R, W> {
             Ok(answer["result"].clone())
         } else {
             Err(answer["description"].as_str().unwrap_or("refused").to_owned())
-        }
-    }
-
-    fn say(&mut self, text: &str) -> Result<(), SetupError> {
-        writeln!(self.shown, "{text}").and_then(|()| self.shown.flush()).map_err(stopped)
-    }
-
-    /// Shows `question` and reads the answer; nothing typed is repeated.
-    /// Asks a question that may be passed over with Enter: the answer is
-    /// then empty.
-    fn ask_or_pass(&mut self, question: &str) -> Result<String, SetupError> {
-        write!(self.shown, "{question}").and_then(|()| self.shown.flush()).map_err(stopped)?;
-        let mut line = String::new();
-        if self.typed.read_line(&mut line).map_err(stopped)? == 0 {
-            return Err(SetupError("Setup was cut short; run it again to go on from here.".into()));
-        }
-        Ok(line.trim().to_owned())
-    }
-
-    fn ask(&mut self, question: &str) -> Result<String, SetupError> {
-        loop {
-            write!(self.shown, "{question}").and_then(|()| self.shown.flush()).map_err(stopped)?;
-            let mut line = String::new();
-            if self.typed.read_line(&mut line).map_err(stopped)? == 0 {
-                return Err(SetupError(
-                    "Setup was cut short; run it again to go on from here.".into(),
-                ));
-            }
-            if !line.trim().is_empty() {
-                return Ok(line.trim().to_owned());
-            }
-        }
-    }
-
-    fn ask_hidden(&mut self, question: &str) -> Result<String, SetupError> {
-        match &mut self.hidden {
-            Some(read) => loop {
-                let answer = read(question).map_err(stopped)?;
-                if !answer.trim().is_empty() {
-                    return Ok(answer.trim().to_owned());
-                }
-            },
-            None => self.ask(question),
         }
     }
 }

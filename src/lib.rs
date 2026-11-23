@@ -13,6 +13,7 @@ mod computer;
 mod config;
 mod desk;
 mod extensions;
+mod front;
 mod hearing;
 mod interface;
 mod language;
@@ -40,6 +41,7 @@ mod transcriber;
 mod tryout;
 mod updater;
 mod web;
+mod welcome;
 
 pub use agent::Agent;
 pub use anthropic::Anthropic;
@@ -56,6 +58,7 @@ pub use desk::{
     NotOffered, SOCKET as DESK_SOCKET, lending as lending_this_computer,
     offer as offer_this_computer,
 };
+pub use front::{Choice, Front, Left, Lines, Mood, Picked};
 pub use hearing::{Advice, MODELS, Machine, Model, chosen as chosen_transcriber, transcription};
 pub use interface::{
     Device, Interface, devices as interface_devices, is_private, pairing_code, turn_away,
@@ -85,3 +88,4 @@ pub use tryout::{Tools, Verdict, advice, keep_rating, rating, try_out};
 pub use updater::{
     RELEASE_KEY, Service, Systemd, UpdateError, Updater, run_by_sudo_for_another, system_program,
 };
+pub use welcome::Welcome;

@@ -32,13 +32,91 @@ HOME_DIR=/var/lib/orbite
 PROGRAM=/usr/local/bin/orbite
 SERVICE=/etc/systemd/system/orbite.service
 
-say() { printf '%s\n' "$*"; }
+# In a terminal that can show it, the installer has Orbite's own look: its
+# mascot, and each thing done ticked off as it is. Anywhere else (a log, a
+# script, a screen that only knows plain letters) it says the same in lines.
+FANCY=no
+if [ -t 1 ] && [ -z "${ORBITE_PLAIN:-}" ]; then
+    case "${TERM:-dumb}" in dumb | linux) ;; *) FANCY=yes ;; esac
+fi
+# What it shows there is in French for whoever's session is: the plain
+# lines stay in English, as what reads them may be a program.
+FRENCH=no
+case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in fr*) [ "$FANCY" = yes ] && FRENCH=yes ;; esac
+# `$1`, or `$2` where French is spoken.
+t() { if [ "$FRENCH" = yes ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+TURNING=""
+# Stops the mark that turns while something is being done.
+settle() {
+    [ -n "$TURNING" ] || return 0
+    kill "$TURNING" 2>/dev/null || true
+    wait "$TURNING" 2>/dev/null || true
+    TURNING=""
+    printf '\r\033[K'
+}
+say() {
+    if [ "$FANCY" = yes ]; then
+        settle
+        printf '  \033[2m%s\033[0m\n' "$*"
+    else
+        printf '%s\n' "$*"
+    fi
+}
+# Says what is being done, `$1`, until `did` says it is.
+doing() {
+    if [ "$FANCY" = yes ]; then
+        settle
+        (
+            trap - EXIT
+            while :; do
+                for mark in ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏; do
+                    printf '\r  \033[38;5;75m%s\033[0m \033[2m%s\033[0m' "$mark" "$1"
+                    sleep 0.1
+                done
+            done
+        ) &
+        TURNING=$!
+    else
+        printf '%s...\n' "$1"
+    fi
+}
+# Says how it ended, `$1`: ticked off in a terminal.
+ended() {
+    if [ "$FANCY" = yes ]; then
+        settle
+        printf '  \033[38;5;78m✓\033[0m %s\n\n' "$1"
+    else
+        printf '%s\n' "$1"
+    fi
+}
+# Ticks off what was done, in the words `$1`.
+did() {
+    [ "$FANCY" = yes ] || return 0
+    settle
+    printf '  \033[38;5;78m✓\033[0m %s\n' "$1"
+}
+if [ "$FANCY" = yes ]; then
+    printf '\n'
+    cat <<'MASCOT'
+            ▄▄▄▄▄▄▄
+         ▗▟██████████▛▀▀▀▀▙
+        ▗████▀███▀████▖ ▗▟▘
+        ▟███▌ ███ ▐████▟▀
+      ▄▛█████▄███▄████▛
+    ▗▛▘ ▝█████████████▘
+    ▜▄▄▄▄▟██████████▛▘
+            ▀▀▀▀▀▀▀
+MASCOT
+    printf '\n  \033[1mo r b i t e\033[0m\n  \033[2m%s\033[0m\n\n' \
+        "$(t "Your own agent, on your own machine." "Ton agent à toi, sur ta machine.")"
+fi
 # What the installer is doing, to say where it stopped.
 STEP="checking the machine"
 # Yes when a failure is one the installer did not foresee.
 UNFORESEEN=yes
 refuse() {
     UNFORESEEN=no
+    settle
     printf 'Orbite was not installed: %s\n' "$*" >&2
     exit 1
 }
@@ -60,6 +138,7 @@ in_an_address() {
 # kind of system. Nothing is sent; the Owner opens the link, or does not.
 offer_a_report() {
     code=$?
+    settle
     rm -rf "${WORK:-}"
     [ "$code" -ne 0 ] && [ "$UNFORESEEN" = yes ] || exit "$code"
     printf '\nOrbite was not installed: the installer stopped while %s.\n' "$STEP" >&2
@@ -231,7 +310,8 @@ WORK=$(mktemp -d)
 STEP="downloading Orbite"
 FILE="orbite-$ARCH-linux"
 
-say "Downloading Orbite for $ARCH..."
+did "$PRETTY_NAME, $ARCH"
+doing "$(t "Downloading Orbite for $ARCH" "Téléchargement d'Orbite pour $ARCH")"
 for name in "$FILE" SHA256SUMS SHA256SUMS.sig; do
     fetch "$RELEASE/$name" "$WORK/$name" || refuse "$name could not be downloaded from $RELEASE."
 done
@@ -264,10 +344,15 @@ if [ -x "$ROOT$PROGRAM" ] && [ "${ORBITE_ALLOW_OLDER:-}" != 1 ] &&
     fi
 fi
 
+did "$(t "Orbite downloaded, and signed by its key" "Orbite téléchargé, et bien signé par sa clé")"
+
 # --- Now the machine is changed ---
 
 UPDATING=no
 [ -f "$ROOT$SERVICE" ] && UPDATING=yes
+if [ "$FANCY" = yes ]; then
+    doing "$(t "Installing Orbite" "Installation d'Orbite")"
+fi
 
 STEP="creating the agent's account"
 if ! id orbite >/dev/null 2>&1; then
@@ -413,6 +498,7 @@ UNIT
 systemctl daemon-reload
 systemctl enable orbite >/dev/null 2>&1 || systemctl enable orbite
 systemctl enable --now orbite-update.timer >/dev/null 2>&1 || systemctl enable --now orbite-update.timer
+did "$(t "Installed: an account of its own, and a service that keeps itself up to date" "Installé : un compte à lui, et un service qui se met à jour tout seul")"
 
 # --- The Agent's Computer: a screen of its own, a browser, and fonts ---
 #
@@ -502,8 +588,9 @@ if [ "${ORBITE_WITHOUT_COMPUTER:-}" = "1" ]; then
     say "Left out, as asked: the agent's own computer. Without it the agent cannot use sites that need"
     say "signing in or a person's gestures. Run this installer again without ORBITE_WITHOUT_COMPUTER to add it."
 else
-    say "Setting up the agent's own computer (a screen, Firefox and fonts)..."
+    doing "$(t "Setting up the agent's own computer (a screen, Firefox and fonts)" "Préparation de l'ordinateur de l'agent (un écran, Firefox et des polices)")"
     computer && SET_UP=0 || SET_UP=$?
+    [ "$SET_UP" != 0 ] || did "$(t "The agent's own computer: a screen, Firefox and fonts" "L'ordinateur de l'agent : un écran, Firefox et des polices")"
     if [ "$SET_UP" = 2 ]; then
         say "Note: this installer does not know how to install packages on $PRETTY_NAME, so the agent's"
         say "computer was not set up. Orbite works without it. To give it one, install Xvfb, xdotool and"
@@ -520,7 +607,7 @@ if [ "$UPDATING" = yes ]; then
     # An Orbite that was never set up has nothing to run yet.
     if [ -f "$ROOT$HOME_DIR/config.json" ]; then
         systemctl restart orbite
-        say "Orbite is updated and running."
+        ended "$(t "Orbite is updated and running." "Orbite est à jour et tourne.")"
     else
         say "Orbite is updated. Set it up with: sudo orbite setup"
     fi
@@ -546,4 +633,9 @@ if ! runuser -u orbite -- env ORBITE_HOME="$HOME_DIR" "$PROGRAM" setup </dev/tty
     exit 1
 fi
 systemctl start orbite
-say "Orbite is running, and will start again by itself after a restart."
+# From here on, in the language chosen at setup.
+if [ "$FANCY" = yes ]; then
+    FRENCH=no
+    grep -Eq '"language": *"fr"' "$ROOT$HOME_DIR/config.json" 2>/dev/null && FRENCH=yes
+fi
+ended "$(t "Orbite is running, and will start again by itself after a restart." "Orbite tourne, et redémarrera tout seul après un redémarrage de la machine.")"

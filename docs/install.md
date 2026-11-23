@@ -48,14 +48,14 @@ The installer:
 
 ## 3. Answer the setup's questions
 
-The installer ends with a short guided setup, in the terminal:
+The installer ends with a short guided setup, on a screen of its own in the terminal: answers are chosen with the arrow keys and Enter. (In a terminal that cannot show it, or with `ORBITE_PLAIN=1`, the same questions are asked as plain lines.)
 
 1. **Language**: English or French, for Orbite's own words. Your agent answers in whatever language you write to it.
-2. **Provider**: its name from the list shown, then your API key (typed without being shown, and checked at once) or, for a ChatGPT plan, a link to sign in with and the address your browser ends on to paste back, then a model. A model nobody has tried before is tried out on a few real tasks, which takes about a minute, and you are told what to expect of it; see [Choosing a model](providers.md#choosing-a-model).
+2. **Provider**: chosen from the list, then your API key (pasted without being shown, and checked at once) or, for a ChatGPT plan, a link to sign in with and the address your browser ends on to paste back. The model is not a question: Orbite takes the one that provider is known to serve an agent well with, and a lighter one for summaries where there is one. You change it later by asking your agent; see [Choosing a model](providers.md#choosing-a-model). Only a provider with no usual model (a server of your own, Ollama or LM Studio with several models) has you choose.
 3. **Where you will talk to it**: in a browser, in Telegram, or both. For Telegram, the bot's token; setup then shows a **code**: send that code to your bot from your own Telegram account. Whoever sends the code becomes the Owner, the only person the agent will ever listen to.
 4. **A name** for your agent.
 
-Your agent then says hello in Telegram, and for the browser setup shows a **link**: open it on your computer or your phone within ten minutes and you are in. That is it.
+Your agent then says hello in Telegram, and for the browser setup shows a **link**, with a code to point your phone's camera at when the link is one a phone can follow: open it within ten minutes and you are in. That is it.
 
 If you close the terminal half-way, run `sudo orbite setup` to carry on where you stopped. To redo one part later, add its name: `setup language`, `setup provider`, `setup telegram`, `setup interface` or `setup name`. To add a second AI that takes over when the first cannot answer, `sudo orbite providers add` (see [Providers](providers.md#several-providers-in-order)).
 

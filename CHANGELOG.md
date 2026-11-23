@@ -2,6 +2,15 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.6.5
+
+Not released yet. The installer and the setup have Orbite's own look, and ask less.
+
+- **A setup on a screen of its own**: the mascot, one question at a time, answers chosen with the arrow keys, a key pasted without being shown, and what went well ticked off. The installer ticks off each thing it does, and speaks French in a French session. A terminal that cannot show it, or `ORBITE_PLAIN=1`, gets the same as plain lines.
+- **No model to choose.** Orbite takes the model your provider is known to serve an agent well with, and a lighter one for summaries where there is one; you change it by asking your agent. The usual models were read on each provider's own pages on 2026-11-23; only Anthropic's and Groq's were tried for real. When none answers, or for a server of your own with several models, you are asked.
+- **Nothing is tried out during setup any more.** The minute spent trying a model nobody had rated is gone, and so is the question about a lighter model. `orbite tryout` still rates a model when you want to know what to expect of it.
+- **A code to scan** beside the link that lets your first device in, when that link is one a phone can follow.
+
 ## 0.6.4
 
 Released on 2026-11-23 (0.6.2 and 0.6.3 were never published: the install trial stopped both, the second time for a real defect, an agent that could no longer be restored on a freshly installed machine). Your agent can use this computer's own desktop. Run the installer again to turn it on: it is what starts the helper with your session.

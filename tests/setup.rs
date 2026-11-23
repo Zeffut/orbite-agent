@@ -156,10 +156,10 @@ async fn set_up(
 }
 
 /// What an Owner types on a first run: English, the Provider "custom", its
-/// key, the first model offered, no lighter model, the bot's token, then a
-/// name of their own.
+/// key, the first model offered, Telegram, the bot's token, then a name of
+/// their own.
 fn first_run() -> String {
-    format!("1\ncustom\n{}\n1\n\n2\n{}\nNova\n", api_key(), bot_token())
+    format!("1\ncustom\n{}\n1\n2\n{}\nNova\n", api_key(), bot_token())
 }
 
 async fn sent_to_owner(telegram: &MockServer) -> Vec<String> {
@@ -327,7 +327,7 @@ async fn setup_speaks_the_language_the_owner_chooses() {
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
 
     assert_eq!(Config::load(home.path()).unwrap().language.as_deref(), Some("fr"));
-    assert!(shown.contains("Clé d'API"), "{shown}");
+    assert!(shown.contains("clé d'API"), "{shown}");
     assert!(sent_to_owner(&telegram).await.last().unwrap().contains("Bonjour"));
 }
 
@@ -363,39 +363,53 @@ async fn the_code_is_not_left_for_the_agent_to_take_for_a_message() {
 }
 
 #[tokio::test]
-async fn a_model_nobody_rated_is_tried_out_and_the_owner_sees_what_to_expect() {
+async fn the_model_is_not_a_question_where_the_provider_has_a_usual_one() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
+
+    // English, Groq, its key; then where to talk and a name: no model.
+    let typed = format!("1\ngroq\n{}\n2\n{}\nNova\n", api_key(), bot_token());
+    let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
+
+    let config = Config::load(home.path()).unwrap();
+    let (usual, lighter) = ("qwen/qwen3.8-27b", "openai/gpt-oss-20b");
+    assert_eq!(config.provider.unwrap().model, usual, "{shown}");
+    // A lighter one for summaries and wake-ups is taken the same way.
+    assert_eq!(config.light_model.as_deref(), Some(lighter));
+    assert!(shown.contains(usual), "the Owner is told which it is: {shown}");
+    assert!(!shown.contains("Which model?"), "{shown}");
+    // Nothing is tried out during setup: a word to the key, one to each model.
+    let asked = provider.received_requests().await.unwrap().len();
+    assert!(asked <= 4, "{asked} requests to the Provider");
+    assert!(orbite::rating(home.path(), "groq", "model-large").is_none());
+}
+
+#[tokio::test]
+async fn a_provider_without_a_usual_model_has_the_owner_choose_and_no_lighter_one() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
 
     let shown = set_up(home.path(), &first_run(), &provider, &telegram, None).await;
 
-    assert!(
-        shown.contains("Actions: reliable") && shown.contains("Images: it sees them"),
-        "{shown}"
-    );
-    // Kept, so that it is not tried again and shows in the settings.
-    let kept = orbite::rating(home.path(), "custom", "model-large").expect("the verdict is kept");
-    assert_eq!(kept.tools, orbite::Tools::Reliable);
-
-    // Setting it up again shows what is known beside the model, without trying it again.
-    let asked_before = provider.received_requests().await.unwrap().len();
-    let again = format!("custom\n{}\n1\n", api_key());
-    let shown = set_up(home.path(), &again, &provider, &telegram, Some(Step::Provider)).await;
-    assert!(shown.contains("1. model-large") && shown.contains("acts reliably"), "{shown}");
-    let asked_since = provider.received_requests().await.unwrap().len() - asked_before;
-    assert!(asked_since <= 4, "the model was tried out again: {asked_since} requests");
+    assert!(shown.contains("Which model?") && shown.contains("1. model-large"), "{shown}");
+    assert_eq!(Config::load(home.path()).unwrap().light_model, None);
 }
 
 #[tokio::test]
-async fn a_model_that_cannot_act_is_chosen_only_after_the_owner_insists() {
+async fn a_model_known_not_to_act_is_chosen_only_after_the_owner_insists() {
     let home = tempfile::tempdir().unwrap();
     let provider = provider().await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
+    // What trying it out on this Host showed, some other day.
+    let mute =
+        orbite::connect("custom", Some(&api_key()), "model-mute", Some(&provider.uri())).unwrap();
+    let verdict = orbite::try_out(&mute).await.unwrap();
+    orbite::keep_rating(home.path(), "custom", "model-mute", &verdict).unwrap();
 
     // The mute model, declined at the warning; then the first one offered.
-    let typed =
-        format!("1\ncustom\n{}\nmodel-mute\nno\n1\n\n2\n{}\nNova\n", api_key(), bot_token());
+    let typed = format!("1\ncustom\n{}\nmodel-mute\nno\n1\n2\n{}\nNova\n", api_key(), bot_token());
     let shown = set_up(home.path(), &typed, &provider, &telegram, None).await;
     assert!(shown.contains("cannot act") && shown.contains("Strongly discouraged"), "{shown}");
     assert_eq!(Config::load(home.path()).unwrap().provider.unwrap().model, "model-large");
@@ -404,28 +418,6 @@ async fn a_model_that_cannot_act_is_chosen_only_after_the_owner_insists() {
     let insisting = format!("custom\n{}\nmodel-mute\nyes\n", api_key());
     set_up(home.path(), &insisting, &provider, &telegram, Some(Step::Provider)).await;
     assert_eq!(Config::load(home.path()).unwrap().provider.unwrap().model, "model-mute");
-}
-
-#[tokio::test]
-async fn a_lighter_model_can_be_chosen_for_simple_work_or_passed_over() {
-    let home = tempfile::tempdir().unwrap();
-    let provider = provider().await;
-    let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-
-    // Passed over on the first run.
-    let shown = set_up(home.path(), &first_run(), &provider, &telegram, None).await;
-    assert!(shown.contains("lighter model"), "{shown}");
-    assert_eq!(Config::load(home.path()).unwrap().light_model, None);
-
-    // Chosen later, by its number in the list.
-    let again = format!("custom\n{}\n1\n2\n", api_key());
-    set_up(home.path(), &again, &provider, &telegram, Some(Step::Provider)).await;
-    assert_eq!(Config::load(home.path()).unwrap().light_model.as_deref(), Some("model-small"));
-
-    // And given up again by passing over it.
-    let without = format!("custom\n{}\n1\n\n", api_key());
-    set_up(home.path(), &without, &provider, &telegram, Some(Step::Provider)).await;
-    assert_eq!(Config::load(home.path()).unwrap().light_model, None);
 }
 
 /// What the Owner's browser asked for by following the last link shown.
@@ -529,12 +521,10 @@ async fn an_owner_with_a_chatgpt_plan_signs_in_by_a_link_instead_of_giving_a_key
     let shown = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let openai = openai_with_a_plan(shown.clone()).await;
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
-    // English, the ChatGPT plan, a wrong paste then the right address, the
-    // model offered (kept though this fake only ever talks), no lighter
-    // model, Telegram, the bot's token, a name.
+    // English, the ChatGPT plan, a wrong paste then the right address,
+    // Telegram, the bot's token, a name: the plan's own model is taken.
     let bot = bot_token();
-    let typed =
-        ["1", "chatgpt", "nonsense", "<address>", "1", "yes", "", "2", bot.as_str(), "Nova"];
+    let typed = ["1", "chatgpt", "nonsense", "<address>", "2", bot.as_str(), "Nova"];
     let owner = Answering {
         lines: typed.iter().map(|line| line.to_string()).collect(),
         shown: shown.clone(),
@@ -573,15 +563,15 @@ async fn another_provider_is_added_after_those_set_up_each_with_a_key_of_its_own
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
     set_up(home.path(), &first_run(), &provider, &telegram, None).await;
 
-    // Groq, its key, the first model offered.
-    let typed = format!("groq\n{}\n1\n", api_key());
+    // Groq and its key: its usual model is taken.
+    let typed = format!("groq\n{}\n", api_key());
     let shown =
         set_up(home.path(), &typed, &provider, &telegram, Some(Step::AnotherProvider)).await;
 
     let all = Config::load(home.path()).unwrap().providers();
     let names: Vec<&str> = all.iter().map(|provider| provider.name.as_str()).collect();
     assert_eq!(names, ["custom", "groq"], "{shown}");
-    assert_eq!(all[1].model, "model-large");
+    assert_eq!(all[1].model, "qwen/qwen3.8-27b");
     let secrets = Secrets::kept_in(home.path());
     for provider in &all {
         let key = provider.key.as_deref().expect("each has a key of its own");
@@ -591,7 +581,6 @@ async fn another_provider_is_added_after_those_set_up_each_with_a_key_of_its_own
     // Under its own name only: the name that said just "the Provider" is let go of.
     assert_eq!(secrets.get(orbite::PROVIDER_KEY).unwrap(), None);
     assert!(shown.contains("place 2"), "{shown}");
-    assert!(!shown.contains("lighter model"), "only the first is asked about one:\n{shown}");
 
     // Set up again, it takes the place it had rather than a second one.
     set_up(home.path(), &typed, &provider, &telegram, Some(Step::AnotherProvider)).await;

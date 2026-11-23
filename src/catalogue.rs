@@ -76,6 +76,39 @@ pub fn transcription_model(name: &str) -> Option<&'static str> {
     }
 }
 
+/// The models the Provider called `name` is known to serve an Agent well
+/// with, the first that answers being taken at setup, then those for light
+/// work (summaries, wake-ups). Read on each Provider's own pages on
+/// 2026-11-23; empty where the Owner is to choose.
+pub fn usual_models(name: &str) -> (&'static [&'static str], &'static [&'static str]) {
+    match name {
+        "anthropic" => (&["claude-sonnet-5-5", "claude-opus-5-5"], &["claude-haiku-5-5"]),
+        "openai" => (&["gpt-6.2-sol", "gpt-6.1-terra"], &[]),
+        "chatgpt" => (&["gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna"], &[]),
+        "google" => (
+            &["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.6-flash"],
+            &["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],
+        ),
+        "xai" => (&["grok-4.7", "grok-4.6", "grok-4.5"], &[]),
+        "mistral" => {
+            (&["mistral-large-latest", "mistral-medium-latest"], &["mistral-small-latest"])
+        }
+        "deepseek" => (&["deepseek-flash", "deepseek-v4-pro"], &[]),
+        "groq" => (
+            &["qwen/qwen3.8-27b", "openai/gpt-oss-120b"],
+            &["openai/gpt-oss-20b", "llama-3.1-8b-instant"],
+        ),
+        "cerebras" => (&["qwen-3.8-27b", "gpt-oss-120b"], &[]),
+        "together" => (&["moonshotai/Kimi-K3", "Qwen/Qwen4-Max"], &["Qwen/Qwen3.5-9B"]),
+        "fireworks" => (
+            &["accounts/fireworks/models/kimi-k3", "accounts/fireworks/models/kimi-k2p5"],
+            &["accounts/fireworks/models/glm-5p3-flash"],
+        ),
+        "openrouter" => (&["~openai/gpt-sol-latest", "openai/gpt-6.2-sol", "openrouter/auto"], &[]),
+        _ => (&[], &[]),
+    }
+}
+
 /// Every Provider known by name, the most used first.
 pub fn known_providers() -> &'static [KnownProvider] {
     KNOWN
