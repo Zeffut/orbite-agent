@@ -915,8 +915,16 @@ impl Channel for Interface {
     }
 
     async fn send_unkept(&mut self, text: &str) -> io::Result<()> {
-        // Told to the devices open now, and written nowhere.
-        self.tell(json!({ "kind": "agent", "text": text }));
+        // Told to the devices open now, and written nowhere. A link that
+        // lets a device in is drawn too, as a code a phone's camera reads.
+        let link = text
+            .split_whitespace()
+            .find(|word| word.starts_with("http") && word.contains("/#"))
+            .filter(|link| {
+                !["http://127.", "http://localhost"].iter().any(|own| link.starts_with(own))
+            });
+        let code = link.and_then(crate::code_picture);
+        self.tell(json!({ "kind": "agent", "text": text, "code": code }));
         Ok(())
     }
 

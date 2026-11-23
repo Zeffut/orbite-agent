@@ -460,6 +460,33 @@ pub fn square_code(link: &str) -> Vec<Row> {
     rows
 }
 
+/// A link as a square code, as a picture a page shows: dark on light,
+/// with the border readers look for.
+pub fn code_picture(link: &str) -> Option<String> {
+    let code = qrcode::QrCode::new(link.as_bytes()).ok()?;
+    let side = code.width();
+    let colours = code.to_colors();
+    let border = 3;
+    let mut dark = String::new();
+    for (place, colour) in colours.iter().enumerate() {
+        if *colour == qrcode::Color::Dark {
+            let (x, y) = (place % side + border, place / side + border);
+            dark.push_str(&format!("M{x} {y}h1v1h-1z"));
+        }
+    }
+    let whole = side + 2 * border;
+    Some(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {whole} {whole}\" \
+         shape-rendering=\"crispEdges\"><rect width=\"{whole}\" height=\"{whole}\" \
+         fill=\"#ffffff\"/><path d=\"{dark}\" fill=\"#000000\"/></svg>"
+    ))
+}
+
+/// A link as a square code, as lines a terminal shows.
+pub fn square_code_text(link: &str) -> String {
+    square_code(link).iter().map(|row| format!("  {}\n", row.text)).collect()
+}
+
 /// What stays in the terminal once setup is over.
 pub fn farewell(text: &str, link: Option<&str>, after: &str, columns: usize) -> Vec<Row> {
     let wide = columns.saturating_sub(4).clamp(20, 62);
@@ -1058,6 +1085,12 @@ mod tests {
     fn what_comes_from_outside_is_written_and_never_obeyed() {
         let said = clean("refused\x1b[2J\x1b]0;title\x07 key\r\nnext\tline");
         assert_eq!(said, "refused[2J]0;title key\nnext line");
+    }
+
+    #[test]
+    fn a_link_is_drawn_for_a_page_too() {
+        let picture = code_picture("https://host.example.ts.net:8377/#ABCD-EFGH").unwrap();
+        assert!(picture.starts_with("<svg") && picture.contains("M3 3h1v1h-1z"), "{picture}");
     }
 
     #[test]

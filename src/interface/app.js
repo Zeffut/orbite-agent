@@ -204,6 +204,13 @@
         } else if (event.text) {
           const bubble = make("div", "said agent");
           bubble.append(written(event.text));
+          // A link that lets a device in, as a code to point a phone at.
+          if (event.code) {
+            const code = make("img", "code");
+            code.alt = "";
+            code.src = "data:image/svg+xml," + encodeURIComponent(event.code);
+            bubble.append(code);
+          }
           add(bubble, event);
         }
         $("doing").hidden = true;

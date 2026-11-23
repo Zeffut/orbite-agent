@@ -638,6 +638,14 @@ fn pair() -> Result<(), Failure> {
     println!(
         "Open {at} on the device, and type this code there:\n\n    {code}\n\nIt works once, for ten minutes."
     );
+    // In a terminal, a code to point a phone at, where a phone can follow it.
+    let of_this_machine = at.starts_with("http://127.") || at.starts_with("http://localhost");
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) && !of_this_machine {
+        println!(
+            "\nOr point your phone's camera at this:\n\n{}",
+            orbite::square_code_text(&format!("{at}/#{code}"))
+        );
+    }
     Ok(())
 }
 

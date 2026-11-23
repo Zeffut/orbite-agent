@@ -93,6 +93,7 @@ button { cursor: pointer; }
 .said.agent { align-self: flex-start; background: var(--agent); border: 1px solid var(--agent-line); }
 .said.owner { align-self: flex-end; background: var(--mine); }
 .said.owner.elsewhere { opacity: 0.72; }
+.said .code { display: block; width: min(220px, 100%); margin-top: 10px; border-radius: 10px; }
 .said a { color: var(--accent); text-underline-offset: 2px; }
 .said code { font-family: ui-monospace, Menlo, monospace; font-size: 0.9em; background: var(--ground); padding: 1px 5px; border-radius: 6px; }
 .said pre { margin: 6px 0 0; padding: 10px 12px; background: var(--ground); border-radius: 12px; overflow-x: auto; white-space: pre; }

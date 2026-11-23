@@ -92,4 +92,4 @@ pub use tryout::{Tools, Verdict, advice, keep_rating, rating, try_out};
 pub use updater::{
     RELEASE_KEY, Service, Systemd, UpdateError, Updater, run_by_sudo_for_another, system_program,
 };
-pub use welcome::Welcome;
+pub use welcome::{Welcome, code_picture, square_code_text};
