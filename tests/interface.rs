@@ -647,3 +647,43 @@ async fn a_page_is_told_where_what_it_finds_again_ends_and_what_is_new_begins() 
     browser.says("Second").await;
     assert_eq!(next(&mut again, "agent").await["text"], "Two.");
 }
+
+#[tokio::test]
+async fn settings_are_read_and_changed_as_an_app_does_without_a_word_in_the_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::answering(["Still here."]);
+    let browser = agent_with_a_paired_browser(home.path(), &provider).await;
+    let mut shown = browser.watches(None).await.unwrap();
+    let read = |kept: Option<String>| {
+        let asking = reqwest::Client::new().get(format!("{}/api/settings", browser.at));
+        match kept {
+            Some(kept) => asking.header("cookie", kept),
+            None => asking,
+        }
+    };
+
+    // Each setting, what it is set to, and what it can be set to.
+    let all: Value = read(browser.kept.clone()).send().await.unwrap().json().await.unwrap();
+    let updates = all["settings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|setting| setting["key"] == "updates")
+        .expect("no setting for updates");
+    assert_eq!(updates["value"], "on");
+    assert_eq!(updates["choices"], json!(["off", "on"]));
+    // Which computer the Agent uses is no setting: it was chosen at install.
+    assert!(!all.to_string().contains("\"computer\""), "{all}");
+    // Nobody else reads them, and nothing that is not a setting is changed.
+    assert_eq!(read(None).send().await.unwrap().status(), 401);
+    let not_one = browser.posts("/api/settings", json!({ "key": "home", "value": "/" })).await;
+    assert_eq!(not_one.status(), 400);
+
+    // Changed, nothing is said of it: the next thing shown is what the
+    // Owner says next.
+    let changed = browser.posts("/api/settings", json!({ "key": "updates", "value": "off" })).await;
+    assert_eq!(changed.status(), 200);
+    assert_eq!(browser.says("Hi").await, 200);
+    assert_eq!(next(&mut shown, "owner").await["text"], "Hi");
+    assert_eq!(next(&mut shown, "agent").await["text"], "Still here.");
+}

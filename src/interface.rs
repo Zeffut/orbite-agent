@@ -65,6 +65,8 @@ struct Shared {
     files: PathBuf,
     /// Where what the Owner sends is saved for the Agent.
     inbox: PathBuf,
+    /// The installation's folder, where its settings are read.
+    home: PathBuf,
     /// Files received and not yet sent with a message, oldest first.
     waiting: Mutex<Vec<Waiting>>,
     /// The Agent's screen as last seen, and how many times it was: kept in
@@ -282,6 +284,7 @@ impl Interface {
             live,
             files,
             inbox: home.join("workspace/inbox"),
+            home: home.to_owned(),
             waiting: Mutex::new(Vec::new()),
             screen: Mutex::new((0, Vec::new())),
             encrypted: crate::Config::load(home)
@@ -341,6 +344,7 @@ impl Interface {
             .route("/api/events", get(events))
             .route("/api/say", post(say))
             .route("/api/answer", post(answer))
+            .route("/api/settings", get(settings).post(set))
             .route("/api/file", get(file))
             .route("/api/screen", get(screen))
             .route(
@@ -752,6 +756,64 @@ async fn answer(
     };
     let asked = sent["ask"].as_str().unwrap_or_default().to_owned();
     match shared.to_agent.send(Incoming::Answered(asked, answered)) {
+        Ok(()) => Json(json!({ "sent": true })).into_response(),
+        Err(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "the agent is not listening"),
+    }
+}
+
+/// The settings, for a device to show as an app shows its own: each with
+/// what it is set to and what it can be set to.
+async fn settings(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let Ok(store) = crate::Store::open(shared.home.join("orbite.db")) else {
+        return refused(StatusCode::SERVICE_UNAVAILABLE, "the settings cannot be read");
+    };
+    let read = crate::Settings::of(&store, Some(&shared.home)).waking_up_by_default_every(240);
+    let all: Vec<Value> = crate::SETTINGS
+        .iter()
+        .map(|key| {
+            json!({
+                "key": key,
+                "value": read.get(key).unwrap_or_default(),
+                "choices": crate::Settings::choices(key),
+            })
+        })
+        .collect();
+    // What each shape and colour looks like, for a device to draw them.
+    let shapes: serde_json::Map<String, Value> = crate::SHAPES
+        .iter()
+        .map(|shape| {
+            let look = crate::Look::called(Some(shape), None);
+            let drawn =
+                json!({ "outline": look.outline(), "eyes": 36.0 + 42.0 * look.eyes_down() });
+            ((*shape).to_owned(), drawn)
+        })
+        .collect();
+    let colours: serde_json::Map<String, Value> =
+        crate::COLOURS.iter().map(|(name, page, _)| ((*name).to_owned(), json!(page))).collect();
+    Json(json!({ "settings": all, "shapes": shapes, "colours": colours })).into_response()
+}
+
+/// A setting changed from a device: handed to the Agent, which changes it
+/// as it would had its Owner asked in words, and says nothing of it.
+async fn set(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(sent): Json<Value>,
+) -> Response {
+    if !from_the_page(&headers, &shared.names) || shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let (Some(key), Some(value)) = (sent["key"].as_str(), sent["value"].as_str()) else {
+        return refused(StatusCode::BAD_REQUEST, "a key and a value");
+    };
+    let one_line = |text: &str| !text.is_empty() && !text.contains(['\n', '\r']);
+    if !crate::SETTINGS.contains(&key) || !one_line(value) || value.chars().count() > 200 {
+        return refused(StatusCode::BAD_REQUEST, "not a setting, or not a value for one");
+    }
+    match shared.to_agent.send(Incoming::Said(format!("/set {key} {value}"), None)) {
         Ok(()) => Json(json!({ "sent": true })).into_response(),
         Err(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "the agent is not listening"),
     }

@@ -931,6 +931,20 @@ impl<P: Provider + 'static> Agent<P> {
                     None => {}
                 }
             }
+            // A setting changed where settings are shown as an app shows
+            // them: changed, and nothing said unless it could not be.
+            if !by_the_agent && let Some(asked) = text.trim().strip_prefix("/set ") {
+                let (said, _) = self.settings(asked);
+                let changed = asked.split_whitespace().next().unwrap_or_default();
+                if !said.starts_with('✅') {
+                    if channel.send(&said).await.is_err() {
+                        return;
+                    }
+                } else if crate::TAKES_A_RESTART.contains(&changed) && self.restarted {
+                    return;
+                }
+                continue;
+            }
             if let Some(asked) = text.trim().strip_prefix("/settings") {
                 let (mut said, mut choices) = self.settings(asked);
                 // Changed without the menu having been opened: the change
