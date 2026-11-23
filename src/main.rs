@@ -274,6 +274,26 @@ async fn interface_at(
 }
 
 async fn chat() -> Result<(), Failure> {
+    // Where the Agent serves its Conversation, a terminal is one more
+    // device in it: the same Conversation as on its page and in its apps.
+    let home = home()?;
+    let config = Config::load(&home)?;
+    let in_a_terminal = std::io::IsTerminal::is_terminal(&std::io::stdin())
+        && std::io::IsTerminal::is_terminal(&std::io::stdout())
+        && orbite::Welcome::fits_here();
+    if in_a_terminal
+        && let Some(address) = config.interface.as_deref().and_then(|address| address.parse().ok())
+    {
+        let language = orbite::Language::of(config.language.as_deref());
+        return match orbite::talk(&home, address, language).await {
+            Ok(()) => Ok(()),
+            Err(error) => Err(format!(
+                "Your agent could not be reached at {address}: {error}. Is it running? \
+                 (sudo systemctl status orbite)"
+            )
+            .into()),
+        };
+    }
     let mut agent = agent()?;
     until_asked_to_stop(agent.converse(&mut Terminal::new(BufReader::new(stdin()), stdout())))
         .await;

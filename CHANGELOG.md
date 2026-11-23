@@ -4,8 +4,9 @@ What changed in each version of Orbite, for the people who run it.
 
 ## 0.8.1
 
-Not released yet.
+Released on 2026-11-23.
 
+- **`sudo orbite chat` is your agent's Conversation, in the terminal**: the same one as on its page and in its apps, on a screen of its own. Your agent in its colour, lists and titles laid out, what it is doing as it works, a request answered with the arrow keys, and Esc to leave. It used to start a second agent beside the one that runs, behind a bare prompt.
 - **A command run without `sudo` on an installed machine says so**, instead of answering that no AI is set up: what Orbite keeps is readable by its own account alone.
 
 ## 0.8.0

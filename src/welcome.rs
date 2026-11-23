@@ -11,12 +11,12 @@ use crate::Language;
 use crate::Look;
 use crate::front::{Choice, Front, Left, Mood, Picked, clean};
 
-const BOLD: &str = "\x1b[1m";
-const QUIET: &str = "\x1b[2m";
-const PLAIN: &str = "\x1b[0m";
-const ACCENT: &str = "\x1b[38;5;75m";
-const OK: &str = "\x1b[38;5;78m";
-const WARN: &str = "\x1b[38;5;210m";
+pub(crate) const BOLD: &str = "\x1b[1m";
+pub(crate) const QUIET: &str = "\x1b[2m";
+pub(crate) const PLAIN: &str = "\x1b[0m";
+pub(crate) const ACCENT: &str = "\x1b[38;5;75m";
+pub(crate) const OK: &str = "\x1b[38;5;78m";
+pub(crate) const WARN: &str = "\x1b[38;5;210m";
 
 /// How often the screen is drawn again.
 const TICK: Duration = Duration::from_millis(80);
@@ -24,21 +24,21 @@ const TICK: Duration = Duration::from_millis(80);
 /// One line of the screen: what is written, and how many columns it takes.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Row {
-    text: String,
-    width: usize,
+    pub(crate) text: String,
+    pub(crate) width: usize,
 }
 
 impl Row {
-    fn blank() -> Self {
+    pub(crate) fn blank() -> Self {
         Self::default()
     }
 
     /// `text` with nothing but letters in it, `indent` columns in.
-    fn of(indent: usize, text: &str) -> Self {
+    pub(crate) fn of(indent: usize, text: &str) -> Self {
         Self::styled(indent, "", text)
     }
 
-    fn styled(indent: usize, style: &str, text: &str) -> Self {
+    pub(crate) fn styled(indent: usize, style: &str, text: &str) -> Self {
         Self {
             text: format!("{}{style}{text}{PLAIN}", " ".repeat(indent)),
             width: indent + text.chars().count(),
@@ -46,7 +46,7 @@ impl Row {
     }
 
     /// Several pieces one after the other, each with its style.
-    fn pieces(indent: usize, pieces: &[(&str, &str)]) -> Self {
+    pub(crate) fn pieces(indent: usize, pieces: &[(&str, &str)]) -> Self {
         let mut row = Self { text: " ".repeat(indent), width: indent };
         for (style, text) in pieces {
             row.text.push_str(&format!("{style}{text}{PLAIN}"));
@@ -209,7 +209,7 @@ pub fn mascot(look: Option<Look>, mood: Mood, tick: u64) -> Vec<Row> {
 }
 
 /// `text` in lines of at most `wide` columns, broken between words.
-fn wrapped(text: &str, wide: usize) -> Vec<String> {
+pub(crate) fn wrapped(text: &str, wide: usize) -> Vec<String> {
     let mut lines = Vec::new();
     for paragraph in text.split('\n') {
         let indent: String = paragraph.chars().take_while(|letter| *letter == ' ').collect();
@@ -553,31 +553,7 @@ impl Welcome {
 
     /// Takes the terminal: its own screen, keys read as they are pressed.
     pub fn open() -> std::io::Result<Self> {
-        // SAFETY: `termios` is plain data that `tcgetattr` fills in whole.
-        let mut as_it_was: libc::termios = unsafe { std::mem::zeroed() };
-        // SAFETY: descriptor 0 is this process's own input.
-        if unsafe { libc::tcgetattr(0, &mut as_it_was) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let mut raw = as_it_was;
-        // Ctrl-C still stops it, at any moment: what is stopped then gives
-        // the terminal back before it goes (`give_back`).
-        raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::IEXTEN);
-        raw.c_iflag &= !(libc::IXON | libc::ICRNL);
-        raw.c_cc[libc::VSUSP] = 0;
-        raw.c_cc[libc::VQUIT] = 0;
-        AS_IT_WAS.store(Box::into_raw(Box::new(as_it_was)), Ordering::SeqCst);
-        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-            // SAFETY: `give_back` only makes calls a signal handler may make.
-            unsafe { libc::signal(signal, give_back as *const () as libc::sighandler_t) };
-        }
-        raw.c_cc[libc::VMIN] = 1;
-        raw.c_cc[libc::VTIME] = 0;
-        // SAFETY: as above, with settings derived from the terminal's own.
-        if unsafe { libc::tcsetattr(0, libc::TCSANOW, &raw) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        put("\x1b[?1049h\x1b[?25l\x1b[2J");
+        let as_it_was = take_the_terminal()?;
         let view = Arc::new(Mutex::new(View::default()));
         let over = Arc::new(AtomicBool::new(false));
         let drawing = std::thread::spawn({
@@ -598,14 +574,7 @@ impl Welcome {
         self.over.store(true, Ordering::SeqCst);
         if let Some(drawing) = self.drawing.take() {
             let _ = drawing.join();
-            put("\x1b[?25h\x1b[?1049l");
-            // SAFETY: the settings read from this same terminal at the start.
-            unsafe { libc::tcsetattr(0, libc::TCSANOW, &self.as_it_was) };
-            for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-                // SAFETY: back to what a signal does by itself.
-                unsafe { libc::signal(signal, libc::SIG_DFL) };
-            }
-            AS_IT_WAS.store(std::ptr::null_mut(), Ordering::SeqCst);
+            give_the_terminal_back(&self.as_it_was);
         }
     }
 
@@ -700,6 +669,49 @@ impl Welcome {
     }
 }
 
+/// Takes the terminal: a screen of its own, keys read as they are pressed.
+/// What it was like before is given back, to give it back with.
+pub(crate) fn take_the_terminal() -> std::io::Result<libc::termios> {
+    // SAFETY: `termios` is plain data that `tcgetattr` fills in whole.
+    let mut as_it_was: libc::termios = unsafe { std::mem::zeroed() };
+    // SAFETY: descriptor 0 is this process's own input.
+    if unsafe { libc::tcgetattr(0, &mut as_it_was) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut raw = as_it_was;
+    // Ctrl-C still stops it, at any moment: what is stopped then gives
+    // the terminal back before it goes (`give_back`).
+    raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::IEXTEN);
+    raw.c_iflag &= !(libc::IXON | libc::ICRNL);
+    raw.c_cc[libc::VSUSP] = 0;
+    raw.c_cc[libc::VQUIT] = 0;
+    AS_IT_WAS.store(Box::into_raw(Box::new(as_it_was)), Ordering::SeqCst);
+    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+        // SAFETY: `give_back` only makes calls a signal handler may make.
+        unsafe { libc::signal(signal, give_back as *const () as libc::sighandler_t) };
+    }
+    raw.c_cc[libc::VMIN] = 1;
+    raw.c_cc[libc::VTIME] = 0;
+    // SAFETY: as above, with settings derived from the terminal's own.
+    if unsafe { libc::tcsetattr(0, libc::TCSANOW, &raw) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    put("\x1b[?1049h\x1b[?25l\x1b[2J");
+    Ok(as_it_was)
+}
+
+/// Gives the terminal back as it was found.
+pub(crate) fn give_the_terminal_back(as_it_was: &libc::termios) {
+    put("\x1b[?25h\x1b[?1049l");
+    // SAFETY: the settings read from this same terminal at the start.
+    unsafe { libc::tcsetattr(0, libc::TCSANOW, as_it_was) };
+    for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+        // SAFETY: back to what a signal does by itself.
+        unsafe { libc::signal(signal, libc::SIG_DFL) };
+    }
+    AS_IT_WAS.store(std::ptr::null_mut(), Ordering::SeqCst);
+}
+
 /// The terminal's settings before setup took it, for `give_back`.
 static AS_IT_WAS: std::sync::atomic::AtomicPtr<libc::termios> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
@@ -720,7 +732,7 @@ extern "C" fn give_back(signal: libc::c_int) {
 }
 
 /// Writes to the terminal; one that went away is no reason to fail.
-fn put(text: &str) {
+pub(crate) fn put(text: &str) {
     let mut out = std::io::stdout();
     let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
 }
@@ -733,7 +745,7 @@ fn forget_what_was_typed_ahead() {
 }
 
 /// Reads one byte typed, waiting at most `patience` milliseconds when given.
-fn byte(patience: Option<i32>) -> Option<u8> {
+pub(crate) fn byte(patience: Option<i32>) -> Option<u8> {
     if let Some(patience) = patience {
         let mut waiting = libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 };
         // SAFETY: one descriptor, described by a value that outlives the call.
@@ -748,7 +760,7 @@ fn byte(patience: Option<i32>) -> Option<u8> {
 }
 
 /// The terminal's size, in columns and lines.
-fn size() -> (usize, usize) {
+pub(crate) fn size() -> (usize, usize) {
     // SAFETY: `winsize` is plain data that the call fills in.
     let mut size: libc::winsize = unsafe { std::mem::zeroed() };
     // SAFETY: descriptor 1 is this process's own output.
