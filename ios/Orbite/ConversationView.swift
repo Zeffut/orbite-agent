@@ -47,7 +47,11 @@ struct ConversationView: View {
         .safeAreaInset(edge: .top) { top }
         .safeAreaInset(edge: .bottom) { bottom }
         .sheet(isPresented: $settings) { SettingsView() }
-        .task { recorder.prepare() }
+        .task {
+            recorder.prepare()
+            // Started on its settings, when it is being tried out.
+            if UserDefaults.standard.string(forKey: "show") == "settings" { settings = true }
+        }
         .onDisappear { recorder.rest() }
         .photosPicker(isPresented: .constant(false), selection: $picked)
         .onChange(of: picked) { takePhotos() }
