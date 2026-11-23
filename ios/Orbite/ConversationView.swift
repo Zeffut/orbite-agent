@@ -30,9 +30,9 @@ struct ConversationView: View {
                     ForEach(agent.entries) { entry in
                         EntryView(entry: entry).id(entry.id)
                     }
-                    if let doing = agent.doing {
-                        Text(doing).font(.footnote).foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
+                    if agent.working {
+                        Thinking(look: agent.look, doing: agent.doing)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                     Color.clear.frame(height: 1).id("end")
                 }
@@ -41,7 +41,8 @@ struct ConversationView: View {
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             .onChange(of: agent.entries.count) { withAnimation(.snappy) { scroll.scrollTo("end", anchor: .bottom) } }
-            .onChange(of: agent.doing) { scroll.scrollTo("end", anchor: .bottom) }
+            .onChange(of: agent.working) { withAnimation(.snappy) { scroll.scrollTo("end", anchor: .bottom) } }
+            .animation(.snappy, value: agent.working)
         }
         .background(Color(page: "#0d0d0d").ignoresSafeArea())
         .safeAreaInset(edge: .top) { top }
@@ -134,23 +135,34 @@ struct ConversationView: View {
                             }
                             Button(say("Files", "Fichiers"), systemImage: "folder") { choosingFile = true }
                         } label: {
-                            Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 48, height: 48)
+                            Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 46, height: 46)
                                 .glassEffect(.regular.interactive(), in: .circle)
                         }
                         .tint(.primary)
-                        TextField(say("Message \(agent.name)", "Écrire à \(agent.name)"), text: $text, axis: .vertical)
-                            .lineLimit(1...6).focused($writing).font(.body)
-                            .padding(.horizontal, 18).padding(.vertical, 13)
-                            .glassEffect(.regular, in: .rect(cornerRadius: 24))
+                        HStack(alignment: .bottom, spacing: 6) {
+                            TextField(say("Message \(agent.name)", "Écrire à \(agent.name)"), text: $text, axis: .vertical)
+                                .lineLimit(1...6).focused($writing).font(.body)
+                                .padding(.leading, 18).padding(.vertical, 12)
+                            // Sending sits in the field, the size of a letter's line.
+                            if canSend {
+                                Button(action: send) {
+                                    Image(systemName: "arrow.up").font(.subheadline.weight(.bold))
+                                        .foregroundStyle(Color(page: "#0d0d0d"))
+                                        .frame(width: 32, height: 32)
+                                        .background(Color(page: "#f2f2f0"), in: .circle)
+                                }
+                                .padding(.trailing, 7).padding(.bottom, 7)
+                                .transition(.scale.combined(with: .opacity))
+                            } else {
+                                Color.clear.frame(width: 12, height: 1)
+                            }
+                        }
+                        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+                        .animation(.spring(duration: 0.2), value: canSend)
                     } else {
                         recordingBar
                     }
-                    if canSend && held == nil {
-                        Button(action: send) {
-                            Image(systemName: "arrow.up").font(.title3.weight(.semibold)).frame(width: 48, height: 48)
-                        }
-                        .buttonStyle(.glassProminent).buttonBorderShape(.circle)
-                    } else {
+                    if !(canSend && held == nil) {
                         microphone
                     }
                 }
@@ -189,7 +201,7 @@ struct ConversationView: View {
                 Image(systemName: "chevron.left").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 18).frame(height: 48)
+        .padding(.horizontal, 18).frame(height: 46)
         .glassEffect(.regular, in: .capsule)
         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
     }
@@ -199,7 +211,7 @@ struct ConversationView: View {
     private var microphone: some View {
         Image(systemName: "mic.fill").font(.title3.weight(.medium))
             .foregroundStyle(held == nil ? Color.primary : Color.white)
-            .frame(width: 48, height: 48)
+            .frame(width: 46, height: 46)
             .glassEffect(held == nil ? .regular.interactive() : .regular.tint(away ? .gray : .red), in: .circle)
             .scaleEffect(held == nil ? 1 : (away ? 1.1 : 1.4))
             .animation(.spring(duration: 0.22, bounce: 0.35), value: held == nil)
@@ -467,6 +479,46 @@ struct FileView: View {
         .task(id: file.file) {
             guard file.image, picture == nil, let content = await agent.content(of: file.file) else { return }
             picture = UIImage(data: content)
+        }
+    }
+}
+
+/// The Agent at work: itself, swaying, and in a few words what it is
+/// doing, with a light passing over them.
+struct Thinking: View {
+    let look: Look?
+    let doing: String?
+    @State private var passing = false
+
+    /// The first few words of what is being done: enough to know, at a glance.
+    private var words: String {
+        guard let doing, !doing.trimmingCharacters(in: .whitespaces).isEmpty else {
+            return say("Thinking", "Réfléchit")
+        }
+        let all = doing.split(separator: " ")
+        return all.prefix(4).joined(separator: " ") + (all.count > 4 ? "…" : "")
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Figure(look: look, working: true, size: 28)
+            Text(words).font(.callout.weight(.medium))
+                .foregroundStyle(.secondary)
+                .overlay {
+                    // A light that goes across the words, again and again.
+                    LinearGradient(
+                        colors: [.clear, .white.opacity(0.9), .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 60)
+                        .offset(x: passing ? 120 : -120)
+                        .blendMode(.plusLighter)
+                        .mask(Text(words).font(.callout.weight(.medium)))
+                }
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.25), value: words)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4).padding(.vertical, 4)
+        .onAppear {
+            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { passing = true }
         }
     }
 }

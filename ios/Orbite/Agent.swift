@@ -366,6 +366,8 @@ final class Agent {
             return
         }
         trouble = nil
+        // It is at work from the instant it is told, before it says so itself.
+        if !text.hasPrefix("/") { working = true }
     }
 
     /// Answers what the Agent asked leave for.
