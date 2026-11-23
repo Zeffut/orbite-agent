@@ -1,0 +1,30 @@
+name: Orbite
+options:
+  bundleIdPrefix: io.github.zeffut
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: ${APPLE_DEVELOPMENT_TEAM}
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_STRICT_CONCURRENCY: minimal
+targets:
+  Orbite:
+    type: application
+    platform: iOS
+    sources: [Orbite]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.zeffut.orbite
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Orbite
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSCameraUsageDescription: To read the code your agent shows, so that this device is let in.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: To record the voice messages you send your agent.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: To reach your agent when it is on your own network.
