@@ -7,6 +7,7 @@ What changed in each version of Orbite, for the people who run it.
 Released on 2026-11-23.
 
 - **A service is connected with a touch**, from a device: Notion, Calendly, Trello, Linear, Jira and Confluence, ClickUp, Airtable, Stripe, PayPal, Sentry, Supabase, Cloudflare. You sign in in a browser and come back: the sign-in ends on your agent's own page, and nothing is copied by hand. Where your agent's page is not reached encrypted, connecting goes through the conversation as before.
+- An independent review before release found that a setting touched from a device while your agent was asking you something was taken for your answer and refused the action, and that it could be kept as the value of a secret being entered; and that anyone could cancel a sign-in under way. All fixed: what a device changes is taken apart from what is said, and only the answer to the link that was sent ends a sign-in.
 
 ## 0.8.5
 

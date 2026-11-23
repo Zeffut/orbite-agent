@@ -564,6 +564,27 @@ impl<P: Provider + 'static> Agent<P> {
                     continue;
                 }
             };
+            // What a device changed where an app shows such things (a
+            // setting, a service connected) is neither something said nor
+            // an answer to anything Orbite asked: taken first, and quietly.
+            if !by_the_agent && text.trim() == "/reload" {
+                if self.restarted {
+                    return;
+                }
+                continue;
+            }
+            if !by_the_agent && let Some(asked) = text.trim().strip_prefix("/set ") {
+                let (said, _) = self.settings(asked);
+                let changed = asked.split_whitespace().next().unwrap_or_default();
+                if !said.starts_with('✅') {
+                    if channel.send(&said).await.is_err() {
+                        return;
+                    }
+                } else if crate::TAKES_A_RESTART.contains(&changed) && self.restarted {
+                    return;
+                }
+                continue;
+            }
             // A message held back at the strict setting: sent on as it is,
             // or its secret taken out first, as the Owner says.
             let mut looked_at = false;
@@ -930,28 +951,6 @@ impl<P: Provider + 'static> Agent<P> {
                     Some(false) => return,
                     None => {}
                 }
-            }
-            // Something read at start was changed from a device (a service
-            // connected): Orbite starts again to take it, as its service does.
-            if !by_the_agent && text.trim() == "/reload" {
-                if self.restarted {
-                    return;
-                }
-                continue;
-            }
-            // A setting changed where settings are shown as an app shows
-            // them: changed, and nothing said unless it could not be.
-            if !by_the_agent && let Some(asked) = text.trim().strip_prefix("/set ") {
-                let (said, _) = self.settings(asked);
-                let changed = asked.split_whitespace().next().unwrap_or_default();
-                if !said.starts_with('✅') {
-                    if channel.send(&said).await.is_err() {
-                        return;
-                    }
-                } else if crate::TAKES_A_RESTART.contains(&changed) && self.restarted {
-                    return;
-                }
-                continue;
             }
             if let Some(asked) = text.trim().strip_prefix("/settings") {
                 let (mut said, mut choices) = self.settings(asked);
@@ -4593,6 +4592,8 @@ fn gives_up(text: &str) -> bool {
 /// A password may well begin with a slash; a command is known by its word.
 fn is_a_command(text: &str) -> bool {
     const COMMANDS: &[&str] = &[
+        "/set",
+        "/reload",
         "/secret",
         "/secrets",
         "/settings",
@@ -4633,7 +4634,8 @@ async fn showing_work<T>(channel: &mut impl Channel, work: impl Future<Output = 
 /// on this machine, carrying a code to be used once.
 fn is_a_sign_in_address(text: &str) -> bool {
     text.split_whitespace().any(|word| {
-        word.starts_with("http://127.0.0.1:")
+        // On this machine, or on the Agent's own page.
+        (word.starts_with("http://127.0.0.1:") || word.contains("/signed-in?"))
             && (word.contains("code=") || word.contains("error="))
             && word.contains("state=")
     })

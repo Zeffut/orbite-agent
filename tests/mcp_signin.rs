@@ -871,25 +871,8 @@ async fn a_service_is_connected_with_a_touch_and_the_sign_in_ends_on_the_agents_
     assert!(stranger.text().await.unwrap().contains("did not go through"));
     assert_eq!(listed().await["connectors"][0]["connected"], false);
 
-    // Begun again, and this time the Owner's browser comes back from the service.
-    let begun: Value = http
-        .post(format!("{at}/api/connectors"))
-        .header("x-orbite", "1")
-        .header("cookie", &kept)
-        .json(&json!({ "name": "notes" }))
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let link: std::collections::HashMap<String, String> =
-        url::Url::parse(begun["link"].as_str().unwrap())
-            .unwrap()
-            .query_pairs()
-            .into_owned()
-            .collect();
-    *challenge.lock().unwrap() = link["code_challenge"].clone();
+    // The sign-in under way is still there for the Owner's own browser,
+    // which comes back from the service.
     let back = http
         .get(format!("{at}/signed-in?code=the-code&state={}&iss={}", link["state"], server.uri()))
         .send()

@@ -52,6 +52,9 @@ enum Incoming {
     /// the command a choice stands for when one was tapped is not shown.
     Said(String, Option<Value>),
     Answered(String, Answer),
+    /// What a device changed where an app shows such things: for the
+    /// Agent to take, and neither said nor an answer to what was asked.
+    Quietly(String),
 }
 
 /// What every connected device is told: the event's number (zero for one
@@ -134,6 +137,9 @@ pub struct Interface {
     asked: u64,
     /// The Approval last asked, as devices know it.
     open_ask: Option<String>,
+    /// What devices changed while the Agent asked or worked: taken once
+    /// it listens again, and in no way an answer or a change of mind.
+    for_later: std::collections::VecDeque<String>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -385,6 +391,7 @@ impl Interface {
         Ok(Self {
             shared,
             from_devices,
+            for_later: std::collections::VecDeque::new(),
             address,
             last_received: None,
             asked: 0,
@@ -836,11 +843,22 @@ async fn connect(
             "the agent's page is not reached encrypted: ask the agent to connect it instead",
         );
     };
-    if !crate::mcp::listed(&shared.home).iter().any(|listed| listed == connector.name)
-        && let Err(problem) =
-            crate::mcp::add_server(&shared.home, connector.name, connector.address)
-    {
-        return refused(StatusCode::INTERNAL_SERVER_ERROR, &problem);
+    match crate::mcp::address_of(&shared.home, connector.name) {
+        // Another server was given that name by hand: it is not this one.
+        Some(other) if other.trim_end_matches('/') != connector.address.trim_end_matches('/') => {
+            return refused(
+                StatusCode::CONFLICT,
+                "another connector already has that name: remove it first",
+            );
+        }
+        Some(_) => {}
+        None => {
+            if let Err(problem) =
+                crate::mcp::add_server(&shared.home, connector.name, connector.address)
+            {
+                return refused(StatusCode::INTERNAL_SERVER_ERROR, &problem);
+            }
+        }
     }
     let signing = crate::mcp::Mcp::configured_in(&shared.home)
         .ending_sign_ins_at(format!("{reached_at}/signed-in"));
@@ -874,20 +892,33 @@ async fn signed_in(
         ))
         .into_response()
     };
-    let Some(signing) = shared.signing_in.lock().await.take() else {
+    let none = if french { "Aucune connexion en cours." } else { "No sign-in is under way." };
+    let Some(reached_at) = &shared.reached_at else { return page(false, none) };
+    let ended_on = format!("{reached_at}/signed-in?{}", asked.unwrap_or_default());
+    // Whoever is not the answer to the link that was sent leaves the
+    // sign-in under way as it is: a stranger cannot end it.
+    let signing = {
+        let mut under_way = shared.signing_in.lock().await;
+        match under_way.as_ref() {
+            Some(signing) if signing.is_answered_by(&ended_on) => under_way.take(),
+            _ => None,
+        }
+    };
+    let Some(signing) = signing else {
         return page(
             false,
-            if french { "Aucune connexion en cours." } else { "No sign-in is under way." },
+            if french { "La connexion n'a pas abouti." } else { "The sign-in did not go through." },
         );
     };
-    let Some(reached_at) = &shared.reached_at else {
-        return page(false, "No sign-in is under way.");
-    };
-    let ended_on = format!("{reached_at}/signed-in?{}", asked.unwrap_or_default());
     match signing.signed_in_at(&ended_on).await {
         Ok((name, _)) => {
             // The Agent starts again to take the service it now has.
-            let _ = shared.to_agent.send(Incoming::Said("/reload".into(), None));
+            // (Once this page is on its way: the Agent ends at once.)
+            let to_agent = shared.to_agent.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                let _ = to_agent.send(Incoming::Quietly("/reload".into()));
+            });
             let label = shared
                 .connectors
                 .iter()
@@ -973,11 +1004,18 @@ async fn set(
     let (Some(key), Some(value)) = (sent["key"].as_str(), sent["value"].as_str()) else {
         return refused(StatusCode::BAD_REQUEST, "a key and a value");
     };
+    let value = value.trim();
+    // One line; and one word, but for a name, which may be several.
     let one_line = |text: &str| !text.is_empty() && !text.contains(['\n', '\r']);
-    if !crate::SETTINGS.contains(&key) || !one_line(value) || value.chars().count() > 200 {
+    let of_its_kind = key == "name" || !value.contains(char::is_whitespace);
+    if !crate::SETTINGS.contains(&key)
+        || !one_line(value)
+        || !of_its_kind
+        || value.chars().count() > 200
+    {
         return refused(StatusCode::BAD_REQUEST, "not a setting, or not a value for one");
     }
-    match shared.to_agent.send(Incoming::Said(format!("/set {key} {value}"), None)) {
+    match shared.to_agent.send(Incoming::Quietly(format!("/set {key} {value}"))) {
         Ok(()) => Json(json!({ "sent": true })).into_response(),
         Err(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "the agent is not listening"),
     }
@@ -1119,12 +1157,16 @@ async fn file(
 
 impl Channel for Interface {
     async fn receive(&mut self) -> Option<String> {
+        if let Some(changed) = self.for_later.pop_front() {
+            return Some(changed);
+        }
         loop {
             match self.from_devices.recv().await? {
                 Incoming::Said(text, shown) => {
                     self.received(shown);
                     return Some(text);
                 }
+                Incoming::Quietly(changed) => return Some(changed),
                 // An answer to an Approval that is no longer asked.
                 Incoming::Answered(..) => {}
             }
@@ -1132,7 +1174,17 @@ impl Channel for Interface {
     }
 
     async fn interruption(&mut self) -> Option<String> {
-        self.receive().await
+        loop {
+            match self.from_devices.recv().await? {
+                Incoming::Said(text, shown) => {
+                    self.received(shown);
+                    return Some(text);
+                }
+                // A setting touched while the Agent works does not stop it.
+                Incoming::Quietly(changed) => self.for_later.push_back(changed),
+                Incoming::Answered(..) => {}
+            }
+        }
     }
 
     async fn send(&mut self, text: &str) -> io::Result<()> {
@@ -1184,6 +1236,8 @@ impl Channel for Interface {
                     return Ok(answer);
                 }
                 Some(Incoming::Answered(..)) => {}
+                // A setting touched meanwhile is no answer to what is asked.
+                Some(Incoming::Quietly(changed)) => self.for_later.push_back(changed),
                 Some(Incoming::Said(text, shown)) => {
                     self.received(shown);
                     let answer = Answer::Wrote(text);
@@ -1199,9 +1253,13 @@ impl Channel for Interface {
         // Orbite is about to ask.
         let mut written = Vec::new();
         while let Ok(sent) = self.from_devices.try_recv() {
-            if let Incoming::Said(text, shown) = sent {
-                self.received(shown);
-                written.push(text);
+            match sent {
+                Incoming::Said(text, shown) => {
+                    self.received(shown);
+                    written.push(text);
+                }
+                Incoming::Quietly(changed) => self.for_later.push_back(changed),
+                Incoming::Answered(..) => {}
             }
         }
         written

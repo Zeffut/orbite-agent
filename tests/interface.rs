@@ -679,6 +679,11 @@ async fn settings_are_read_and_changed_as_an_app_does_without_a_word_in_the_conv
     let not_one = browser.posts("/api/settings", json!({ "key": "home", "value": "/" })).await;
     assert_eq!(not_one.status(), 400);
 
+    // A value of several words is a name's alone, and none is empty.
+    for (key, value) in [("colour", "blue then red"), ("permission", "  ")] {
+        let odd = browser.posts("/api/settings", json!({ "key": key, "value": value })).await;
+        assert_eq!(odd.status(), 400, "{key}: {value:?}");
+    }
     // Changed, nothing is said of it: the next thing shown is what the
     // Owner says next.
     let changed = browser.posts("/api/settings", json!({ "key": "updates", "value": "off" })).await;
@@ -711,4 +716,29 @@ async fn the_owner_is_shown_round_once_whatever_the_device() {
             .status(),
         401
     );
+}
+
+#[tokio::test]
+async fn a_setting_touched_while_the_agent_asks_is_no_answer_to_what_it_asked() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("run_command", json!({ "command": "rm -rf notes" }))])
+        .then(Ok("Removed.".into()));
+    let browser = agent_with_a_paired_browser(home.path(), &provider).await;
+    let mut shown = browser.watches(None).await.unwrap();
+
+    assert_eq!(browser.says("Remove my notes").await, 200);
+    let asked = next(&mut shown, "ask").await;
+    // A setting is touched on another screen while the question stands.
+    let touched = browser.posts("/api/settings", json!({ "key": "updates", "value": "off" })).await;
+    assert_eq!(touched.status(), 200);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    // The question still stands, and is answered by its own answer.
+    let answered =
+        browser.posts("/api/answer", json!({ "ask": asked["ask"], "answer": "allow" })).await;
+    assert_eq!(answered.status(), 200);
+    assert_eq!(next(&mut shown, "settled").await["answer"], "allow");
+    assert_eq!(next(&mut shown, "agent").await["text"], "Removed.");
 }

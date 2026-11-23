@@ -109,6 +109,8 @@ pub(crate) struct Mcp {
     signing_in: std::sync::Mutex<Option<SigningIn>>,
     /// Where a sign-in ends: the address the Owner's browser is sent to.
     ends_at: String,
+    /// True for one made to sign in from a device: it starts no server.
+    only_signs_in: bool,
     /// The servers whose sign-in was found to have ended, and what there
     /// is to tell the Owner of it: said once for each.
     ended: std::sync::Mutex<Vec<String>>,
@@ -196,6 +198,13 @@ fn write_in(home: &Path, written: &Value) -> Result<(), String> {
 pub fn listed(home: &Path) -> Vec<String> {
     let Ok((written, key)) = written_in(home) else { return Vec::new() };
     written[key].as_object().map(|servers| servers.keys().cloned().collect()).unwrap_or_default()
+}
+
+/// The address of the server called `name` in `home`, when it has one.
+pub fn address_of(home: &Path, name: &str) -> Option<String> {
+    let (written, key) = written_in(home).ok()?;
+    let server = written[key].get(name)?;
+    Some(server["url"].as_str().unwrap_or_default().to_owned())
 }
 
 /// Adds the server at `address` to those of `home`, under `name`. What was
@@ -310,6 +319,7 @@ impl Mcp {
             http: reqwest::Client::new(),
             signing_in: std::sync::Mutex::new(None),
             ends_at: SIGN_IN_ENDS_AT.to_owned(),
+            only_signs_in: false,
             ended: std::sync::Mutex::new(Vec::new()),
             reports: std::sync::Mutex::new(Vec::new()),
         }
@@ -320,7 +330,21 @@ impl Mcp {
     /// that nothing is carried back by hand.
     pub(crate) fn ending_sign_ins_at(mut self, at: impl Into<String>) -> Self {
         self.ends_at = at.into();
+        // It signs in and nothing more: the Agent starts the servers.
+        self.only_signs_in = true;
         self
+    }
+
+    /// True when `ended_on` carries the answer to the very link the
+    /// sign-in under way sent.
+    pub(crate) fn is_answered_by(&self, ended_on: &str) -> bool {
+        let Ok(ended) = url::Url::parse(ended_on.trim()) else { return false };
+        let state = ended
+            .query_pairs()
+            .find(|(key, _)| key == "state")
+            .map(|(_, value)| value.into_owned());
+        let under_way = self.signing_in.lock().unwrap();
+        under_way.as_ref().is_some_and(|begun| Some(&begun.state) == state.as_ref())
     }
 
     /// True when a sign-in to the server called `name` is kept in `home`.
@@ -809,6 +833,9 @@ impl Mcp {
         self.secrets
             .set(&Self::kept_as(&begun.server), &written)
             .map_err(|error| error.to_string())?;
+        if self.only_signs_in {
+            return Ok((begun.server, 0));
+        }
         // Connected afresh, now that it lets Orbite in.
         if let Some(server) = self.servers.iter().find(|server| server.name == begun.server) {
             *server.link.lock().await = None;
