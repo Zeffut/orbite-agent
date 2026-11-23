@@ -554,6 +554,24 @@
     return which ? `${what} · ${which}` : what;
   }
 
+  // The Agent as its Owner chose it, in place of Orbite's own planet.
+  function dress(look) {
+    const drawn = (name, given) => {
+      const part = document.createElementNS("http://www.w3.org/2000/svg", name);
+      for (const [key, value] of Object.entries(given)) part.setAttribute(key, value);
+      return part;
+    };
+    const eyes = drawn("g", { class: "eyes" });
+    for (const x of [38, 55]) eyes.append(drawn("rect", { x, y: look.eyes, width: 7, height: 15, rx: 3.5 }));
+    mascot.classList.add("agent");
+    mascot.style.setProperty("--look", look.colour);
+    mascot.replaceChildren(
+      drawn("path", { class: "body", d: look.outline }),
+      eyes,
+      drawn("circle", { class: "dot", cx: 84, cy: 18, r: 10 }),
+    );
+  }
+
   async function start() {
     const me = await fetch("/api/me");
     const told = await me.json().catch(() => ({}));
@@ -565,6 +583,7 @@
       asks.clear();
       waiting();
       agentName = told.agent || "Orbite";
+      if (told.look) dress(told.look);
       $("title").textContent = agentName;
       unseen = 0;
       name();

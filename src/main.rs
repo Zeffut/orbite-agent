@@ -918,8 +918,11 @@ async fn setup() -> Result<(), Failure> {
         Some("telegram") => Some(SetupStep::Telegram),
         Some("interface") => Some(SetupStep::Interface),
         Some("name") => Some(SetupStep::Name),
+        Some("look") => Some(SetupStep::Look),
         Some(_) => {
-            return Err("Usage: orbite setup [language|provider|telegram|interface|name]".into());
+            return Err(
+                "Usage: orbite setup [language|provider|telegram|interface|name|look]".into()
+            );
         }
     };
     // On a screen of its own where the terminal can show one; as lines

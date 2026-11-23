@@ -54,12 +54,13 @@ The installer ends with a short guided setup, on a screen of its own in the term
 2. **Provider**: chosen from the list, then your API key (pasted without being shown, and checked at once) or, for a ChatGPT plan, a link to sign in with and the address your browser ends on to paste back. The model is not a question: Orbite takes the one that provider is known to serve an agent well with, and a lighter one for summaries where there is one. You change it later by asking your agent; see [Choosing a model](providers.md#choosing-a-model). Only a provider with no usual model (a server of your own, Ollama or LM Studio with several models) has you choose.
 3. **How your devices reach it**: your agent is talked to in a browser, on a page Orbite serves itself. Setup asks how your devices will reach it: **through Tailscale**, set up by itself when Tailscale is already on the machine (one entry added to your Tailscale settings), or **at this server's public address**, for a server on the Internet, where Orbite gets itself a certificate for the address (ports 80 and 443 must be open to the Internet).
 4. **A name** for your agent.
+5. **Its look**: a shape and a colour, shown as you point at each. Your agent then appears as itself, in the terminal and on its page.
 
 Setup then shows a **link**, with a code to point your phone's camera at when the link is one a phone can follow: open it within ten minutes and you are in. That is it.
 
 If you close the terminal half-way, run `sudo orbite setup` to carry on where you stopped. **Telegram too, if you want it.** Setup does not ask about it. To talk to your agent in Telegram as well, run `sudo orbite setup telegram`: it asks for the token of a bot of your own (made with @BotFather), then shows a code to send to that bot from your own account. Whoever sends the code becomes the Owner, the only person the agent will ever listen to.
 
-To redo one part later, add its name: `setup language`, `setup provider`, `setup telegram`, `setup interface` or `setup name`. To add a second AI that takes over when the first cannot answer, `sudo orbite providers add` (see [Providers](providers.md#several-providers-in-order)).
+To redo one part later, add its name: `setup language`, `setup provider`, `setup telegram`, `setup interface`, `setup name` or `setup look`. To add a second AI that takes over when the first cannot answer, `sudo orbite providers add` (see [Providers](providers.md#several-providers-in-order)).
 
 ## Afterwards
 

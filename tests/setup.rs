@@ -142,6 +142,9 @@ async fn set_up(
     telegram: &MockServer,
     only: Option<Step>,
 ) -> String {
+    // A whole setup ends on what the Agent looks like: the first shape and
+    // the first colour, unless the test says otherwise.
+    let typed = if only.is_none() { format!("{typed}1\n1\n") } else { typed.to_owned() };
     let mut shown = Vec::new();
     Setup::in_home(home, typed.as_bytes(), &mut shown)
         .reaching_providers_at(provider.uri())
@@ -534,7 +537,7 @@ async fn an_owner_with_a_chatgpt_plan_signs_in_by_a_link_instead_of_giving_a_key
     let telegram = telegram(vec![message(100, OWNER, CODE)]).await;
     // English, the ChatGPT plan, a wrong paste then the right address,
     // Telegram, the bot's token, a name: the plan's own model is taken.
-    let typed = ["1", "chatgpt", "nonsense", "<address>", "Nova"];
+    let typed = ["1", "chatgpt", "nonsense", "<address>", "Nova", "1", "1"];
     let owner = Answering {
         lines: typed.iter().map(|line| line.to_string()).collect(),
         shown: shown.clone(),
@@ -690,7 +693,7 @@ async fn the_owner_says_how_their_devices_reach_the_agent_and_nothing_else_is_to
     for (answer, through_tailscale) in [("1", true), ("2", false)] {
         let home = tempfile::tempdir().unwrap();
         let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let typed = format!("1\ncustom\n{}\n1\n{answer}\nNova\n", api_key());
+        let typed = format!("1\ncustom\n{}\n1\n{answer}\nNova\n1\n1\n", api_key());
         let mut shown = Vec::new();
         Setup::in_home(home.path(), typed.as_bytes(), &mut shown)
             .reaching_providers_at(provider.uri())
@@ -735,7 +738,8 @@ async fn a_server_behind_anothers_address_is_asked_for_its_public_one() {
     let provider = provider().await;
     let telegram = telegram(vec![]).await;
     // The public way, an address of a private network, a word, then a real one.
-    let typed = format!("1\ncustom\n{}\n1\n2\n10.0.0.4\nhere\n198.51.100.20\nNova\n", api_key());
+    let typed =
+        format!("1\ncustom\n{}\n1\n2\n10.0.0.4\nhere\n198.51.100.20\nNova\n1\n1\n", api_key());
     let mut shown = Vec::new();
     Setup::in_home(home.path(), typed.as_bytes(), &mut shown)
         .reaching_providers_at(provider.uri())
@@ -769,4 +773,35 @@ async fn a_telegram_that_cannot_be_reached_is_said_without_the_token() {
     let shown = String::from_utf8(shown).unwrap();
     assert!(shown.contains("Telegram does not know this token"), "{shown}");
     assert!(!shown.contains(&bot_token()), "the token was shown:\n{shown}");
+}
+
+#[tokio::test]
+async fn the_agent_is_given_a_shape_and_a_colour_and_they_can_be_chosen_again() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    let telegram = telegram(vec![]).await;
+    // A whole setup, ending on the sixth shape and the seventh colour.
+    let typed = format!("1\ncustom\n{}\n1\nNova\n6\n7\n", api_key());
+    let mut shown = Vec::new();
+    Setup::in_home(home.path(), typed.as_bytes(), &mut shown)
+        .reaching_providers_at(provider.uri())
+        .reaching_telegram_at(telegram.uri())
+        .run(None)
+        .await
+        .unwrap();
+    let shown = String::from_utf8(shown).unwrap();
+
+    assert!(shown.contains("What shape for Nova?") && shown.contains("6. star"), "{shown}");
+    let config = Config::load(home.path()).unwrap();
+    assert_eq!(config.agent_shape.as_deref(), Some("star"));
+    assert_eq!(config.agent_colour.as_deref(), Some("teal"));
+
+    // Chosen again later, by their names, without the rest being asked.
+    set_up(home.path(), "heart\npink\n", &provider, &telegram, Some(Step::Look)).await;
+    let config = Config::load(home.path()).unwrap();
+    assert_eq!(
+        (config.agent_shape.as_deref(), config.agent_colour.as_deref()),
+        (Some("heart"), Some("pink"))
+    );
+    assert_eq!(config.agent_name.as_deref(), Some("Nova"));
 }

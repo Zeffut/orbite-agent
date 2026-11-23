@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::Language;
+use crate::Look;
 use crate::front::{Choice, Front, Left, Mood, Picked, clean};
 
 const BOLD: &str = "\x1b[1m";
@@ -92,11 +93,17 @@ pub struct View {
     asking: Asking,
     mood: Mood,
     french: bool,
+    /// How the Agent looks, once that is known or being chosen.
+    look: Option<Look>,
+    /// What the Agent is called, once it has a name.
+    name: Option<String>,
 }
 
-/// The mascot, a planet with two eyes and a ring, as rows of text. A moon
-/// goes round it while it works; `tick` is how far along time is.
-pub fn mascot(mood: Mood, tick: u64) -> Vec<Row> {
+/// Who is on the screen, as rows of text: Orbite's planet with its ring,
+/// a moon going round it while it works; or, once the Agent has a look of
+/// its own, the Agent, which sways while it works. `tick` is how far along
+/// time is.
+pub fn mascot(look: Option<Look>, mood: Mood, tick: u64) -> Vec<Row> {
     // Drawn in quarters of a letter's cell, each half a column wide and
     // half a line high: a line being twice as tall as a column is wide,
     // lengths are counted in columns.
@@ -110,7 +117,8 @@ pub fn mascot(mood: Mood, tick: u64) -> Vec<Row> {
     let shut = tick % 55 < 2;
     let in_an_eye = |dx: f32, dy: f32| {
         [-2.05_f32, 2.05].iter().any(|eye| {
-            let (ex, ey) = (dx - eye, dy + 1.2);
+            let down = look.map_or(0.0, |look| look.eyes_down() * 7.4);
+            let (ex, ey) = (dx - eye, dy + 1.2 - down);
             match mood {
                 // An arch: a bar, and a leg down from each of its ends.
                 Mood::Glad => {
@@ -126,12 +134,27 @@ pub fn mascot(mood: Mood, tick: u64) -> Vec<Row> {
     let lit = |x: f32, y: f32| {
         let (dx, dy) = (x - cx, y - cy);
         let (u, v) = (dx * cos + dy * sin, -dx * sin + dy * cos);
-        let ring = within(u, v, 12.6, 3.7) && !within(u, v, 11.4, 2.5);
-        let body = dx * dx + dy * dy <= 7.4 * 7.4;
+        let (ring, body) = match look {
+            None => (
+                within(u, v, 12.6, 3.7) && !within(u, v, 11.4, 2.5),
+                dx * dx + dy * dy <= 7.4 * 7.4,
+            ),
+            // The Agent sways as it works, and swells a little: a round
+            // one would not be seen to turn.
+            Some(look) => {
+                let sway = (tick as f32 * 0.22).sin();
+                let (turned, swollen) = if mood == Mood::Working {
+                    (0.3 * sway, 1.0 + 0.04 * sway)
+                } else {
+                    (0.0, 1.0)
+                };
+                (false, look.covers(dx / (7.4 * swollen), dy / (7.4 * swollen), turned))
+            }
+        };
         (ring || body) && !(body && in_an_eye(dx, dy))
     };
     // The moon, on a ring a little wider, hidden when it passes behind.
-    let moon = (mood == Mood::Working).then(|| {
+    let moon = (mood == Mood::Working && look.is_none()).then(|| {
         let angle = tick as f32 * 0.16;
         let (u, v) = (14.6 * angle.cos(), 5.4 * angle.sin());
         (cx + u * cos - v * sin, cy + u * sin + v * cos, angle.sin() < 0.0)
@@ -175,6 +198,10 @@ pub fn mascot(mood: Mood, tick: u64) -> Vec<Row> {
                 row.text.push(QUARTERS[quarters]);
             }
             row.width += 1;
+        }
+        // The Agent, in its colour.
+        if let Some(look) = look {
+            row.text = format!("\x1b[38;5;{}m{}{PLAIN}", look.in_a_terminal(), row.text);
         }
         rows.push(row);
     }
@@ -239,10 +266,16 @@ fn rows_of(
         |french: &'static str, english: &'static str| if view.french { french } else { english };
     let mut rows = vec![Row::blank()];
     if with_mascot {
-        rows.extend(mascot(view.mood, tick).into_iter().map(centred));
+        rows.extend(mascot(view.look, view.mood, tick).into_iter().map(centred));
         rows.push(Row::blank());
     }
-    rows.push(centred(Row::styled(0, BOLD, "o r b i t e")));
+    // Under Orbite's planet, Orbite's name; under the Agent, its own.
+    let called = match (&view.look, &view.name) {
+        (Some(_), Some(name)) => name.to_lowercase(),
+        _ => "orbite".to_owned(),
+    };
+    let spaced: Vec<String> = called.chars().take(24).map(String::from).collect();
+    rows.push(centred(Row::styled(0, BOLD, &spaced.join(" "))));
     if view.step.1 > 0 {
         let mut dots = Row::blank();
         for place in 1..=view.step.1 {
@@ -475,6 +508,9 @@ pub struct Welcome {
     over: Arc<AtomicBool>,
     drawing: Option<std::thread::JoinHandle<()>>,
     as_it_was: libc::termios,
+    /// The looks the choices being asked would give, shown as each is
+    /// pointed at.
+    previews: Vec<Look>,
 }
 
 impl Welcome {
@@ -521,7 +557,7 @@ impl Welcome {
             let (view, over) = (view.clone(), over.clone());
             move || draw_until(&view, &over)
         });
-        Ok(Self { view, over, drawing: Some(drawing), as_it_was })
+        Ok(Self { view, over, drawing: Some(drawing), as_it_was, previews: Vec::new() })
     }
 
     fn change(&self, change: impl FnOnce(&mut View)) {
@@ -820,7 +856,11 @@ impl Front for Welcome {
                 _ => {}
             }
             let (now_at, now_typed) = (at, typed.clone());
+            let pointed_at = self.previews.get(at).copied();
             self.change(|view| {
+                if pointed_at.is_some() {
+                    view.look = pointed_at;
+                }
                 if let Asking::Choices { at, own, .. } = &mut view.asking {
                     *at = now_at;
                     if let Some((_, typed)) = own {
@@ -831,6 +871,31 @@ impl Front for Welcome {
         };
         self.answered();
         Ok(picked)
+    }
+
+    fn named(&mut self, name: &str) {
+        self.change(|view| view.name = Some(clean(name).replace('\n', " ")));
+    }
+
+    fn looks(&mut self, look: Option<Look>) {
+        self.change(|view| view.look = look);
+    }
+
+    fn choose_a_look(
+        &mut self,
+        question: &str,
+        choices: &[(Choice, Look)],
+        suggested: usize,
+    ) -> Result<usize, Left> {
+        let named: Vec<Choice> = choices.iter().map(|(choice, _)| choice.clone()).collect();
+        self.previews = choices.iter().map(|(_, look)| *look).collect();
+        self.looks(self.previews.get(suggested).copied());
+        let picked = self.choose(question, &named, suggested, None);
+        self.previews.clear();
+        match picked? {
+            Picked::Choice(place) => Ok(place),
+            Picked::Typed(_) => Ok(suggested),
+        }
     }
 
     fn ask(&mut self, question: &str) -> Result<String, Left> {
@@ -923,7 +988,11 @@ mod tests {
 
     #[test]
     fn a_row_takes_the_room_of_its_letters_and_not_of_its_colours() {
-        for row in frame(&View::default(), 80, 30, 0).iter().chain(&mascot(Mood::Working, 7)) {
+        for row in frame(&View::default(), 80, 30, 0)
+            .iter()
+            .chain(&mascot(None, Mood::Working, 7))
+            .chain(&mascot(Some(Look::called(Some("star"), Some("teal"))), Mood::Working, 7))
+        {
             let written = letters(std::slice::from_ref(row));
             assert_eq!(written.trim_end_matches('\n').chars().count(), row.width, "{row:?}");
         }

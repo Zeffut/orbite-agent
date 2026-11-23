@@ -18,6 +18,7 @@ mod front;
 mod hearing;
 mod interface;
 mod language;
+mod look;
 mod mcp;
 mod memory;
 mod moving;
@@ -66,6 +67,7 @@ pub use interface::{
     Device, Interface, devices as interface_devices, is_private, pairing_code, turn_away,
 };
 pub use language::Language;
+pub use look::{COLOURS, Look, SHAPES};
 pub use mcp::{
     add_server as add_connector, listed as connectors, remove_server as remove_connector,
     turned_off as connectors_turned_off,

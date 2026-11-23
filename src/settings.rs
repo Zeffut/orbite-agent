@@ -8,7 +8,7 @@ use chrono::NaiveTime;
 use crate::{Config, Store};
 
 /// The settings, in the order they are shown.
-pub const SETTINGS: [&str; 11] = [
+pub const SETTINGS: [&str; 13] = [
     "permission",
     "computer",
     "quiet",
@@ -17,13 +17,16 @@ pub const SETTINGS: [&str; 11] = [
     "updates",
     "language",
     "name",
+    "shape",
+    "colour",
     "model",
     "light",
     "voice",
 ];
 
 /// The settings that are read when Orbite starts: changing one takes a restart.
-pub const TAKES_A_RESTART: [&str; 5] = ["language", "name", "model", "light", "voice"];
+pub const TAKES_A_RESTART: [&str; 7] =
+    ["language", "name", "shape", "colour", "model", "light", "voice"];
 
 /// The settings of one installation.
 pub struct Settings<'a> {
@@ -76,6 +79,15 @@ impl<'a> Settings<'a> {
             "language" => self.config().language.unwrap_or_else(|| "en".into()),
             "model" => self.config().provider.map_or_else(|| "none".into(), |chosen| chosen.model),
             "name" => self.config().agent_name.unwrap_or_else(|| "Orbite".into()),
+            // What the Agent looks like.
+            "shape" => {
+                let config = self.config();
+                crate::Look::called(config.agent_shape.as_deref(), None).shape.into()
+            }
+            "colour" => {
+                let config = self.config();
+                crate::Look::called(None, config.agent_colour.as_deref()).colour.into()
+            }
             // The model that does the light work: summaries and Wake-ups.
             "light" => self.config().light_model.unwrap_or_else(|| "off".into()),
             // What writes down what the Owner says aloud.
@@ -102,6 +114,11 @@ impl<'a> Settings<'a> {
             "computer" => &["this", "own"],
             "updates" => &["off", "on"],
             "language" => &["en", "fr"],
+            "shape" => &crate::SHAPES,
+            "colour" => &[
+                "white", "clay", "red", "orange", "amber", "green", "teal", "blue", "violet",
+                "pink", "grey",
+            ],
             "light" => &["off"],
             "voice" => &["provider", "whisper.cpp", "server", "command", "off"],
             _ => &[],
@@ -221,6 +238,27 @@ impl<'a> Settings<'a> {
                     );
                 }
                 chosen.model = model.to_owned();
+                config.save(home).map_err(|error| error.to_string())
+            }
+            "shape" | "colour" => {
+                let Some(home) = self.home else {
+                    return Err(format!(
+                        "{key} is kept in Orbite's folder, and there is none here."
+                    ));
+                };
+                let asked = written.trim().to_lowercase();
+                let known: Vec<&str> = match key {
+                    "shape" => crate::SHAPES.to_vec(),
+                    _ => crate::COLOURS.iter().map(|(colour, ..)| *colour).collect(),
+                };
+                if !known.contains(&asked.as_str()) {
+                    return Err(format!("{key} is one of: {}.", known.join(", ")));
+                }
+                let mut config = Config::load(home).map_err(|error| error.to_string())?;
+                match key {
+                    "shape" => config.agent_shape = Some(asked),
+                    _ => config.agent_colour = Some(asked),
+                }
                 config.save(home).map_err(|error| error.to_string())
             }
             "name" => {

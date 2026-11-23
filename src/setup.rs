@@ -35,6 +35,8 @@ pub enum Step {
     /// The web interface, turned on.
     Interface,
     Name,
+    /// The Agent's shape and colour.
+    Look,
 }
 
 /// Why setup stopped before its end.
@@ -184,7 +186,7 @@ impl<F: Front> Setup<F> {
         let has = |name: &str| secrets.get(name).map(|kept| kept.is_some()).map_err(stopped);
         let wanted = |step: Step, done: bool| only.map_or(!done, |only| only == step);
         // How far along the Owner is, of the four things a first setup asks.
-        const STEPS: usize = 4;
+        const STEPS: usize = 5;
 
         if wanted(Step::Language, config.language.is_some()) {
             self.front.step(1, STEPS);
@@ -192,6 +194,16 @@ impl<F: Front> Setup<F> {
         }
         let language = Language::of(config.language.as_deref());
         self.front.speak(language);
+        if let Some(name) = &config.agent_name {
+            self.front.named(name);
+        }
+        // An Agent that has a look is shown as itself from the start.
+        if config.agent_shape.is_some() {
+            self.front.looks(Some(crate::Look::called(
+                config.agent_shape.as_deref(),
+                config.agent_colour.as_deref(),
+            )));
+        }
         if wanted(Step::Provider, config.provider.is_some()) {
             self.front.step(2, STEPS);
             self.provider(&mut config, &secrets, language).await?;
@@ -219,6 +231,10 @@ impl<F: Front> Setup<F> {
         if wanted(Step::Name, config.agent_name.is_some()) {
             self.front.step(4, STEPS);
             self.name(&mut config, language)?;
+        }
+        if wanted(Step::Look, config.agent_shape.is_some()) {
+            self.front.step(5, STEPS);
+            self.look(&mut config, language)?;
         }
         if only.is_none() {
             self.greet(&config, &secrets, language).await?;
@@ -892,7 +908,63 @@ impl<F: Front> Setup<F> {
                 Picked::Typed(_) => {}
             }
         };
+        self.front.named(&name);
         config.agent_name = Some(name);
+        config.save(&self.home).map_err(stopped)
+    }
+
+    /// Asks what the Agent looks like: its shape, then its colour, each
+    /// shown as it is pointed at.
+    fn look(&mut self, config: &mut Config, language: Language) -> Result<(), SetupError> {
+        const SHAPES_IN_FRENCH: [&str; 12] = [
+            "galet", "œuf", "carré", "trèfle", "fleur", "étoile", "triangle", "goutte", "haricot",
+            "cœur", "hexagone", "tache",
+        ];
+        const COLOURS_IN_FRENCH: [&str; 11] = [
+            "blanc",
+            "argile",
+            "rouge",
+            "orange",
+            "ambre",
+            "vert",
+            "turquoise",
+            "bleu",
+            "violet",
+            "rose",
+            "gris",
+        ];
+        let name = config.agent_name.clone().unwrap_or_else(|| "Orbite".into());
+        let had =
+            crate::Look::called(config.agent_shape.as_deref(), config.agent_colour.as_deref());
+        let shapes: Vec<(Choice, crate::Look)> = crate::SHAPES
+            .iter()
+            .zip(SHAPES_IN_FRENCH)
+            .map(|(shape, french)| {
+                let look = crate::Look { shape, colour: had.colour };
+                (Choice::of(language.say(shape, french)).also(&[shape]), look)
+            })
+            .collect();
+        let suggested = crate::SHAPES.iter().position(|shape| *shape == had.shape).unwrap_or(0);
+        let question = match language {
+            Language::French => format!("Quelle forme pour {name} ?"),
+            Language::English => format!("What shape for {name}?"),
+        };
+        let shape = crate::SHAPES[self.front.choose_a_look(&question, &shapes, suggested)?];
+        let colours: Vec<(Choice, crate::Look)> = crate::COLOURS
+            .iter()
+            .zip(COLOURS_IN_FRENCH)
+            .map(|((colour, ..), french)| {
+                let look = crate::Look { shape, colour };
+                (Choice::of(language.say(colour, french)).also(&[colour]), look)
+            })
+            .collect();
+        let suggested =
+            crate::COLOURS.iter().position(|(colour, ..)| *colour == had.colour).unwrap_or(0);
+        let question = language.say("And what colour?", "Et quelle couleur ?");
+        let colour = crate::COLOURS[self.front.choose_a_look(question, &colours, suggested)?].0;
+        self.front.looks(Some(crate::Look { shape, colour }));
+        config.agent_shape = Some(shape.to_owned());
+        config.agent_colour = Some(colour.to_owned());
         config.save(&self.home).map_err(stopped)
     }
 

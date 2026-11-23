@@ -69,6 +69,11 @@ button { cursor: pointer; }
 .mascot.waiting .dot { display: block; }
 .mascot.waiting .moon { display: none; }
 .mascot.waiting .eyes { animation: none; transform: translateY(-4px); }
+.mascot.agent .body { fill: var(--look); stroke: var(--line); stroke-width: 1.5; transform-origin: 50px 50px; animation: breathe 4s ease-in-out infinite; }
+.mascot.agent .eyes { fill: #0d0d0d; transform-origin: 50px 50px; }
+.mascot.agent.working .body { animation: sway 1.5s ease-in-out infinite; }
+@keyframes breathe { 50% { transform: scale(1.04); } }
+@keyframes sway { 0%, 100% { transform: rotate(-9deg); } 50% { transform: rotate(9deg) scale(1.05); } }
 @keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.1); } }
 @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
 #link { position: absolute; left: 16px; font-size: 12px; color: var(--warn); }
@@ -172,7 +177,7 @@ button { cursor: pointer; }
 .round.bright { background: var(--bright); color: var(--on-bright); }
 .round:disabled { opacity: 0.4; }
 #talk.dropping #said { outline: 2px dashed var(--accent); outline-offset: -8px; border-radius: 20px; }
-@media (prefers-reduced-motion: reduce) { .mascot .eyes, .mascot.working .moon, #recordTime::before { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .mascot.agent .body, .mascot .eyes, .mascot.working .moon, #recordTime::before { animation: none; } }
 
 /* The Agent's screen, beside the Conversation. */
 #screen {

@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, Write};
 
-use crate::Language;
+use crate::{Language, Look};
 
 /// `text` without what a terminal would obey rather than show: what comes
 /// from outside (a Provider's refusal, a model's name) is written as text.
@@ -80,6 +80,27 @@ pub trait Front: Send {
         suggested: usize,
         own: Option<&str>,
     ) -> Result<Picked, Left>;
+
+    /// Says what the Agent is called, once it has a name.
+    fn named(&mut self, _name: &str) {}
+
+    /// Shows who is being set up: the Agent as it looks, or Orbite itself.
+    fn looks(&mut self, _look: Option<Look>) {}
+
+    /// Asks `question` with `choices`, each a look the Agent could have,
+    /// shown as it is pointed at. The place of the one chosen.
+    fn choose_a_look(
+        &mut self,
+        question: &str,
+        choices: &[(Choice, Look)],
+        suggested: usize,
+    ) -> Result<usize, Left> {
+        let named: Vec<Choice> = choices.iter().map(|(choice, _)| choice.clone()).collect();
+        match self.choose(question, &named, suggested, None)? {
+            Picked::Choice(place) => Ok(place),
+            Picked::Typed(_) => Ok(suggested),
+        }
+    }
 
     /// Asks for a line, which is never empty.
     fn ask(&mut self, question: &str) -> Result<String, Left>;

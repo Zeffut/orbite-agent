@@ -76,6 +76,8 @@ struct Shared {
     encrypted: bool,
     /// What the Owner called their Agent.
     agent: String,
+    /// How the Agent looks, when its Owner chose.
+    look: Option<crate::Look>,
     language: String,
 }
 
@@ -298,6 +300,14 @@ impl Interface {
                 .ok()
                 .and_then(|config| config.agent_name)
                 .unwrap_or_else(|| "Orbite".to_owned()),
+            look: crate::Config::load(home).ok().filter(|config| config.agent_shape.is_some()).map(
+                |config| {
+                    crate::Look::called(
+                        config.agent_shape.as_deref(),
+                        config.agent_colour.as_deref(),
+                    )
+                },
+            ),
             language: language.to_owned(),
         });
         let listening = tokio::net::TcpListener::bind(address).await?;
@@ -593,6 +603,11 @@ async fn me(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
             Json(json!({
                 "device": name, "language": shared.language, "screen": seen,
                 "agent": shared.agent,
+                // Drawn by the page: the outline, the colour, where the eyes sit.
+                "look": shared.look.map(|look| json!({
+                    "shape": look.shape, "colour": look.on_a_page(),
+                    "outline": look.outline(), "eyes": 36.0 + 42.0 * look.eyes_down(),
+                })),
             }))
             .into_response()
         }
