@@ -687,3 +687,28 @@ async fn settings_are_read_and_changed_as_an_app_does_without_a_word_in_the_conv
     assert_eq!(next(&mut shown, "owner").await["text"], "Hi");
     assert_eq!(next(&mut shown, "agent").await["text"], "Still here.");
 }
+
+#[tokio::test]
+async fn the_owner_is_shown_round_once_whatever_the_device() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    let browser = agent_with_a_paired_browser(home.path(), &provider).await;
+    let me = || async {
+        let asked = reqwest::Client::new()
+            .get(format!("{}/api/me", browser.at))
+            .header("cookie", browser.kept.clone().unwrap());
+        asked.send().await.unwrap().json::<Value>().await.unwrap()
+    };
+
+    assert_eq!(me().await["welcomed"], false);
+    assert_eq!(browser.posts("/api/welcomed", json!({})).await.status(), 200);
+    assert_eq!(me().await["welcomed"], true);
+    // A stranger cannot say it was done.
+    assert_eq!(
+        Browser::at(browser.at.trim_start_matches("http://").parse().unwrap())
+            .posts("/api/welcomed", json!({}))
+            .await
+            .status(),
+        401
+    );
+}

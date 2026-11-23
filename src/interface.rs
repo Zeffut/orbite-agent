@@ -345,6 +345,7 @@ impl Interface {
             .route("/api/say", post(say))
             .route("/api/answer", post(answer))
             .route("/api/settings", get(settings).post(set))
+            .route("/api/welcomed", post(welcomed))
             .route("/api/file", get(file))
             .route("/api/screen", get(screen))
             .route(
@@ -607,6 +608,11 @@ async fn me(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
             Json(json!({
                 "device": name, "language": shared.language, "screen": seen,
                 "agent": shared.agent,
+                // True once the Owner has been shown round, on any device.
+                "welcomed": crate::Store::open(shared.home.join("orbite.db"))
+                    .ok()
+                    .and_then(|store| store.setting("welcomed").ok().flatten())
+                    .is_some(),
                 // Drawn by the page: the outline, the colour, where the eyes sit.
                 "look": shared.look.map(|look| json!({
                     "shape": look.shape, "colour": look.on_a_page(),
@@ -758,6 +764,20 @@ async fn answer(
     match shared.to_agent.send(Incoming::Answered(asked, answered)) {
         Ok(()) => Json(json!({ "sent": true })).into_response(),
         Err(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "the agent is not listening"),
+    }
+}
+
+/// The Owner was shown round their Agent, on the device that says so: it
+/// is not shown again, there or on any other.
+async fn welcomed(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if !from_the_page(&headers, &shared.names) || shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let kept = crate::Store::open(shared.home.join("orbite.db"))
+        .and_then(|store| store.set_setting("welcomed", Some("on")));
+    match kept {
+        Ok(()) => Json(json!({ "welcomed": true })).into_response(),
+        Err(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "it could not be kept"),
     }
 }
 
