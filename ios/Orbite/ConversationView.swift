@@ -15,6 +15,7 @@ struct ConversationView: View {
     @State private var away = false
     @State private var recorder = Recorder()
     @FocusState private var writing: Bool
+    @State private var settings = false
 
     struct Attached: Identifiable, Equatable {
         let id = UUID()
@@ -45,6 +46,7 @@ struct ConversationView: View {
         .background(Color(page: "#0d0d0d").ignoresSafeArea())
         .safeAreaInset(edge: .top) { top }
         .safeAreaInset(edge: .bottom) { bottom }
+        .sheet(isPresented: $settings) { SettingsView() }
         .task { recorder.prepare() }
         .onDisappear { recorder.rest() }
         .photosPicker(isPresented: .constant(false), selection: $picked)
@@ -60,16 +62,24 @@ struct ConversationView: View {
         HStack {
             Spacer()
             Menu {
-                Button(say("Add a device", "Ajouter un appareil"), systemImage: "qrcode") {
-                    Task { await agent.send("/pair", tapped: true) }
+                Button(say("Settings", "Réglages"), systemImage: "slider.horizontal.3") { settings = true }
+                // Every agent this phone knows, to go from one to another.
+                if agent.known.count > 1 {
+                    Section(say("Your agents", "Tes agents")) {
+                        ForEach(agent.known) { other in
+                            Button {
+                                Task { await agent.open(other) }
+                            } label: {
+                                if other.address == agent.address?.absoluteString {
+                                    Label(other.name, systemImage: "checkmark")
+                                } else {
+                                    Text(other.name)
+                                }
+                            }
+                        }
+                    }
                 }
-                Button(say("Settings", "Réglages"), systemImage: "slider.horizontal.3") {
-                    Task { await agent.send("/settings", tapped: true) }
-                }
-                Divider()
-                Button(say("Another agent", "Un autre agent"), systemImage: "arrow.left.arrow.right", role: .destructive) {
-                    agent.leave()
-                }
+                Button(say("Add an agent", "Ajouter un agent"), systemImage: "plus") { agent.adding = true }
             } label: {
                 HStack(spacing: 9) {
                     Figure(look: agent.look, working: agent.working, size: 30)

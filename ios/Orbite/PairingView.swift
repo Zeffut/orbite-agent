@@ -12,10 +12,26 @@ struct PairingView: View {
 
     var body: some View {
         VStack(spacing: 22) {
+            // Adding one more: the way back to the one already open.
+            if agent.adding {
+                HStack {
+                    Button {
+                        agent.trouble = nil
+                        agent.adding = false
+                    } label: {
+                        Image(systemName: "chevron.left").font(.headline).frame(width: 44, height: 44)
+                            .glassEffect(.regular.interactive(), in: .circle)
+                    }
+                    .tint(.primary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+            }
             Spacer()
             Figure(look: nil, size: 120)
             VStack(spacing: 8) {
-                Text(say("Open your agent", "Ouvre ton agent")).font(.largeTitle.bold())
+                Text(agent.adding ? say("Add an agent", "Ajoute un agent") : say("Open your agent", "Ouvre ton agent"))
+                    .font(.largeTitle.bold())
                 Text(say(
                     "Ask your agent to add this device, then scan the code it shows.",
                     "Demande à ton agent d'ajouter cet appareil, puis scanne le code qu'il affiche."))

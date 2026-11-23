@@ -11,7 +11,7 @@ struct OrbiteApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if agent.paired {
+                if agent.paired && !agent.adding {
                     ConversationView()
                 } else {
                     PairingView()

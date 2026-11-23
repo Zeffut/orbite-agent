@@ -47,9 +47,42 @@ struct Look: Equatable {
     let eyes: Double
 }
 
+/// An Agent this phone was let in by: where it is, and how it looked last.
+struct Known: Codable, Equatable, Identifiable {
+    var address: String
+    var name: String
+    var outline: String?
+    var colour: String?
+    var eyes: Double?
+    var id: String { address }
+    var look: Look? {
+        outline.map { Look(outline: $0, colour: colour ?? "#f2f2f0", eyes: eyes ?? 36) }
+    }
+}
+
+/// One setting of the Agent: what it is set to, and what it can be set to.
+struct Setting: Identifiable, Equatable {
+    let key: String
+    var value: String
+    let choices: [String]
+    var id: String { key }
+}
+
+/// How each shape and colour is drawn, as the Agent says.
+struct Looks: Equatable {
+    var shapes: [String: (outline: String, eyes: Double)] = [:]
+    var colours: [String: String] = [:]
+    static func == (one: Looks, other: Looks) -> Bool {
+        one.colours == other.colours && one.shapes.keys.sorted() == other.shapes.keys.sorted()
+    }
+}
+
 @Observable
 @MainActor
 final class Agent {
+    /// Every Agent this phone knows, and whether one more is being added.
+    var known: [Known] = []
+    var adding = false
     var paired = false
     var name = "Orbite"
     var look: Look?
@@ -59,8 +92,60 @@ final class Agent {
     var reached = true
     var trouble: String?
 
-    private var address: URL? {
+    private(set) var address: URL? {
         didSet { UserDefaults.standard.set(address?.absoluteString, forKey: "agent") }
+    }
+
+    private func keep() {
+        if let written = try? JSONEncoder().encode(known) {
+            UserDefaults.standard.set(written, forKey: "agents")
+        }
+    }
+
+    /// Writes down the Agent now open among those this phone knows.
+    private func remember() {
+        guard let address else { return }
+        let now = Known(
+            address: address.absoluteString, name: name, outline: look?.outline, colour: look?.colour,
+            eyes: look?.eyes)
+        if let place = known.firstIndex(where: { $0.address == now.address }) {
+            known[place] = now
+        } else {
+            known.append(now)
+        }
+        keep()
+    }
+
+    /// Goes over to another Agent this phone knows.
+    func open(_ other: Known) async {
+        guard let to = URL(string: other.address), to != address else { return }
+        listening?.cancel()
+        entries = []
+        doing = nil
+        working = false
+        name = other.name
+        look = other.look
+        address = to
+        await enter()
+    }
+
+    /// Forgets one Agent, on this phone alone; another it knows is opened.
+    func forget(_ gone: Known) async {
+        known.removeAll { $0.address == gone.address }
+        keep()
+        guard gone.address == address?.absoluteString else { return }
+        listening?.cancel()
+        entries = []
+        if let next = known.first, let to = URL(string: next.address) {
+            name = next.name
+            look = next.look
+            address = to
+            await enter()
+        } else {
+            paired = false
+            address = nil
+            UserDefaults.standard.set(false, forKey: "paired")
+        }
     }
     private var listening: Task<Void, Never>?
     private let session: URLSession = {
@@ -73,6 +158,10 @@ final class Agent {
 
     /// Opens the Conversation again where the app was pointed last.
     func start() async {
+        if let written = UserDefaults.standard.data(forKey: "agents"),
+           let kept = try? JSONDecoder().decode([Known].self, from: written) {
+            known = kept
+        }
         // Given a link as it is started (by a link opened, or when tried out).
         if let link = UserDefaults.standard.string(forKey: "link") {
             await pair(with: link)
@@ -116,6 +205,15 @@ final class Agent {
         base.host = host
         base.port = read.port
         base.path = "/"
+        // Should this one not let the phone in, the one open stays open.
+        let before = (address, name, look, paired)
+        defer {
+            if !paired, before.3 {
+                (address, name, look, paired) = before
+                listen()
+            }
+        }
+        listening?.cancel()
         address = base.url
         let code = read.fragment ?? ""
         if !code.isEmpty {
@@ -131,8 +229,12 @@ final class Agent {
                 return
             }
         }
+        paired = false
         await enter()
-        if !paired, trouble == nil {
+        if paired {
+            entries = []
+            adding = false
+        } else if trouble == nil {
             trouble = say("Your agent did not let this device in.", "Ton agent n'a pas laissé entrer cet appareil.")
         }
     }
@@ -162,16 +264,8 @@ final class Agent {
         paired = true
         reached = true
         UserDefaults.standard.set(true, forKey: "paired")
+        remember()
         listen()
-    }
-
-    /// Forgets the Agent: the app goes back to asking for a link.
-    func leave() {
-        listening?.cancel()
-        entries = []
-        paired = false
-        address = nil
-        UserDefaults.standard.set(false, forKey: "paired")
     }
 
     /// Listens to what the Agent says, for as long as the app is open,
@@ -300,5 +394,48 @@ final class Agent {
               (answer as? HTTPURLResponse)?.statusCode == 200
         else { return nil }
         return content
+    }
+
+    /// The Agent's settings, and how shapes and colours are drawn.
+    func settings() async -> ([Setting], Looks)? {
+        guard let asking = request("/api/settings"), let (told, answer) = try? await session.data(for: asking),
+              (answer as? HTTPURLResponse)?.statusCode == 200,
+              let all = try? JSONSerialization.jsonObject(with: told) as? [String: Any]
+        else { return nil }
+        let settings = (all["settings"] as? [[String: Any]] ?? []).compactMap { one -> Setting? in
+            guard let key = one["key"] as? String else { return nil }
+            return Setting(key: key, value: one["value"] as? String ?? "", choices: one["choices"] as? [String] ?? [])
+        }
+        var looks = Looks()
+        for (shape, drawn) in all["shapes"] as? [String: [String: Any]] ?? [:] {
+            if let outline = drawn["outline"] as? String {
+                looks.shapes[shape] = (outline, drawn["eyes"] as? Double ?? 36)
+            }
+        }
+        looks.colours = all["colours"] as? [String: String] ?? [:]
+        return (settings, looks)
+    }
+
+    /// Changes one setting; true when the Agent took it.
+    func set(_ key: String, to value: String) async -> Bool {
+        let body = try? JSONSerialization.data(withJSONObject: ["key": key, "value": value])
+        guard let asking = request("/api/settings", method: "POST", body: body),
+              let (_, answer) = try? await session.data(for: asking)
+        else { return false }
+        return (answer as? HTTPURLResponse)?.statusCode == 200
+    }
+
+    /// Looks again at who the Agent is, after its name or its look changed.
+    func look_again() async {
+        guard let asking = request("/api/me"), let (told, _) = try? await session.data(for: asking),
+              let me = try? JSONSerialization.jsonObject(with: told) as? [String: Any]
+        else { return }
+        name = me["agent"] as? String ?? name
+        if let look = me["look"] as? [String: Any], let outline = look["outline"] as? String {
+            self.look = Look(
+                outline: outline, colour: look["colour"] as? String ?? "#f2f2f0",
+                eyes: look["eyes"] as? Double ?? 36)
+        }
+        remember()
     }
 }
