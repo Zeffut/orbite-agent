@@ -194,7 +194,7 @@ final class Agent {
                     }
                 } catch {}
                 if Task.isCancelled { return }
-                self?.reached = false
+                self.reached = false
                 try? await Task.sleep(for: .seconds(2))
             }
         }
