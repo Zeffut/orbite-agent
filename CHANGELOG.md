@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.8.5
+
+Released on 2026-11-23.
+
+- **Your agent remembers that you were shown round it.** The iPhone app welcomes you the first time you open your agent (who it is, its look, how much it does on its own, talking to it), once, on whatever device comes first.
+
 ## 0.8.4
 
 Released on 2026-11-23.
