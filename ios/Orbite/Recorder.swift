@@ -4,6 +4,7 @@
 
 import AVFoundation
 import Observation
+import Speech
 import UIKit
 
 @Observable
@@ -104,6 +105,40 @@ final class Recorder {
         }
         sending.impactOccurred(intensity: 0.8)
         return (spoken, file.lastPathComponent)
+    }
+
+    /// What was said in a recording, written down on this phone itself:
+    /// nothing of the voice leaves it. None when the phone cannot, or was
+    /// not let.
+    static func written(from spoken: Data, named name: String) async -> String? {
+        let allowed = await withCheckedContinuation { asked in
+            SFSpeechRecognizer.requestAuthorization { asked.resume(returning: $0 == .authorized) }
+        }
+        let language = Locale.preferredLanguages.first?.hasPrefix("fr") == true ? "fr-FR" : "en-US"
+        guard allowed, let recognizer = SFSpeechRecognizer(locale: Locale(identifier: language)),
+              recognizer.isAvailable
+        else { return nil }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("heard-" + name)
+        guard (try? spoken.write(to: file)) != nil else { return nil }
+        defer { try? FileManager.default.removeItem(at: file) }
+        let request = SFSpeechURLRecognitionRequest(url: file)
+        request.shouldReportPartialResults = false
+        request.addsPunctuation = true
+        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        return await withCheckedContinuation { heard in
+            var answered = false
+            recognizer.recognitionTask(with: request) { result, error in
+                guard !answered else { return }
+                if let result, result.isFinal {
+                    answered = true
+                    let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+                    heard.resume(returning: text.isEmpty ? nil : text)
+                } else if error != nil {
+                    answered = true
+                    heard.resume(returning: nil)
+                }
+            }
+        }
     }
 
     /// Lets the phone's sound go back to whatever else was using it.

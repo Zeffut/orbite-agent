@@ -24,6 +24,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSCameraUsageDescription: To read the code your agent shows, so that this device is let in.
         NSMicrophoneUsageDescription: To record the voice messages you send your agent.
+        NSSpeechRecognitionUsageDescription: To write down what you say, on this phone, before it is sent to your agent.
         NSLocalNetworkUsageDescription: To reach your agent when it is on your own network.
         # An agent on the Owner's own private network is reached as it serves itself.
         NSAppTransportSecurity:

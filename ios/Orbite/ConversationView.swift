@@ -257,9 +257,15 @@ struct ConversationView: View {
                             return
                         }
                         Task {
-                            if let token = await agent.upload(spoken, named: name) {
+                            // Written down on the phone itself, what was said goes as
+                            // words: the Agent reads it whatever it thinks with.
+                            agent.working = true
+                            if let said = await Recorder.written(from: spoken, named: name) {
+                                await agent.send(said)
+                            } else if let token = await agent.upload(spoken, named: name) {
                                 await agent.send("", files: [token])
                             } else {
+                                agent.working = false
                                 agent.trouble = say("That was not sent. Try again.", "Ce n'est pas parti. Réessaie.")
                             }
                         }
