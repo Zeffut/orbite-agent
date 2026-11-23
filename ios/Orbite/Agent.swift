@@ -32,7 +32,7 @@ struct Choice: Equatable, Hashable {
 }
 
 struct Ask: Equatable {
-    let ask: Int
+    let ask: String
     let summary: String
     let detail: String
     let critical: Bool
@@ -227,12 +227,12 @@ final class Agent {
             doing = nil
         case "ask":
             let ask = Ask(
-                ask: event["ask"] as? Int ?? 0, summary: event["summary"] as? String ?? "",
+                ask: event["ask"] as? String ?? "", summary: event["summary"] as? String ?? "",
                 detail: event["detail"] as? String ?? "", critical: event["critical"] as? Bool ?? false,
                 irreversible: event["irreversible"] as? Bool ?? false)
             entries.append(Entry(id: id, kind: .ask(ask), at: at))
         case "settled":
-            let settled = event["ask"] as? Int
+            let settled = event["ask"] as? String
             if let place = entries.firstIndex(where: {
                 if case .ask(let ask) = $0.kind { return ask.ask == settled }
                 return false
@@ -275,7 +275,7 @@ final class Agent {
     }
 
     /// Answers what the Agent asked leave for.
-    func answer(_ ask: Int, _ answer: String) async {
+    func answer(_ ask: String, _ answer: String) async {
         let body = try? JSONSerialization.data(withJSONObject: ["ask": ask, "answer": answer])
         if let asking = request("/api/answer", method: "POST", body: body) {
             _ = try? await session.data(for: asking)
