@@ -1393,8 +1393,7 @@ fn names_orbites_own(command: &str) -> bool {
         "secrets.sealed",
         "secrets.key",
         "orbite.db",
-        // Whose desktop the Agent may be lent, and where it is lent.
-        "desk_account",
+        // Where the Agent is lent a desktop.
         "orbite-desk",
     ];
     // As the shell will read it: quotes and backslashes inside a name hide

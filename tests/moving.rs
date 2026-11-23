@@ -142,6 +142,8 @@ impl Machine {
             "etc/systemd/system/orbite.service",
             "etc/systemd/system/orbite-update.service",
             "etc/systemd/system/orbite-update.timer",
+            "etc/xdg/autostart/orbite-desk.desktop",
+            "usr/local/share/orbite/desk",
             "var/lib/orbite/orbite.db",
             "var/lib/orbite/memory/owner.md",
         ] {
@@ -201,6 +203,8 @@ fn uninstalling_removes_the_service_the_account_the_program_and_the_data() {
         "etc/systemd/system/orbite.service",
         "etc/systemd/system/orbite-update.service",
         "etc/systemd/system/orbite-update.timer",
+        "etc/xdg/autostart/orbite-desk.desktop",
+        "usr/local/share/orbite",
         "var/lib/orbite",
     ] {
         assert!(!machine.has(gone), "{gone} was left behind");

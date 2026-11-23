@@ -2,12 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
-## 0.6.3
+## 0.6.4
 
-Released on 2026-11-23 (0.6.2 was never published: its install trial looked for one exact spelling in the settings file, which the installer now writes to, and stopped the release). Your agent can use this computer's own desktop. Run the installer again to turn it on: it is what starts the helper with your session.
+Released on 2026-11-23 (0.6.2 and 0.6.3 were never published: the install trial stopped both, the second time for a real defect, an agent that could no longer be restored on a freshly installed machine). Your agent can use this computer's own desktop. Run the installer again to turn it on: it is what starts the helper with your session.
 
 - **Two kinds of computer for your agent**: this machine's own desktop, the one you see on its screen, with your programs and the accounts you are signed in to; or a computer of its own, which nobody else looks at and where nothing of yours is. The desktop is used wherever the machine has one open under the account that installed Orbite; "use a computer of your own" and "use this computer" choose, and `/settings` shows it. See [the agent's computer](docs/first-day.md#the-agents-computer).
 - **On your desktop a mouse and a keyboard can do whatever you can**, so taking them is asked (**Use this computer**), for ten minutes at a time, and that request cannot be allowed once and for all. Two independent reviews shaped this before release. What your agent runs as commands has the same account as its own service and could reach the desktop behind it; such a command is asked as a critical one, which is a guard and not a wall. Keep your agent to a computer of its own on a machine where that matters.
+- **Whose desktop may be lent is written where only root writes**, by the installer: your agent's own account cannot change it, and its own folder is left untouched until you set it up. The session of anyone else on the machine lends nothing.
 - **Sessions on Xorg only.** A Wayland session, the default on recent Ubuntu and Fedora, cannot be lent yet: your agent keeps a computer of its own there.
 - Your agent is always told which computer it is on. Left to guess, it guessed wrong.
 - A link in an answer is opened by the page itself: Orbite's app, which shows no other site, hands it to your browser.

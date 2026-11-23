@@ -344,3 +344,56 @@ fn connectors_are_listed_added_and_removed_from_the_host_too() {
     assert!(orbite(home.path(), &["connections", "remove", "docs"], "").status.success());
     assert!(shown(&orbite(home.path(), &["connections"], "")).contains("Connectors: none"));
 }
+
+#[test]
+fn whose_desktop_may_be_lent_is_kept_out_of_the_agents_own_folder() {
+    use std::os::unix::fs::MetadataExt;
+    let machine = tempfile::tempdir().unwrap();
+    let home = machine.path().join("var/lib/orbite");
+    std::fs::create_dir_all(&home).unwrap();
+    let me = std::fs::metadata(&home).unwrap().uid();
+    let named = Command::new("id").arg("-un").output().unwrap();
+    let name = String::from_utf8_lossy(&named.stdout).trim().to_owned();
+
+    let allowed = Command::new(env!("CARGO_BIN_EXE_orbite"))
+        .args(["desk", "allow", &name])
+        .env("ORBITE_ROOT", machine.path())
+        .env_remove("ORBITE_HOME")
+        .output()
+        .unwrap();
+
+    assert!(allowed.status.success(), "{}", shown(&allowed));
+    let written = machine.path().join("usr/local/share/orbite/desk");
+    assert_eq!(std::fs::read_to_string(written).unwrap().trim(), me.to_string());
+    assert!(!home.join("config.json").exists(), "the Agent's settings were written");
+}
+
+#[test]
+fn a_session_of_another_account_than_the_one_written_down_lends_nothing() {
+    let machine = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(machine.path().join("var/lib/orbite")).unwrap();
+    let offer = |written: Option<&str>| {
+        if let Some(number) = written {
+            let file = machine.path().join("usr/local/share/orbite/desk");
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, number).unwrap();
+        }
+        Command::new("timeout")
+            .args(["10", env!("CARGO_BIN_EXE_orbite"), "desk"])
+            .env("ORBITE_ROOT", machine.path())
+            .env_remove("ORBITE_HOME")
+            .env("USER", "ana")
+            .env("DISPLAY", ":4242")
+            .env_remove("WAYLAND_DISPLAY")
+            .env("XDG_SESSION_TYPE", "x11")
+            .output()
+            .unwrap()
+    };
+
+    // Nobody was written down, then somebody else was.
+    for written in [None, Some("4000000000\n")] {
+        let refused = offer(written);
+        assert_eq!(refused.status.code(), Some(2), "{}", shown(&refused));
+        assert!(shown(&refused).contains("which is not ana"), "{}", shown(&refused));
+    }
+}

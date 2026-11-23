@@ -847,3 +847,26 @@ fn a_system_whose_packages_are_unknown_still_gets_orbite_and_is_told_about_the_c
     assert!(said.contains("Void Linux") && said.contains("Xvfb, xdotool"), "{said}");
     assert!(report_offered(&said).is_none(), "this is no defect to report: {said}");
 }
+
+#[test]
+fn whose_desktop_may_be_lent_is_written_where_only_root_writes_and_the_agent_is_left_unset_up() {
+    let machine = Machine::debian();
+    fs::create_dir_all(machine.path("etc/xdg/autostart")).unwrap();
+    machine.stand_in(
+        "id",
+        "[ \"$1\" = \"-u\" ] && [ -z \"$2\" ] && { echo 0; exit 0; }; \
+         [ \"$1\" = \"-u\" ] && [ \"$2\" = \"ana\" ] && { echo 1000; exit 0; }; exit 1",
+    );
+
+    let installed = machine.install_with(&[("SUDO_USER", "ana")]);
+
+    assert!(installed.status.success(), "{}", shown(&installed));
+    let helper = fs::read_to_string(machine.path("etc/xdg/autostart/orbite-desk.desktop")).unwrap();
+    assert!(helper.contains("orbite desk"), "{helper}");
+    assert_eq!(
+        fs::read_to_string(machine.path("usr/local/share/orbite/desk")).unwrap().trim(),
+        "1000"
+    );
+    // An Agent restored there later finds a machine nobody set up.
+    assert!(!machine.path("var/lib/orbite/config.json").exists());
+}

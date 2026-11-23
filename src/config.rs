@@ -48,10 +48,6 @@ pub struct Config {
     /// when something serves it to them encrypted: `https://…`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface_reached_at: Option<String>,
-    /// The account of this machine whose desktop the Agent may be lent, by
-    /// its number: the one that installed Orbite.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub desk_account: Option<u32>,
 }
 
 /// What writes down what the Owner says aloud.

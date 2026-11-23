@@ -146,6 +146,7 @@ install_packages() {
 # again and leave the machine as it was; and the everyday tools (curl,
 # sudo), for it to say they were left, as other things may use them by then.
 BROUGHT=/usr/local/share/orbite/brought
+DESK_OF=/usr/local/share/orbite/desk
 is_there() {
     case "$PM" in
         apt-get) dpkg -s "$1" 2>/dev/null | grep -q '^Status: install ok installed' ;;
@@ -363,8 +364,14 @@ fi
 # helper offers it from the graphical session of whoever installed Orbite,
 # and of nobody else. Where no desktop is ever opened, it never runs.
 OWNER_ACCOUNT="${SUDO_USER:-}"
-if [ -n "$OWNER_ACCOUNT" ] && [ "$OWNER_ACCOUNT" != root ] && [ -d "$ROOT/etc/xdg/autostart" ]; then
-    cat >"$ROOT/etc/xdg/autostart/orbite-desk.desktop" <<DESK
+if [ -n "$OWNER_ACCOUNT" ] && [ "$OWNER_ACCOUNT" != root ] && [ -d "$ROOT/etc/xdg/autostart" ] &&
+    OWNER_NUMBER=$(id -u "$OWNER_ACCOUNT" 2>/dev/null); then
+    # Whose it is is written where only root writes: the agent's account
+    # cannot change it, and its own folder stays that of a machine not set
+    # up. Were it not to be written, Orbite is installed all the same.
+    if mkdir -p "$ROOT${DESK_OF%/*}" && echo "$OWNER_NUMBER" >"$ROOT$DESK_OF" &&
+        chmod 755 "$ROOT${DESK_OF%/*}" && chmod 644 "$ROOT$DESK_OF"; then
+        cat >"$ROOT/etc/xdg/autostart/orbite-desk.desktop" <<DESK
 [Desktop Entry]
 Type=Application
 Name=Orbite
@@ -373,7 +380,7 @@ Exec=$PROGRAM desk
 NoDisplay=true
 X-GNOME-Autostart-enabled=true
 DESK
-    env ORBITE_HOME="$HOME_DIR" "$PROGRAM" desk allow "$OWNER_ACCOUNT" >/dev/null 2>&1 || true
+    fi
 fi
 
 # Orbite keeps itself up to date: once a day it installs the latest release

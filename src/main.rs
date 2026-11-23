@@ -58,8 +58,10 @@ async fn main() -> ExitCode {
     let changes_the_machine = match command.as_str() {
         "update" => env::args().nth(2).is_none(),
         "uninstall" | "export" | "restore" | "version" | "providers" => true,
-        // Offered from the session of whoever opened the desktop, as them.
-        "desk" => env::args().nth(2).is_none(),
+        // Offered from the session of whoever opened the desktop, as them;
+        // and whose desktop it may be is written as root, out of the
+        // Agent's reach.
+        "desk" => true,
         _ => false,
     };
     // What Tailscale is asked takes whoever ran this, root or its operator:
@@ -430,7 +432,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .hearing_notices_in(home.join("notices"))
         .extending_in(home.join("extensions"))
         .switching_the_interface_with(switch_the_interface)
-        .lent_this_computer_by(config.desk_account.unwrap_or(u32::MAX), orbite::DESK_SOCKET)
+        .lent_this_computer_by(desk_account().unwrap_or(u32::MAX), orbite::DESK_SOCKET)
         .connecting_servers_in(&home)
         .configured_in(&home)
         .keeping_secrets_in(&home)
@@ -550,14 +552,27 @@ fn desk() -> Result<(), Failure> {
     use std::os::unix::fs::MetadataExt;
     let asked: Vec<String> = env::args().skip(2).collect();
     if let ["allow", account] = asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        let home = home()?;
         let number = account_numbered(account)
             .ok_or_else(|| format!("There is no account called {account} on this machine."))?;
-        let mut config = Config::load(&home)?;
-        config.desk_account = Some(number);
-        config.save(&home)?;
+        let written =
+            PathBuf::from(format!("{}{DESK_OF}", setting("ORBITE_ROOT").unwrap_or_default()));
+        // Read by the Agent's service and by the helper of every session,
+        // whatever root's own habits for the files it makes.
+        let write = || {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(folder) = written.parent() {
+                fs::create_dir_all(folder)?;
+                fs::set_permissions(folder, fs::Permissions::from_mode(0o755))?;
+            }
+            fs::write(&written, format!("{number}\n"))?;
+            fs::set_permissions(&written, fs::Permissions::from_mode(0o644))
+        };
+        write().map_err(|error| {
+            format!("{} could not be written: {error}. Run this as root.", written.display())
+        })?;
         println!(
-            "The desktop of {account} may be offered to the agent, once they run: orbite desk"
+            "The desktop of {account} may be offered to the agent, once they run: orbite desk\n\
+             The agent takes this in when it next starts."
         );
         return Ok(());
     }
@@ -575,6 +590,12 @@ fn desk() -> Result<(), Failure> {
     let agent_of = |folder: &PathBuf| fs::metadata(folder).map(|folder| folder.uid());
     let agent = agent_of(&installed).map_err(|_| "Orbite is not installed on this machine.")?;
     let account = required("USER").or_else(|_| required("LOGNAME"))?;
+    // Only the account written down offers its desktop: the session of
+    // anyone else on this machine lends nothing, to whoever would ask.
+    let me = fs::metadata("/proc/self").map(|myself| myself.uid()).ok();
+    if me.is_none() || desk_account() != me {
+        return Err(not_the_account(&account).into());
+    }
     let display = setting_of_the_session("DISPLAY");
     let wayland = setting_of_the_session("WAYLAND_DISPLAY").is_some()
         || setting_of_the_session("XDG_SESSION_TYPE").as_deref() == Some("wayland");
@@ -605,11 +626,7 @@ fn desk() -> Result<(), Failure> {
                 std::thread::sleep(std::time::Duration::from_secs(30));
             }
             Err(orbite::NotOffered::NotTheOwner) => {
-                return Err(format!(
-                    "Orbite takes the desktop of the account it was installed by, which is not \
-                     {account}. To have it take yours: sudo orbite desk allow {account}"
-                )
-                .into());
+                return Err(not_the_account(&account).into());
             }
             Err(orbite::NotOffered::Wayland) => {
                 return Err(
@@ -622,17 +639,49 @@ fn desk() -> Result<(), Failure> {
     }
 }
 
+/// What `account` is told when theirs is not the desktop Orbite takes.
+fn not_the_account(account: &str) -> String {
+    format!(
+        "Orbite takes the desktop of the account it was installed by, which is not {account}. \
+         To have it take yours: sudo orbite desk allow {account}"
+    )
+}
+
 /// A setting of the graphical session this was started in.
 fn setting_of_the_session(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
 
+/// Where the installer, or root after it, wrote whose desktop the Agent may
+/// be lent: a place the Agent's own account cannot write to.
+const DESK_OF: &str = "/usr/local/share/orbite/desk";
+
+/// The number of the account whose desktop the Agent may be lent, when one
+/// was written down.
+fn desk_account() -> Option<u32> {
+    let written = format!("{}{DESK_OF}", setting("ORBITE_ROOT").unwrap_or_default());
+    fs::read_to_string(written).ok()?.trim().parse().ok()
+}
+
 /// The number of the account called `name` on this machine.
 fn account_numbered(name: &str) -> Option<u32> {
-    let accounts = fs::read_to_string("/etc/passwd").ok()?;
-    accounts.lines().find_map(|line| {
+    let accounts = fs::read_to_string("/etc/passwd").unwrap_or_default();
+    let written = accounts.lines().find_map(|line| {
         let mut parts = line.split(':');
         (parts.next()? == name).then(|| parts.nth(1)?.parse().ok()).flatten()
+    });
+    // An account kept elsewhere than in this machine's own file (a
+    // directory of the network) is known to the system all the same.
+    written.or_else(|| {
+        if name.starts_with('-') {
+            return None;
+        }
+        let asked =
+            std::process::Command::new(orbite::system_program("id")).args(["-u", name]).output();
+        String::from_utf8_lossy(&asked.ok().filter(|said| said.status.success())?.stdout)
+            .trim()
+            .parse()
+            .ok()
     })
 }
 
@@ -933,6 +982,7 @@ fn uninstall() -> Result<(), Failure> {
         "/etc/systemd/system/orbite-update.timer",
         "/etc/sudoers.d/orbite",
         "/etc/xdg/autostart/orbite-desk.desktop",
+        DESK_OF,
         "/usr/local/bin/orbite.previous",
         "/usr/local/bin/orbite.refused",
         "/usr/local/bin/orbite.updating",
@@ -946,6 +996,10 @@ fn uninstall() -> Result<(), Failure> {
             }
             _ => {}
         }
+    }
+    // The folder of what the installer wrote down, when nothing is left in it.
+    if let Some(folder) = PathBuf::from(format!("{root}{DESK_OF}")).parent() {
+        let _ = fs::remove_dir(folder);
     }
     systemctl(&["daemon-reload"]);
     if keep {

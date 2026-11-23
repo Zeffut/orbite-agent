@@ -9,7 +9,7 @@ The Agent's Computer comes in two kinds, on the Host:
 
 ## How the desktop is reached
 
-A desktop belongs to the account that opened it, and no other account of the machine may look at it or act on it: not the Agent's, which is its own on purpose. So the desktop is offered from inside: a small helper, `orbite desk`, starts with the Owner's graphical session, as their account, and takes its orders from the Agent's service over a socket of the machine. Each side checks which account the other runs as; the installer writes down whose desktop may be offered, the account that installed Orbite. The helper looks at the screen, moves the pointer, types, and opens what is asked with the session's own programs.
+A desktop belongs to the account that opened it, and no other account of the machine may look at it or act on it: not the Agent's, which is its own on purpose. So the desktop is offered from inside: a small helper, `orbite desk`, starts with the Owner's graphical session, as their account, and takes its orders from the Agent's service over a socket of the machine. Each side checks which account the other runs as; the installer writes down whose desktop may be offered, the account that installed Orbite, in a file only root writes: the Agent's account cannot change it, and the Agent's own folder stays untouched until setup. The helper looks at the screen, moves the pointer, types, and opens what is asked with the session's own programs.
 
 Under X11 the helper does this directly. Under Wayland a program may only do it through the desktop's portal, which asks the Owner to allow it; that way is the next to be built, and until then a Wayland session offers nothing and the Agent keeps a computer of its own.
 
