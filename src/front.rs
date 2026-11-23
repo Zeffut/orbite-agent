@@ -5,6 +5,15 @@ use std::io::{BufRead, Write};
 
 use crate::Language;
 
+/// `text` without what a terminal would obey rather than show: what comes
+/// from outside (a Provider's refusal, a model's name) is written as text.
+pub(crate) fn clean(text: &str) -> String {
+    text.chars()
+        .map(|letter| if letter == '\t' { ' ' } else { letter })
+        .filter(|letter| *letter == '\n' || !letter.is_control())
+        .collect()
+}
+
 /// One of the answers offered to a question.
 #[derive(Debug, Clone, Default)]
 pub struct Choice {
@@ -147,7 +156,7 @@ impl<R: BufRead + Send, W: Write + Send> Front for Lines<R, W> {
         for (place, choice) in choices.iter().enumerate() {
             let hint =
                 if choice.hint.is_empty() { String::new() } else { format!(" ({})", choice.hint) };
-            asked.push_str(&format!("  {}. {}{hint}\n", place + 1, choice.label));
+            asked.push_str(&clean(&format!("  {}. {}{hint}\n", place + 1, choice.label)));
         }
         if let Some(own) = own {
             asked.push_str(&format!("  {own}\n"));
@@ -203,27 +212,27 @@ impl<R: BufRead + Send, W: Write + Send> Front for Lines<R, W> {
     }
 
     fn say(&mut self, text: &str) {
-        self.write(&format!("\n{text}\n"));
+        self.write(&clean(&format!("\n{text}\n")));
     }
 
     fn show(&mut self, exactly: &str) {
-        self.write(&format!("\n  {exactly}\n"));
+        self.write(&clean(&format!("\n  {exactly}\n")));
     }
 
     fn working(&mut self, text: &str) {
-        self.write(&format!("{text}\n"));
+        self.write(&clean(&format!("{text}\n")));
     }
 
     fn good(&mut self, text: &str) {
-        self.write(&format!("{text} ✓\n"));
+        self.write(&clean(&format!("{text} ✓\n")));
     }
 
     fn wrong(&mut self, text: &str) {
-        self.write(&format!("{text}\n"));
+        self.write(&clean(&format!("{text}\n")));
     }
 
     fn finish(&mut self, text: &str, link: Option<&str>, after: &str) {
         let link = link.map(|link| format!("\n\n  {link}\n")).unwrap_or_default();
-        self.write(&format!("\n{text}{link}\n{after}\n"));
+        self.write(&clean(&format!("\n{text}{link}\n{after}\n")));
     }
 }

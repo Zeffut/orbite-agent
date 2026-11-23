@@ -832,11 +832,13 @@ async fn setup() -> Result<(), Failure> {
         && let Ok(screen) = orbite::Welcome::open()
     {
         let setup = Setup::shown_with(home()?, screen)
+            .where_tailscale_is(orbite::tailscale().is_some())
             .turning_the_interface_on_with(|| switch_the_interface(true));
         return Ok(setup.run(only).await?);
     }
     let typed = std::io::BufReader::new(std::io::stdin());
     let mut setup = Setup::in_home(home()?, typed, std::io::stdout())
+        .where_tailscale_is(orbite::tailscale().is_some())
         .turning_the_interface_on_with(|| switch_the_interface(true));
     if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         setup = setup.reading_secrets_with(|question| rpassword::prompt_password(question));

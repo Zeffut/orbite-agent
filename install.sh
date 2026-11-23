@@ -68,7 +68,8 @@ doing() {
         settle
         (
             trap - EXIT
-            while :; do
+            # No longer than the installer itself, however that one ends.
+            while kill -0 "$$" 2>/dev/null; do
                 for mark in ⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏; do
                     printf '\r  \033[38;5;75m%s\033[0m \033[2m%s\033[0m' "$mark" "$1"
                     sleep 0.1
@@ -95,6 +96,14 @@ did() {
     settle
     printf '  \033[38;5;78m✓\033[0m %s\n' "$1"
 }
+# Stopped from the keyboard or from outside: the mark stops turning, and
+# nothing is offered to report.
+stopped() {
+    UNFORESEEN=no
+    settle
+    exit 130
+}
+trap stopped INT TERM HUP
 if [ "$FANCY" = yes ]; then
     printf '\n'
     cat <<'MASCOT'

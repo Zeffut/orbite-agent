@@ -667,3 +667,60 @@ async fn the_interface_can_be_turned_on_later_without_going_through_setup_again(
     assert!(shown.contains("http://127.0.0.1:8377"), "{shown}");
     assert_eq!(Config::load(home.path()).unwrap().interface.as_deref(), Some("127.0.0.1:8377"));
 }
+
+#[tokio::test]
+async fn tailscale_serves_the_page_to_other_devices_only_when_the_owner_says_so() {
+    let provider = provider().await;
+    let telegram = telegram(vec![]).await;
+    // Each time: English, the Provider, its key and model, the browser,
+    // where to open it from, a name.
+    for (answer, served_by_tailscale) in [("2", false), ("1", true)] {
+        let home = tempfile::tempdir().unwrap();
+        let asked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let typed = format!("1\ncustom\n{}\n1\n1\n{answer}\nNova\n", api_key());
+        let mut shown = Vec::new();
+        Setup::in_home(home.path(), typed.as_bytes(), &mut shown)
+            .reaching_providers_at(provider.uri())
+            .reaching_telegram_at(telegram.uri())
+            .where_tailscale_is(true)
+            .turning_the_interface_on_with({
+                let (asked, home) = (asked.clone(), home.path().to_owned());
+                move || {
+                    asked.store(true, std::sync::atomic::Ordering::SeqCst);
+                    let mut config = Config::load(&home).unwrap();
+                    config.interface = Some("127.0.0.1:8377".into());
+                    config.interface_reached_at = Some("https://host.example.ts.net:8377".into());
+                    config.save(&home).map_err(|error| error.to_string())
+                }
+            })
+            .run(None)
+            .await
+            .unwrap();
+        let shown = String::from_utf8(shown).unwrap();
+
+        assert!(shown.contains("adds one entry to your Tailscale"), "{shown}");
+        assert_eq!(asked.load(std::sync::atomic::Ordering::SeqCst), served_by_tailscale);
+        let config = Config::load(home.path()).unwrap();
+        assert_eq!(config.interface.as_deref(), Some("127.0.0.1:8377"));
+        assert_eq!(config.interface_reached_at.is_some(), served_by_tailscale, "{shown}");
+    }
+}
+
+#[tokio::test]
+async fn a_telegram_that_cannot_be_reached_is_said_without_the_token() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = provider().await;
+    // Telegram at an address nothing listens on, then the Owner leaves.
+    let typed = format!("1\ncustom\n{}\n1\n2\n{}\n", api_key(), bot_token());
+    let mut shown = Vec::new();
+    let ended = Setup::in_home(home.path(), typed.as_bytes(), &mut shown)
+        .reaching_providers_at(provider.uri())
+        .reaching_telegram_at("http://127.0.0.1:9")
+        .run(None)
+        .await;
+
+    assert!(ended.is_err(), "setup went on without Telegram");
+    let shown = String::from_utf8(shown).unwrap();
+    assert!(shown.contains("Telegram does not know this token"), "{shown}");
+    assert!(!shown.contains(&bot_token()), "the token was shown:\n{shown}");
+}

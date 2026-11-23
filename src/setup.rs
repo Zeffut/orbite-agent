@@ -53,6 +53,11 @@ fn stopped(error: impl fmt::Display) -> SetupError {
     SetupError(error.to_string())
 }
 
+/// `said` without `key` in it, were whoever was asked to say it back.
+fn hidden(said: &str, key: &str) -> String {
+    if key.is_empty() { said.to_owned() } else { said.replace(key, "…") }
+}
+
 /// Turns the web interface on for the installation, as whoever may: where
 /// Orbite is installed that takes more than the Agent's account.
 type TurnOn = Box<dyn FnMut() -> Result<(), String> + Send>;
@@ -68,6 +73,9 @@ pub struct Setup<F> {
     /// What the questions are asked through.
     front: F,
     turn_interface_on: Option<TurnOn>,
+    /// True when this machine is on a Tailscale network, which can serve
+    /// the web interface to the Owner's other devices.
+    tailscale_here: bool,
     providers_at: Option<String>,
     /// True when the Provider being set up is added to those there are.
     adding: bool,
@@ -102,6 +110,7 @@ impl<F: Front> Setup<F> {
             home: home.into(),
             front,
             turn_interface_on: None,
+            tailscale_here: false,
             providers_at: None,
             adding: false,
             telegram_at: "https://api.telegram.org".into(),
@@ -119,6 +128,13 @@ impl<F: Front> Setup<F> {
         turn_on: impl FnMut() -> Result<(), String> + Send + 'static,
     ) -> Self {
         self.turn_interface_on = Some(Box::new(turn_on));
+        self
+    }
+
+    /// Says whether this machine is on a Tailscale network: the Owner is
+    /// then asked before the web interface is served through it.
+    pub fn where_tailscale_is(mut self, here: bool) -> Self {
+        self.tailscale_here = here;
         self
     }
 
@@ -289,12 +305,14 @@ impl<F: Front> Setup<F> {
             })?;
             self.front.working(language.say("Reaching it...", "Connexion..."));
             match self.check(&known, &key, "", &root).await {
+                // Without the key itself, were the Provider to say it back.
                 Err(ProviderError::Rejected(reason)) => self.front.wrong(&format!(
-                    "{} {reason}",
+                    "{} {}",
                     language.say(
                         "The provider refused this key:",
                         "Le fournisseur a refusé cette clé :"
-                    )
+                    ),
+                    reason.replace(&key, "…")
                 )),
                 Err(ProviderError::Unreachable(reason)) => self.front.wrong(&format!(
                     "{} {reason}",
@@ -319,13 +337,21 @@ impl<F: Front> Setup<F> {
             // A plan says itself which models it comes with: the usual one
             // when it is among them, or the first it names.
             offered = self.models(&known, None, &root).await;
-            model = usual
+            let of_the_plan = usual
                 .iter()
-                .find(|usual| offered.iter().any(|offered| offered == *usual))
                 .map(|usual| (*usual).to_owned())
-                .or_else(|| offered.first().cloned());
+                .filter(|usual| offered.contains(usual))
+                .chain(offered.first().cloned());
+            for candidate in of_the_plan {
+                self.front.working(language.say("Reaching it...", "Connexion..."));
+                if self.check(&known, "", &candidate, &root).await.is_ok() {
+                    model = Some(candidate);
+                    break;
+                }
+            }
         }
-        for candidate in usual.iter().filter(|_| model.is_none()) {
+        let by_key = known.speaks != Speaks::ChatGptPlan;
+        for candidate in usual.iter().filter(|_| model.is_none() && by_key) {
             self.front.working(language.say("Reaching it...", "Connexion..."));
             if self.check(&known, &key_of, candidate, &root).await.is_ok() {
                 model = Some((*candidate).to_owned());
@@ -450,7 +476,7 @@ impl<F: Front> Setup<F> {
                 self.front.wrong(&format!(
                     "{} {}",
                     language.say("That did not work:", "Cela n'a pas fonctionné :"),
-                    crate::agent::explain(&error, language)
+                    hidden(&crate::agent::explain(&error, language), key)
                 ));
                 continue;
             }
@@ -555,7 +581,11 @@ impl<F: Front> Setup<F> {
             images: &[],
             light: true,
         };
-        provider.reply(request).await.map(|_| ())
+        // A Provider that never answers is not waited for without end.
+        match tokio::time::timeout(Duration::from_secs(45), provider.reply(request)).await {
+            Ok(replied) => replied.map(|_| ()),
+            Err(_) => Err(ProviderError::Unreachable("it did not answer in time".into())),
+        }
     }
 
     /// The models the Provider offers, when it says; a few of them.
@@ -618,8 +648,31 @@ impl<F: Front> Setup<F> {
         language: Language,
         alone: bool,
     ) -> Result<(), SetupError> {
+        // Serving it through the Owner's Tailscale network changes that
+        // network's settings: it is theirs to say, unless they already did.
+        let mut by_tailscale = self.turn_interface_on.is_some();
+        if by_tailscale && self.tailscale_here && config.interface_reached_at.is_none() {
+            let choices = [
+                Choice::of(language.say("From all my devices", "Depuis tous mes appareils"))
+                    .hinted(
+                        language.say("through Tailscale, encrypted", "par Tailscale, en chiffré"),
+                    )
+                    .also(&["tailscale"]),
+                Choice::of(
+                    language.say("From this machine only", "Depuis cette machine seulement"),
+                )
+                .also(&["local"]),
+            ];
+            let question =
+                language.say("Where do you want to open it from?", "D'où veux-tu l'ouvrir ?");
+            self.front.say(language.say(
+                "This machine is on Tailscale. Orbite can have it serve your agent's page to                  your other devices, and to nobody else: that adds one entry to your Tailscale                  settings, which turning the web interface off removes.",
+                "Cette machine est sur Tailscale. Orbite peut lui faire servir la page de ton                  agent à tes autres appareils, et à personne d'autre : cela ajoute une entrée à                  tes réglages Tailscale, que la désactivation de l'interface web retire.",
+            ));
+            by_tailscale = self.front.choose(question, &choices, 0, None)? == Picked::Choice(0);
+        }
         self.front.working(language.say("Opening the page...", "Ouverture de la page..."));
-        match &mut self.turn_interface_on {
+        match self.turn_interface_on.as_mut().filter(|_| by_tailscale || !self.tailscale_here) {
             Some(turn_on) => {
                 turn_on().map_err(stopped)?;
                 *config = Config::load(&self.home).map_err(stopped)?;
@@ -839,13 +892,22 @@ impl<F: Front> Setup<F> {
                     "is waiting for you. Open this in a browser on this machine:",
                     "t'attend. Ouvre ceci dans un navigateur sur cette machine :",
                 ),
-                language.say(
-                    "\nTo reach it from your phone too, put this machine and your phone on \
-                     Tailscale (tailscale.com), then tell your agent: turn the web interface on.",
-                    "\nPour y accéder aussi depuis ton téléphone, mets cette machine et ton \
-                     téléphone sur Tailscale (tailscale.com), puis dis à ton agent : active \
-                     l'interface web.",
-                ),
+                if self.tailscale_here {
+                    language.say(
+                        "\nTo reach it from your other devices later, tell your agent: turn the \
+                         web interface on.",
+                        "\nPour y accéder plus tard depuis tes autres appareils, dis à ton \
+                         agent : active l'interface web.",
+                    )
+                } else {
+                    language.say(
+                        "\nTo reach it from your phone too, put this machine and your phone on \
+                         Tailscale (tailscale.com), then tell your agent: turn the web interface on.",
+                        "\nPour y accéder aussi depuis ton téléphone, mets cette machine et ton \
+                         téléphone sur Tailscale (tailscale.com), puis dis à ton agent : active \
+                         l'interface web.",
+                    )
+                },
             ),
         };
         self.front.finish(
@@ -876,8 +938,10 @@ impl<F: Front> Setup<F> {
             .json(&body)
             .send()
             .await
-            .map_err(|error| error.to_string())?;
-        let answer: Value = response.json().await.map_err(|error| error.to_string())?;
+            // Never with the address asked, which holds the bot's token.
+            .map_err(|error| error.without_url().to_string())?;
+        let answer: Value =
+            response.json().await.map_err(|error| error.without_url().to_string())?;
         if answer["ok"] == true {
             Ok(answer["result"].clone())
         } else {

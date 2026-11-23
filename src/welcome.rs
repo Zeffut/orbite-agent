@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::Language;
-use crate::front::{Choice, Front, Left, Mood, Picked};
+use crate::front::{Choice, Front, Left, Mood, Picked, clean};
 
 const BOLD: &str = "\x1b[1m";
 const QUIET: &str = "\x1b[2m";
@@ -203,8 +203,32 @@ fn wrapped(text: &str, wide: usize) -> Vec<String> {
     lines
 }
 
-/// The screen as rows, for a terminal of `columns` by `lines`.
+/// The screen as rows, for a terminal of `columns` by `lines`: where it
+/// would not all fit, the question is what stays, before the mascot and
+/// before what went well so far.
 pub fn frame(view: &View, columns: usize, lines: usize, tick: u64) -> Vec<Row> {
+    let fits = |rows: &[Row]| {
+        rows.iter().map(|row| row.width.max(1).div_ceil(columns.max(1))).sum::<usize>() <= lines
+    };
+    let whole = rows_of(view, columns, lines, tick, lines >= 22, true);
+    if fits(&whole) {
+        return whole;
+    }
+    let without_mascot = rows_of(view, columns, lines, tick, false, true);
+    if fits(&without_mascot) {
+        return without_mascot;
+    }
+    rows_of(view, columns, lines, tick, false, false)
+}
+
+fn rows_of(
+    view: &View,
+    columns: usize,
+    lines: usize,
+    tick: u64,
+    with_mascot: bool,
+    with_kept: bool,
+) -> Vec<Row> {
     let wide = columns.saturating_sub(4).clamp(20, 62);
     let margin = columns.saturating_sub(wide) / 2;
     let centred = |row: Row| {
@@ -214,7 +238,7 @@ pub fn frame(view: &View, columns: usize, lines: usize, tick: u64) -> Vec<Row> {
     let say =
         |french: &'static str, english: &'static str| if view.french { french } else { english };
     let mut rows = vec![Row::blank()];
-    if lines >= 22 {
+    if with_mascot {
         rows.extend(mascot(view.mood, tick).into_iter().map(centred));
         rows.push(Row::blank());
     }
@@ -234,7 +258,7 @@ pub fn frame(view: &View, columns: usize, lines: usize, tick: u64) -> Vec<Row> {
     }
     rows.push(Row::blank());
     // What went well so far, the latest two.
-    let kept = &view.kept[view.kept.len().saturating_sub(2)..];
+    let kept = &view.kept[view.kept.len().saturating_sub(if with_kept { 2 } else { 0 })..];
     for kept in kept {
         for (place, line) in wrapped(kept, wide - 2).iter().enumerate() {
             let mark = if place == 0 { "✓ " } else { "  " };
@@ -473,16 +497,24 @@ impl Welcome {
             return Err(std::io::Error::last_os_error());
         }
         let mut raw = as_it_was;
-        raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::ISIG | libc::IEXTEN);
+        // Ctrl-C still stops it, at any moment: what is stopped then gives
+        // the terminal back before it goes (`give_back`).
+        raw.c_lflag &= !(libc::ICANON | libc::ECHO | libc::IEXTEN);
         raw.c_iflag &= !(libc::IXON | libc::ICRNL);
+        raw.c_cc[libc::VSUSP] = 0;
+        raw.c_cc[libc::VQUIT] = 0;
+        AS_IT_WAS.store(Box::into_raw(Box::new(as_it_was)), Ordering::SeqCst);
+        for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+            // SAFETY: `give_back` only makes calls a signal handler may make.
+            unsafe { libc::signal(signal, give_back as *const () as libc::sighandler_t) };
+        }
         raw.c_cc[libc::VMIN] = 1;
         raw.c_cc[libc::VTIME] = 0;
         // SAFETY: as above, with settings derived from the terminal's own.
         if unsafe { libc::tcsetattr(0, libc::TCSANOW, &raw) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        print!("\x1b[?1049h\x1b[?25l\x1b[2J");
-        let _ = std::io::stdout().flush();
+        put("\x1b[?1049h\x1b[?25l\x1b[2J");
         let view = Arc::new(Mutex::new(View::default()));
         let over = Arc::new(AtomicBool::new(false));
         let drawing = std::thread::spawn({
@@ -503,10 +535,14 @@ impl Welcome {
         self.over.store(true, Ordering::SeqCst);
         if let Some(drawing) = self.drawing.take() {
             let _ = drawing.join();
-            print!("\x1b[?25h\x1b[?1049l");
-            let _ = std::io::stdout().flush();
+            put("\x1b[?25h\x1b[?1049l");
             // SAFETY: the settings read from this same terminal at the start.
             unsafe { libc::tcsetattr(0, libc::TCSANOW, &self.as_it_was) };
+            for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
+                // SAFETY: back to what a signal does by itself.
+                unsafe { libc::signal(signal, libc::SIG_DFL) };
+            }
+            AS_IT_WAS.store(std::ptr::null_mut(), Ordering::SeqCst);
         }
     }
 
@@ -514,15 +550,16 @@ impl Welcome {
     fn key(&mut self) -> Result<Key, Left> {
         let Some(first) = byte(None) else { return Err(Left) };
         Ok(match first {
-            3 | 4 => Key::Leave,
+            4 => Key::Leave,
             b'\r' | b'\n' => Key::Enter,
             0x7f | 0x08 => Key::Erase,
             0x15 => Key::EraseAll,
             0x1b => {
                 // An arrow says more right away; Escape alone says nothing.
-                match (byte(Some(40)), byte(Some(40))) {
-                    (Some(b'[' | b'O'), Some(b'A')) => Key::Up,
-                    (Some(b'[' | b'O'), Some(b'B')) => Key::Down,
+                let opens = byte(Some(40)).filter(|opens| matches!(opens, b'[' | b'O'));
+                match (opens, opens.and_then(|_| byte(Some(40)))) {
+                    (Some(_), Some(b'A')) => Key::Up,
+                    (Some(_), Some(b'B')) => Key::Down,
                     (Some(b'['), Some(mut last)) => {
                         // Whatever else it is, read to its end and passed over.
                         while !(0x40..=0x7e).contains(&last) {
@@ -562,10 +599,10 @@ impl Welcome {
 
     /// Reads a line typed under `question`.
     fn line(&mut self, question: &str, hidden: bool) -> Result<String, Left> {
+        forget_what_was_typed_ahead();
         self.change(|view| {
             view.mood = Mood::Waiting;
-            view.asking =
-                Asking::Line { question: question.to_owned(), typed: String::new(), hidden };
+            view.asking = Asking::Line { question: clean(question), typed: String::new(), hidden };
         });
         let mut typed = String::new();
         loop {
@@ -600,6 +637,38 @@ impl Welcome {
     }
 }
 
+/// The terminal's settings before setup took it, for `give_back`.
+static AS_IT_WAS: std::sync::atomic::AtomicPtr<libc::termios> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Stopped by a signal, gives the terminal back as it was and ends.
+extern "C" fn give_back(signal: libc::c_int) {
+    const BACK: &[u8] = b"\x1b[?25h\x1b[?1049l";
+    let as_it_was = AS_IT_WAS.load(Ordering::SeqCst);
+    // SAFETY: only calls a signal handler may make, on this process's own
+    // terminal, with settings kept for as long as the process lives.
+    unsafe {
+        if !as_it_was.is_null() {
+            libc::tcsetattr(0, libc::TCSANOW, as_it_was);
+        }
+        libc::write(1, BACK.as_ptr().cast(), BACK.len());
+        libc::_exit(128 + signal);
+    }
+}
+
+/// Writes to the terminal; one that went away is no reason to fail.
+fn put(text: &str) {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(text.as_bytes()).and_then(|()| out.flush());
+}
+
+/// What was typed before a question was asked is not an answer to it: a
+/// line pasted after a key must not confirm what comes next.
+fn forget_what_was_typed_ahead() {
+    // SAFETY: descriptor 0 is this process's own input.
+    unsafe { libc::tcflush(0, libc::TCIFLUSH) };
+}
+
 /// Reads one byte typed, waiting at most `patience` milliseconds when given.
 fn byte(patience: Option<i32>) -> Option<u8> {
     if let Some(patience) = patience {
@@ -631,7 +700,8 @@ fn size() -> (usize, usize) {
 /// Draws the screen again and again until `over`, writing only the lines
 /// that changed: what the Owner selected to copy stays selected.
 fn draw_until(view: &Mutex<View>, over: &AtomicBool) {
-    let mut drawn: Vec<Row> = Vec::new();
+    // Each row drawn, with the line it starts on.
+    let mut drawn: Vec<(usize, Row)> = Vec::new();
     let mut drawn_for = (0, 0);
     let mut tick = 0u64;
     while !over.load(Ordering::SeqCst) {
@@ -647,24 +717,36 @@ fn draw_until(view: &Mutex<View>, over: &AtomicBool) {
             drawn_for = (columns, lines);
         }
         let mut line = 1;
-        for (place, row) in rows.iter().enumerate() {
+        let mut placed = Vec::new();
+        // From a row that moved or that takes several lines, all is drawn anew.
+        let mut anew = false;
+        for (place, row) in rows.into_iter().enumerate() {
             if line > lines {
                 break;
             }
-            if drawn.get(place) != Some(row) {
+            let before = drawn.get(place);
+            if !anew && before.is_some_and(|(at, _)| *at != line)
+                || (before.map(|(_, before)| before) != Some(&row)
+                    && (row.width > columns || before.is_some_and(|(_, old)| old.width > columns)))
+            {
+                anew = true;
+                out.push_str(&format!("\x1b[{line};1H\x1b[J"));
+            }
+            if anew || before != Some(&(line, row.clone())) {
                 out.push_str(&format!("\x1b[{line};1H{}\x1b[K", row.text));
             }
             // A row longer than the terminal is wide takes several lines.
-            line += row.width.max(1).div_ceil(columns);
+            let takes = row.width.max(1).div_ceil(columns);
+            placed.push((line, row));
+            line += takes;
         }
-        if drawn.len() > rows.len() && line <= lines {
+        if drawn.len() > placed.len() && line <= lines && !anew {
             out.push_str(&format!("\x1b[{line};1H\x1b[J"));
         }
         if !out.is_empty() {
-            print!("{out}");
-            let _ = std::io::stdout().flush();
+            put(&out);
         }
-        drawn = rows;
+        drawn = placed;
         tick += 1;
         std::thread::sleep(TICK);
     }
@@ -695,13 +777,17 @@ impl Front for Welcome {
         let all = choices.len() + usize::from(own.is_some());
         let mut at = suggested.min(all.saturating_sub(1));
         let mut typed = String::new();
+        forget_what_was_typed_ahead();
         self.change(|view| {
             view.mood = Mood::Waiting;
             view.asking = Asking::Choices {
-                question: question.to_owned(),
-                choices: choices.to_vec(),
+                question: clean(question),
+                choices: choices
+                    .iter()
+                    .map(|choice| Choice::of(clean(&choice.label)).hinted(clean(&choice.hint)))
+                    .collect(),
                 at,
-                own: own.map(|invites| (invites.to_owned(), String::new())),
+                own: own.map(|invites| (clean(invites), String::new())),
             };
         });
         let picked = loop {
@@ -757,26 +843,26 @@ impl Front for Welcome {
 
     fn say(&mut self, text: &str) {
         self.change(|view| {
-            view.said.push(Said::Text(text.to_owned()));
+            view.said.push(Said::Text(clean(text)));
             view.asking = Asking::Nothing;
             view.mood = Mood::Waiting;
         });
     }
 
     fn show(&mut self, exactly: &str) {
-        self.change(|view| view.said.push(Said::Exactly(exactly.to_owned())));
+        self.change(|view| view.said.push(Said::Exactly(clean(exactly).replace('\n', " "))));
     }
 
     fn working(&mut self, text: &str) {
         self.change(|view| {
             view.mood = Mood::Working;
-            view.asking = Asking::Working(text.trim_end_matches('.').to_owned() + "…");
+            view.asking = Asking::Working(clean(text.trim_end_matches('.')) + "…");
         });
     }
 
     fn good(&mut self, text: &str) {
         self.change(|view| {
-            view.kept.push(text.to_owned());
+            view.kept.push(clean(text));
             view.trouble = None;
             view.asking = Asking::Nothing;
             view.mood = Mood::Waiting;
@@ -785,7 +871,7 @@ impl Front for Welcome {
 
     fn wrong(&mut self, text: &str) {
         self.change(|view| {
-            view.trouble = Some(text.to_owned());
+            view.trouble = Some(clean(text));
             view.asking = Asking::Nothing;
             view.mood = Mood::Waiting;
         });
@@ -793,7 +879,9 @@ impl Front for Welcome {
 
     fn finish(&mut self, text: &str, link: Option<&str>, after: &str) {
         // A glad instant on the screen, then what stays in the terminal.
-        let first = text.split_inclusive('.').next().unwrap_or(text).to_owned();
+        let (text, after) = (clean(text), clean(after));
+        let link = link.map(|link| clean(link).replace('\n', ""));
+        let first = text.split_inclusive('.').next().unwrap_or(&text).to_owned();
         self.change(|view| {
             view.mood = Mood::Glad;
             view.step = (view.step.1, view.step.1);
@@ -805,8 +893,8 @@ impl Front for Welcome {
         std::thread::sleep(Duration::from_millis(1400));
         self.close();
         let (columns, _) = size();
-        for row in farewell(text, link, after, columns) {
-            println!("{}", row.text);
+        for row in farewell(&text, link.as_deref(), &after, columns) {
+            put(&format!("{}\n", row.text));
         }
     }
 }
@@ -867,6 +955,40 @@ mod tests {
         let rows = frame(&view, 80, 24, 0);
         assert!(rows.len() <= 24, "{} rows", rows.len());
         assert!(letters(&rows).contains("❯ choice 14"), "{}", letters(&rows));
+    }
+
+    #[test]
+    fn the_question_stays_in_view_on_a_terminal_too_small_for_everything() {
+        let telegram = "You will talk to your agent in Telegram, through a bot of your own:\n  \
+                        1. In Telegram, open a chat with @BotFather.\n  \
+                        2. Send /newbot and follow its two questions (a name, then a username \
+                        ending in \"bot\").\n  3. BotFather gives you a token: paste it here.";
+        let view = View {
+            step: (3, 4),
+            kept: vec!["Anthropic answers (claude-sonnet-5-5)".into(), "Reached".into()],
+            said: vec![Said::Text(telegram.into())],
+            asking: Asking::Line {
+                question: "Bot token".into(),
+                typed: String::new(),
+                hidden: true,
+            },
+            ..View::default()
+        };
+        for (columns, lines) in [(80, 24), (60, 18), (100, 40)] {
+            let rows = frame(&view, columns, lines, 0);
+            let takes: usize = rows.iter().map(|row| row.width.max(1).div_ceil(columns)).sum();
+            assert!(takes <= lines, "{takes} lines on a terminal of {lines}");
+            assert!(letters(&rows).contains("Bot token"), "{}", letters(&rows));
+        }
+        // With room for it, the mascot is there.
+        assert!(letters(&frame(&view, 100, 40, 0)).contains('█'));
+        assert!(!letters(&frame(&view, 80, 24, 0)).contains('█'));
+    }
+
+    #[test]
+    fn what_comes_from_outside_is_written_and_never_obeyed() {
+        let said = clean("refused\x1b[2J\x1b]0;title\x07 key\r\nnext\tline");
+        assert_eq!(said, "refused[2J]0;title key\nnext line");
     }
 
     #[test]
