@@ -360,7 +360,10 @@ struct EntryView: View {
                     Text(say("This cannot be undone.", "Cela ne peut pas être annulé.")).font(.footnote).foregroundStyle(.orange)
                 }
                 HStack {
-                    Button(say("Allow", "Autoriser")) { answer(ask, "allow") }.buttonStyle(.glassProminent)
+                    Button { answer(ask, "allow") } label: {
+                        Text(say("Allow", "Autoriser")).foregroundStyle(Color(page: "#0d0d0d"))
+                    }
+                    .buttonStyle(.glassProminent)
                     if !ask.critical {
                         Button(say("Always", "Toujours")) { answer(ask, "always") }.buttonStyle(.glass)
                     }

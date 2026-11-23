@@ -22,6 +22,8 @@ struct OrbiteApp: App {
             }
             .environment(agent)
             .preferredColorScheme(.dark)
+            // Orbite's own look: light on dark, and no colour but the Agent's.
+            .tint(Color(page: "#f2f2f0"))
             .task { await agent.start() }
         }
     }

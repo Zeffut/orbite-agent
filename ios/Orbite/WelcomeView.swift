@@ -80,6 +80,7 @@ struct WelcomeView: View {
                 } label: {
                     Text(step + 1 < steps ? say("Continue", "Continuer") : say("Start talking", "Commencer"))
                         .font(.headline).frame(maxWidth: .infinity).frame(height: 36)
+                        .foregroundStyle(Color(page: "#0d0d0d"))
                 }
                 .buttonStyle(.glassProminent)
             }
@@ -87,6 +88,7 @@ struct WelcomeView: View {
         }
         .background(Color(page: "#0d0d0d").ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .tint(Color(page: "#f2f2f0"))
         .interactiveDismissDisabled()
         .task {
             if let (read, drawn) = await agent.settings() {

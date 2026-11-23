@@ -48,6 +48,7 @@ struct PairingView: View {
                 } label: {
                     Label(say("Scan the code", "Scanner le code"), systemImage: "qrcode.viewfinder")
                         .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        .foregroundStyle(Color(page: "#0d0d0d"))
                 }
                 .buttonStyle(.glassProminent)
                 .disabled(!DataScannerViewController.isSupported)
@@ -61,6 +62,7 @@ struct PairingView: View {
                     if !link.isEmpty {
                         Button(action: open) {
                             Image(systemName: "arrow.up").font(.headline).frame(width: 30, height: 30)
+                                .foregroundStyle(Color(page: "#0d0d0d"))
                         }
                         .buttonStyle(.glassProminent).buttonBorderShape(.circle)
                     }
