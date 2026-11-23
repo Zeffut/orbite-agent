@@ -496,7 +496,9 @@ struct Thinking: View {
         guard let doing, !doing.trimmingCharacters(in: .whitespaces).isEmpty else {
             return say("Thinking", "Réfléchit")
         }
-        let all = doing.split(separator: " ")
+        // Words only: the mark a step comes with is the Agent itself, here.
+        let all = doing.split(whereSeparator: \.isWhitespace).filter { $0.contains(where: \.isLetter) || $0.contains(where: \.isNumber) }
+        guard !all.isEmpty else { return say("Thinking", "Réfléchit") }
         return all.prefix(4).joined(separator: " ") + (all.count > 4 ? "…" : "")
     }
 
