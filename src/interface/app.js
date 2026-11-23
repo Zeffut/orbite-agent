@@ -16,6 +16,7 @@
       writeTo: "Message {name}", today: "Today", yesterday: "Yesterday",
       attach: "Attach a file", record: "Record a voice message", cancel: "Cancel", remove: "Remove",
       voice: "Voice message", tooBig: "That file is too big: 50 MB at most.",
+      holdOn: "Keep it pressed to record.", letGo: "Release to send · slide left to cancel".replace(" · ", "\n"), letGoToCancel: "Release to cancel",
       notSent: "That was not sent. Try again.", fileGone: "A file did not go through: attach it again.",
       noMic: "I cannot reach the microphone: allow it for this page in your browser.",
     },
@@ -33,6 +34,7 @@
       writeTo: "Envoyer un message à {name}", today: "Aujourd'hui", yesterday: "Hier",
       attach: "Joindre un fichier", record: "Enregistrer un message vocal", cancel: "Annuler", remove: "Retirer",
       voice: "Message vocal", tooBig: "Ce fichier est trop gros : 50 Mo au plus.",
+      holdOn: "Reste appuyé pour enregistrer.", letGo: "Relâche pour envoyer\nGlisse à gauche pour annuler", letGoToCancel: "Relâche pour annuler",
       notSent: "Ce n'est pas parti. Réessaie.", fileGone: "Un fichier n'est pas passé : joins-le à nouveau.",
       noMic: "Je n'ai pas accès au micro : autorise-le pour cette page dans ton navigateur.",
     },
@@ -68,33 +70,67 @@
         whole.append(shown);
         return;
       }
-      const marks = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<>()]+[^\s<>().,;:!?])/g;
-      let from = 0;
-      for (const found of block.matchAll(marks)) {
-        whole.append(block.slice(from, found.index));
-        const mark = found[0];
-        if (mark.startsWith("**")) whole.append(make("strong", "", mark.slice(2, -2)));
-        else if (mark.startsWith("`")) whole.append(make("code", "", mark.slice(1, -1)));
-        else {
-          const named = mark.match(/^\[([^\]]+)\]\((.+)\)$/);
-          const link = make("a", "", named ? named[1] : mark);
-          link.href = named ? named[2] : mark;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          // Opened by the page itself: a browser makes a tab of it, and
-          // Orbite's app, which shows no other site, hands it to the browser.
-          link.addEventListener("click", (clicked) => {
-            if (clicked.ctrlKey || clicked.metaKey || clicked.shiftKey || clicked.button !== 0) return;
-            clicked.preventDefault();
-            window.open(link.href, "_blank", "noopener,noreferrer");
-          });
-          whole.append(link);
+      // A run of lines that each begin as an item is a list; a line that
+      // begins with # is a title; the rest is written as it is.
+      const lines = block.split("\n");
+      let list = null;
+      lines.forEach((line, place) => {
+        const item = line.match(/^\s*(?:[-*•]|(\d+)[.)])\s+(.*)$/);
+        const title = line.match(/^#{1,4}\s+(.*)$/);
+        if (item) {
+          const kind = item[1] ? "ol" : "ul";
+          if (!list || list.localName !== kind) {
+            list = make(kind);
+            whole.append(list);
+          }
+          const one = make("li");
+          inline(item[2], one);
+          list.append(one);
+          return;
         }
-        from = found.index + mark.length;
-      }
-      whole.append(block.slice(from));
+        list = null;
+        if (title) {
+          const heading = make("strong", "title");
+          inline(title[1], heading);
+          whole.append(heading);
+        } else {
+          inline(line, whole);
+        }
+        // The line's end, unless a list or the block's end follows.
+        const next = lines[place + 1];
+        if (next !== undefined && !/^\s*(?:[-*•]|\d+[.)])\s+/.test(next)) whole.append("\n");
+      });
     });
     return whole;
+  }
+
+  // What is written within a line: bold, code, links.
+  function inline(line, into) {
+    const marks = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[[^\]\n]+\]\(https?:\/\/[^\s)]+\)|https?:\/\/[^\s<>()]+[^\s<>().,;:!?])/g;
+    let from = 0;
+    for (const found of line.matchAll(marks)) {
+      into.append(line.slice(from, found.index));
+      const mark = found[0];
+      if (mark.startsWith("**")) into.append(make("strong", "", mark.slice(2, -2)));
+      else if (mark.startsWith("`")) into.append(make("code", "", mark.slice(1, -1)));
+      else {
+        const named = mark.match(/^\[([^\]]+)\]\((.+)\)$/);
+        const link = make("a", "", named ? named[1] : mark);
+        link.href = named ? named[2] : mark;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        // Opened by the page itself: a browser makes a tab of it, and
+        // Orbite's app, which shows no other site, hands it to the browser.
+        link.addEventListener("click", (clicked) => {
+          if (clicked.ctrlKey || clicked.metaKey || clicked.shiftKey || clicked.button !== 0) return;
+          clicked.preventDefault();
+          window.open(link.href, "_blank", "noopener,noreferrer");
+        });
+        into.append(link);
+      }
+      from = found.index + mark.length;
+    }
+    into.append(line.slice(from));
   }
 
   const said = $("said");
@@ -499,12 +535,21 @@
     keeping = keep;
     if (recorder && recorder.state !== "inactive") recorder.stop();
   }
-  $("mic").addEventListener("click", async () => {
+  // Held down: it records while the finger stays, sends when it lifts,
+  // and gives up when it slides away. From a keyboard, where nothing is
+  // held, it starts and the bar beside it sends or gives up.
+  let holding = null;
+  async function record(held) {
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (refused) {
       return note(words.noMic);
+    }
+    // Let go while the microphone was being asked for: nothing to record.
+    if (held && holding !== held) {
+      for (const track of stream.getTracks()) track.stop();
+      return;
     }
     // Safari, and every browser on an iPhone, records best in its own
     // wrapping: what it makes in the others' does not play back whole.
@@ -515,12 +560,15 @@
     recorder = new MediaRecorder(stream, kind ? { mimeType: kind } : undefined);
     recorded = [];
     const began = Date.now();
+    if (held) held.began = began;
     recorder.addEventListener("dataavailable", (part) => { if (part.data.size) recorded.push(part.data); });
     recorder.addEventListener("stop", async () => {
       clearInterval(ticking);
       for (const track of stream.getTracks()) track.stop();
       $("recording").hidden = true;
       $("say").hidden = false;
+      $("say").classList.remove("holding", "letting-go");
+      $("held").hidden = true;
       if (!keeping || !recorded.length) return;
       const spoken = new Blob(recorded, { type: recorder.mimeType || kind });
       try {
@@ -534,13 +582,53 @@
     });
     const shown = () => {
       const seconds = Math.floor((Date.now() - began) / 1000);
-      $("recordTime").textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+      const time = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+      $("recordTime").textContent = time;
+      $("heldTime").textContent = time;
     };
     shown();
     ticking = setInterval(shown, 500);
-    $("say").hidden = true;
-    $("recording").hidden = false;
+    if (held) {
+      $("note").hidden = true;
+      $("heldHint").textContent = words.letGo;
+      $("held").hidden = false;
+      $("say").classList.add("holding");
+      if (navigator.vibrate) navigator.vibrate(12);
+    } else {
+      $("say").hidden = true;
+      $("recording").hidden = false;
+    }
     recorder.start();
+  }
+  const mic = $("mic");
+  mic.addEventListener("pointerdown", (pressed) => {
+    if (pressed.button) return;
+    pressed.preventDefault();
+    mic.setPointerCapture(pressed.pointerId);
+    holding = { from: pressed.clientX, at: Date.now(), away: false };
+    record(holding);
+  });
+  mic.addEventListener("pointermove", (moved) => {
+    if (!holding) return;
+    holding.away = holding.from - moved.clientX > 70;
+    $("say").classList.toggle("letting-go", holding.away);
+    $("heldHint").textContent = holding.away ? words.letGoToCancel : words.letGo;
+  });
+  const letGo = (given_up) => {
+    if (!holding) return;
+    const held = holding;
+    holding = null;
+    // A touch too short to say anything is a question: how is this used?
+    const long_enough = held.began && Date.now() - held.began > 500;
+    if (!long_enough && !given_up) note(words.holdOn);
+    stopRecording(long_enough && !held.away && !given_up);
+  };
+  mic.addEventListener("pointerup", () => letGo(false));
+  mic.addEventListener("pointercancel", () => letGo(true));
+  mic.addEventListener("contextmenu", (asked) => asked.preventDefault());
+  // From a keyboard: started here, sent or given up from the bar.
+  mic.addEventListener("click", (pressed) => {
+    if (pressed.detail === 0 && !holding) record(null);
   });
   $("recordStop").addEventListener("click", () => stopRecording(false));
   $("recordSend").addEventListener("click", () => stopRecording(true));

@@ -45,6 +45,7 @@
     <form id="say">
       <label id="attach" class="round quiet" data-label="attach" aria-label="Attach" tabindex="0"><input id="files" type="file" multiple hidden><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></label>
       <textarea id="text" rows="1" enterkeyhint="send"></textarea>
+      <span id="held" hidden><span id="heldTime">0:00</span><span id="heldHint"></span></span>
       <button id="mic" type="button" class="round bright" aria-label="Record" data-label="record" hidden><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <button id="send" class="round bright" aria-label="Send" data-label="send"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </form>
