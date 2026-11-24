@@ -101,10 +101,8 @@ struct WelcomeView: View {
             step = min(max(UserDefaults.standard.integer(forKey: "page"), 0), steps - 1)
             // Asked for the microphone at once, when that is being tried out.
             if UserDefaults.standard.bool(forKey: "askvoice") {
-                let heard = await AVAudioApplication.requestRecordPermission()
-                let written = await withCheckedContinuation { asked in
-                    SFSpeechRecognizer.requestAuthorization { asked.resume(returning: $0 == .authorized) }
-                }
+                let heard = await Hearing.microphone()
+                let written = await Hearing.writing()
                 voice = heard && written
             }
         }
@@ -236,10 +234,8 @@ struct WelcomeView: View {
                 case nil:
                     Button {
                         Task {
-                            let heard = await AVAudioApplication.requestRecordPermission()
-                            let written = await withCheckedContinuation { asked in
-                                SFSpeechRecognizer.requestAuthorization { asked.resume(returning: $0 == .authorized) }
-                            }
+                            let heard = await Hearing.microphone()
+                            let written = await Hearing.writing()
                             voice = heard && written
                         }
                     } label: {
