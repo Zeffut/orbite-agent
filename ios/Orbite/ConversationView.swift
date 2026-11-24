@@ -15,6 +15,7 @@ struct ConversationView: View {
     @State private var away = false
     @State private var recorder = Recorder()
     @FocusState private var writing: Bool
+    @Environment(\.scenePhase) private var phase
     @State private var settings = false
 
     struct Attached: Identifiable, Equatable {
@@ -30,6 +31,10 @@ struct ConversationView: View {
                     ForEach(agent.entries) { entry in
                         EntryView(entry: entry).id(entry.id)
                     }
+                    ForEach(agent.leaving) { one in
+                        LeavingView(one: one).id(one.id)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                     if agent.working {
                         Thinking(look: agent.look, doing: agent.doing)
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -41,6 +46,8 @@ struct ConversationView: View {
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             .onChange(of: agent.entries.count) { withAnimation(.snappy) { scroll.scrollTo("end", anchor: .bottom) } }
+            .onChange(of: agent.leaving.count) { withAnimation(.snappy) { scroll.scrollTo("end", anchor: .bottom) } }
+            .animation(.snappy, value: agent.leaving)
             .onChange(of: agent.working) { withAnimation(.snappy) { scroll.scrollTo("end", anchor: .bottom) } }
             .animation(.snappy, value: agent.working)
         }
@@ -53,8 +60,30 @@ struct ConversationView: View {
             // Started on its settings, when it is being tried out.
             if UserDefaults.standard.string(forKey: "show") == "settings" { settings = true }
             if let draft = UserDefaults.standard.string(forKey: "draft") { text = draft }
+            // Records by itself for that many seconds, when it is being tried out.
+            let alone = UserDefaults.standard.double(forKey: "record")
+            if alone > 0, recorder.allowed {
+                try? await Task.sleep(for: .seconds(2))
+                withAnimation(.spring(duration: 0.18)) { held = Date() }
+                recorder.begin(touched: ProcessInfo.processInfo.systemUptime)
+                try? await Task.sleep(for: .seconds(alone))
+                withAnimation(.spring(duration: 0.22)) { held = nil }
+                if let (spoken, name) = await recorder.end(keeping: true) {
+                    let voice = Leaving()
+                    agent.leaving.append(voice)
+                    if let said = await Recorder.written(from: spoken, named: name) {
+                        await agent.send(said, shown: voice.id)
+                    } else if let token = await agent.upload(spoken, named: name) {
+                        await agent.send("", files: [token], shown: voice.id)
+                    }
+                }
+            }
         }
         .onDisappear { recorder.rest() }
+        // The microphone is kept ready while the app is in front, and let go behind.
+        .onChange(of: phase) {
+            if phase == .active { recorder.prepare() } else if phase == .background { recorder.rest() }
+        }
         .photosPicker(isPresented: .constant(false), selection: $picked)
         .onChange(of: picked) { takePhotos() }
         .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { chosen in
@@ -235,8 +264,8 @@ struct ConversationView: View {
                             agent.trouble = nil
                             writing = false
                             away = false
-                            recorder.begin()
-                            withAnimation(.spring(duration: 0.22)) { held = Date() }
+                            withAnimation(.spring(duration: 0.18)) { held = Date() }
+                            recorder.begin(touched: ProcessInfo.processInfo.systemUptime - Date().timeIntervalSince(finger.time))
                         }
                         let now = finger.translation.width < -90
                         if now != away {
@@ -246,26 +275,27 @@ struct ConversationView: View {
                     }
                     .onEnded { _ in
                         guard held != nil else { return }
-                        let kept = recorder.end(keeping: !away)
-                        let gave_up = away
+                        let keeping = !away
                         withAnimation(.spring(duration: 0.22)) { held = nil }
                         away = false
-                        guard let (spoken, name) = kept else {
-                            if !gave_up {
-                                agent.trouble = say("Keep it pressed to record.", "Reste appuyé pour enregistrer.")
-                            }
-                            return
-                        }
                         Task {
-                            // Written down on the phone itself, what was said goes as
-                            // words: the Agent reads it whatever it thinks with.
-                            agent.working = true
+                            guard let (spoken, name) = await recorder.end(keeping: keeping) else {
+                                if keeping {
+                                    agent.trouble = say("Keep it pressed to record.", "Reste appuyé pour enregistrer.")
+                                }
+                                return
+                            }
+                            // Shown as leaving at once. Written down on the phone itself,
+                            // what was said goes as words: the Agent reads it whatever
+                            // it thinks with.
+                            let voice = Leaving()
+                            agent.leaving.append(voice)
                             if let said = await Recorder.written(from: spoken, named: name) {
-                                await agent.send(said)
+                                await agent.send(said, shown: voice.id)
                             } else if let token = await agent.upload(spoken, named: name) {
-                                await agent.send("", files: [token])
+                                await agent.send("", files: [token], shown: voice.id)
                             } else {
-                                agent.working = false
+                                agent.leaving.removeAll { $0.id == voice.id }
                                 agent.trouble = say("That was not sent. Try again.", "Ce n'est pas parti. Réessaie.")
                             }
                         }
@@ -324,6 +354,31 @@ struct ConversationView: View {
 }
 
 // MARK: What was said
+
+/// What the Owner just said, on its way: its words, or a voice being
+/// written down.
+struct LeavingView: View {
+    let one: Leaving
+
+    var body: some View {
+        Group {
+            if let text = one.text, !text.isEmpty {
+                Text(text).font(.body)
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "waveform").font(.body.weight(.medium))
+                        .symbolEffect(.variableColor.iterative, options: .repeating)
+                    Text(say("Voice message", "Message vocal")).font(.body)
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 11)
+        .background(Color(page: "#2b2b2b"), in: .rect(cornerRadius: 22))
+        .opacity(0.75)
+        .frame(maxWidth: .infinity, alignment: .trailing).padding(.leading, 44)
+    }
+}
 
 struct EntryView: View {
     @Environment(Agent.self) private var agent

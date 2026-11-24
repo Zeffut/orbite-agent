@@ -15,9 +15,7 @@ final class Recorder {
     /// True once the Owner has given the microphone.
     private(set) var allowed = AVAudioApplication.shared.recordPermission == .granted
 
-    private var recording: AVAudioRecorder?
-    private var ready: AVAudioRecorder?
-    private var began = Date()
+    private let tape = Tape()
     private var measuring: Task<Void, Never>?
 
     // What the hand feels: made ready ahead, as the system asks for them to be on time.
@@ -27,54 +25,37 @@ final class Recorder {
     private let giving_up = UINotificationFeedbackGenerator()
 
     /// Gets everything ready before the microphone is ever touched: the
-    /// sound of the phone set to record alongside whatever plays, a file
-    /// to record into, and what the hand will feel.
+    /// sound of the phone set to record, a file to record into, and what
+    /// the hand will feel. None of it holds the screen up.
     func prepare() {
         starting.prepare()
         crossing.prepare()
-        guard allowed, ready == nil else { return }
-        let audio = AVAudioSession.sharedInstance()
-        try? audio.setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers, .defaultToSpeaker, .allowBluetoothHFP])
-        try? audio.setActive(true)
-        let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-\(Int(Date().timeIntervalSince1970 * 1000)).m4a")
-        let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
-        ]
-        let recorder = try? AVAudioRecorder(url: file, settings: settings)
-        recorder?.isMeteringEnabled = true
-        recorder?.prepareToRecord()
-        ready = recorder
+        if allowed { tape.ready() }
     }
 
     /// Asks for the microphone, the first time it is touched.
     func ask() async -> Bool {
         allowed = await Hearing.microphone()
-        if allowed { prepare() }
+        prepare()
         return allowed
     }
 
-    /// Starts recording, at once.
-    func begin() {
+    /// Starts recording. The hand feels it and the screen shows it at
+    /// once; the phone starts hearing on its own, a breath later, without
+    /// either waiting for it. `touched` is when the finger landed, as the
+    /// system counts it.
+    func begin(touched: TimeInterval) {
         starting.impactOccurred(intensity: 1)
-        if ready == nil { prepare() }
-        recording = ready
-        ready = nil
-        began = Date()
-        recording?.record()
+        tape.begin(touched: touched)
         crossing.prepare()
         sending.prepare()
         giving_up.prepare()
         measuring = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(60))
-                guard let self, let recording = self.recording else { return }
-                recording.updateMeters()
-                // From decibels to something a bar can show.
-                let heard = CGFloat(max(0.05, min(1, pow(10, recording.averagePower(forChannel: 0) / 28))))
+                try? await Task.sleep(for: .milliseconds(50))
+                guard let self else { return }
                 self.levels.removeFirst()
-                self.levels.append(heard)
+                self.levels.append(self.tape.loudness)
             }
         }
     }
@@ -87,24 +68,16 @@ final class Recorder {
 
     /// Stops; what was recorded and its name, unless it is given up or
     /// too short to hold anything.
-    func end(keeping: Bool) -> (Data, String)? {
+    func end(keeping: Bool) async -> (Data, String)? {
         measuring?.cancel()
         levels = Array(repeating: 0.05, count: levels.count)
-        guard let recording else { return nil }
-        let file = recording.url
-        let lasted = recording.currentTime
-        recording.stop()
-        self.recording = nil
-        defer {
-            try? FileManager.default.removeItem(at: file)
-            prepare()
-        }
-        guard keeping, lasted > 0.4, let spoken = try? Data(contentsOf: file) else {
-            if lasted > 0.4 { giving_up.notificationOccurred(.warning) }
+        if keeping { sending.impactOccurred(intensity: 0.8) }
+        let (spoken, lasted) = await tape.end()
+        guard keeping, lasted > 0.4, let spoken else {
+            if !keeping, lasted > 0.4 { giving_up.notificationOccurred(.warning) }
             return nil
         }
-        sending.impactOccurred(intensity: 0.8)
-        return (spoken, file.lastPathComponent)
+        return spoken
     }
 
     /// What was said in a recording, written down on this phone itself:
@@ -121,7 +94,138 @@ final class Recorder {
 
     /// Lets the phone's sound go back to whatever else was using it.
     func rest() {
-        ready = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        tape.rest()
+    }
+}
+
+/// The recording itself, kept off the screen's thread: starting the
+/// phone's microphone takes it a moment, and nothing on the screen is to
+/// wait for that. Everything is done in turn on a queue of its own.
+private final class Tape: @unchecked Sendable {
+    private let turn = DispatchQueue(label: "orbite.voice", qos: .userInteractive)
+    private let lock = NSLock()
+    private var heard: CGFloat = 0.05
+    // Touched only in turn.
+    private var ready: AVAudioRecorder?
+    private var recording: AVAudioRecorder?
+    private var meter: DispatchSourceTimer?
+    private var awake = false
+
+    /// How loud the voice is right now, from 0 to 1.
+    var loudness: CGFloat {
+        lock.lock()
+        defer { lock.unlock() }
+        return heard
+    }
+
+    func ready(_ then: (@Sendable () -> Void)? = nil) {
+        turn.async {
+            self.wake()
+            if self.ready == nil { self.ready = Self.blank() }
+            then?()
+        }
+    }
+
+    func begin(touched: TimeInterval) {
+        let asked = ProcessInfo.processInfo.systemUptime
+        turn.async {
+            self.wake()
+            let recorder = self.ready ?? Self.blank()
+            self.ready = nil
+            self.recording = recorder
+            let started = recorder?.record() ?? false
+            let hearing = ProcessInfo.processInfo.systemUptime
+            let meter = DispatchSource.makeTimerSource(queue: self.turn)
+            meter.schedule(deadline: .now(), repeating: .milliseconds(50))
+            meter.setEventHandler { [weak self] in
+                guard let self, let recording = self.recording else { return }
+                recording.updateMeters()
+                // From decibels to something a bar can show.
+                let level = CGFloat(max(0.05, min(1, pow(10, recording.averagePower(forChannel: 0) / 28))))
+                self.lock.lock()
+                self.heard = level
+                self.lock.unlock()
+            }
+            meter.resume()
+            self.meter = meter
+            Self.note(String(
+                format: "begin started=%@ finger-to-app=%.0fms app-to-hearing=%.0fms",
+                started ? "yes" : "no", (asked - touched) * 1000, (hearing - asked) * 1000))
+        }
+    }
+
+    /// Stops; what was recorded with its name, and how long it lasted.
+    func end() async -> ((Data, String)?, TimeInterval) {
+        await withCheckedContinuation { (told: CheckedContinuation<((Data, String)?, TimeInterval), Never>) in
+            turn.async {
+                self.meter?.cancel()
+                self.meter = nil
+                self.lock.lock()
+                self.heard = 0.05
+                self.lock.unlock()
+                guard let recording = self.recording else {
+                    told.resume(returning: (nil, 0))
+                    return
+                }
+                let file = recording.url
+                let lasted = recording.currentTime
+                recording.stop()
+                self.recording = nil
+                let spoken = try? Data(contentsOf: file)
+                try? FileManager.default.removeItem(at: file)
+                Self.note(String(format: "end lasted=%.2fs bytes=%d", lasted, spoken?.count ?? 0))
+                told.resume(returning: (spoken.map { ($0, file.lastPathComponent) }, lasted))
+                // Ready for the next one before it is asked.
+                self.ready = Self.blank()
+            }
+        }
+    }
+
+    func rest() {
+        turn.async {
+            guard self.recording == nil else { return }
+            if let ready = self.ready { try? FileManager.default.removeItem(at: ready.url) }
+            self.ready = nil
+            self.awake = false
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+
+    /// The phone's sound set to record alongside whatever plays. The
+    /// phone's own microphone is the one heard: asking a headset for its
+    /// own takes it a second or more and spoils what it was playing.
+    private func wake() {
+        guard !awake else { return }
+        let before = ProcessInfo.processInfo.systemUptime
+        let audio = AVAudioSession.sharedInstance()
+        try? audio.setCategory(.playAndRecord, mode: .default, options: [.mixWithOthers, .defaultToSpeaker])
+        awake = (try? audio.setActive(true)) != nil
+        Self.note(String(format: "wake ok=%@ took=%.0fms", awake ? "yes" : "no",
+                         (ProcessInfo.processInfo.systemUptime - before) * 1000))
+    }
+
+    /// A recorder with a file to record into, ready to start.
+    private static func blank() -> AVAudioRecorder? {
+        let file = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-\(Int(Date().timeIntervalSince1970 * 1000)).m4a")
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100, AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+        ]
+        let recorder = try? AVAudioRecorder(url: file, settings: settings)
+        recorder?.isMeteringEnabled = true
+        recorder?.prepareToRecord()
+        return recorder
+    }
+
+    /// Keeps how long each step took, on the phone only, to find what is
+    /// slow when something is: the last few hundred lines, no more.
+    private static func note(_ line: String) {
+        guard let kept = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("voice.log")
+        else { return }
+        var all = (try? String(contentsOf: kept, encoding: .utf8))?.split(separator: "\n").suffix(300).map(String.init) ?? []
+        all.append("\(Date().ISO8601Format()) \(line)")
+        try? all.joined(separator: "\n").write(to: kept, atomically: true, encoding: .utf8)
     }
 }

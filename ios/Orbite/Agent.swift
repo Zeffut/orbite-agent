@@ -20,6 +20,13 @@ struct Entry: Identifiable, Equatable {
     var at: Date?
 }
 
+/// Something the Owner said that is on its way: its words, or none yet
+/// while a voice is being written down.
+struct Leaving: Identifiable, Equatable {
+    let id = UUID()
+    var text: String?
+}
+
 struct Sent: Equatable, Hashable {
     let file: String
     let name: String
@@ -89,6 +96,8 @@ final class Agent {
     var name = "Orbite"
     var look: Look?
     var entries: [Entry] = []
+    /// What the Owner just said, shown at once, until the Agent has it.
+    var leaving: [Leaving] = []
     var doing: String?
     var working = false
     var reached = true
@@ -314,6 +323,11 @@ final class Agent {
         switch event["kind"] as? String {
         case "owner":
             let files = (event["files"] as? [[String: Any]] ?? []).compactMap(sent)
+            // It has it: what was shown as leaving is this.
+            let said = event["text"] as? String ?? ""
+            if let place = leaving.firstIndex(where: { $0.text == said || ($0.text == nil && said.isEmpty) }) {
+                leaving.remove(at: place)
+            }
             entries.append(Entry(id: id, kind: .owner(text: event["text"] as? String ?? "", files: files), at: at))
         case "agent":
             let choices = (event["choices"] as? [[String: Any]] ?? []).compactMap { choice -> Choice? in
@@ -358,7 +372,17 @@ final class Agent {
     }
 
     /// Says something to the Agent, with the files sent ahead of it.
-    func send(_ text: String, files: [String] = [], tapped: Bool = false) async {
+    func send(_ text: String, files: [String] = [], tapped: Bool = false, shown: UUID? = nil) async {
+        // Shown at once, and at work at once: neither waits for the way there and back.
+        var showing = shown
+        if let shown, let place = leaving.firstIndex(where: { $0.id == shown }) {
+            leaving[place].text = text
+        } else if !tapped, !text.hasPrefix("/") {
+            let one = Leaving(text: text)
+            leaving.append(one)
+            showing = one.id
+        }
+        if !text.hasPrefix("/") { working = true }
         var saying: [String: Any] = ["text": text, "files": files]
         if tapped { saying["tapped"] = true }
         let body = try? JSONSerialization.data(withJSONObject: saying)
@@ -366,12 +390,19 @@ final class Agent {
               let (_, answer) = try? await session.data(for: asking),
               (answer as? HTTPURLResponse)?.statusCode == 200
         else {
+            leaving.removeAll { $0.id == showing }
+            working = false
             trouble = say("That was not sent. Try again.", "Ce n'est pas parti. Réessaie.")
             return
         }
         trouble = nil
-        // It is at work from the instant it is told, before it says so itself.
-        if !text.hasPrefix("/") { working = true }
+        // Never left showing for good, should the Agent not say it back.
+        if let showing {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(20))
+                self?.leaving.removeAll { $0.id == showing }
+            }
+        }
     }
 
     /// Answers what the Agent asked leave for.
