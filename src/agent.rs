@@ -3649,11 +3649,14 @@ impl<P: Provider + 'static> Agent<P> {
                          Tell them so and ask them to write it or say it again.]"
                     ),
                 },
-                None => "[Your Owner sent a voice message, which you cannot hear: nothing is set \
-                         up to write speech down. Tell them so, and that on the machine `orbite \
-                         transcription` sets it up, or `orbite providers add` with OpenAI or Groq \
-                         and an API key.]"
-                    .to_owned(),
+                None => format!(
+                    "[Your Owner sent a voice message, which you cannot hear: nothing is set up \
+                     on this machine to write speech down. Tell them so in a sentence, in {}, \
+                     and ask them to write it instead. Never tell them to run a command: if \
+                     you can run commands on this machine yourself, offer to set it up for \
+                     them (`orbite transcription` says how), and do it once they agree.]",
+                    self.language.say("the language they write in", "French"),
+                ),
             };
             // A video stays named: the Agent may still look into the file.
             let instead = match crate::transcriber::is_video(&recording) && !instead.contains(&line)

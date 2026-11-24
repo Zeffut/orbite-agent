@@ -81,7 +81,9 @@ async fn without_a_provider_that_listens_the_agent_is_told_it_cannot_hear_the_me
 
     let read = what_the_model_read(&asked);
     assert!(read.contains("cannot hear"), "{read}");
-    assert!(read.contains("orbite providers add"), "{read}");
+    // The Owner is never sent to a command: the Agent offers to see to it.
+    assert!(read.contains("Never tell them to run a command"), "{read}");
+    assert!(read.contains("offer to set it up"), "{read}");
 }
 
 #[tokio::test]
