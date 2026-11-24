@@ -83,13 +83,21 @@ final class Recorder {
     /// What was said in a recording, written down on this phone itself:
     /// nothing of the voice leaves it. None when the phone cannot, or was
     /// not let.
-    static func written(from spoken: Data, named name: String) async -> String? {
+    static func written(from spoken: Data, named name: String) async -> Heard {
         let language = Locale.preferredLanguages.first?.hasPrefix("fr") == true ? "fr-FR" : "en-US"
-        guard await Hearing.writing() else { return nil }
+        guard await Hearing.writing() else { return .unable }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("heard-" + name)
-        guard (try? spoken.write(to: file)) != nil else { return nil }
+        guard (try? spoken.write(to: file)) != nil else { return .unable }
         defer { try? FileManager.default.removeItem(at: file) }
-        return await Hearing.written(at: file, in: language)
+        return await Hearing.written(at: file, in: language).map(Heard.said) ?? .nothing
+    }
+
+    /// What came of writing a recording down: what was said, nothing
+    /// that could be made out, or the phone not being able or let to.
+    enum Heard {
+        case said(String)
+        case nothing
+        case unable
     }
 
     /// Lets the phone's sound go back to whatever else was using it.

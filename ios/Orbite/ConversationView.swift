@@ -60,6 +60,13 @@ struct ConversationView: View {
             // Started on its settings, when it is being tried out.
             if UserDefaults.standard.string(forKey: "show") == "settings" { settings = true }
             if let draft = UserDefaults.standard.string(forKey: "draft") { text = draft }
+            // Sends a recording it is handed as if it had just been said, when it is being tried out.
+            if let handed = UserDefaults.standard.string(forKey: "hear"),
+               let spoken = try? Data(contentsOf: URL(fileURLWithPath: handed)) {
+                let voice = Leaving()
+                agent.leaving.append(voice)
+                await sendVoice(spoken, URL(fileURLWithPath: handed).lastPathComponent, shown: voice.id)
+            }
             // Records by itself for that many seconds, when it is being tried out.
             let alone = UserDefaults.standard.double(forKey: "record")
             if alone > 0, recorder.allowed {
@@ -71,11 +78,7 @@ struct ConversationView: View {
                 if let (spoken, name) = await recorder.end(keeping: true) {
                     let voice = Leaving()
                     agent.leaving.append(voice)
-                    if let said = await Recorder.written(from: spoken, named: name) {
-                        await agent.send(said, shown: voice.id)
-                    } else if let token = await agent.upload(spoken, named: name) {
-                        await agent.send("", files: [token], shown: voice.id)
-                    }
+                    await sendVoice(spoken, name, shown: voice.id)
                 }
             }
         }
@@ -290,18 +293,32 @@ struct ConversationView: View {
                             // it thinks with.
                             let voice = Leaving()
                             agent.leaving.append(voice)
-                            if let said = await Recorder.written(from: spoken, named: name) {
-                                await agent.send(said, shown: voice.id)
-                            } else if let token = await agent.upload(spoken, named: name) {
-                                await agent.send("", files: [token], shown: voice.id)
-                            } else {
-                                agent.leaving.removeAll { $0.id == voice.id }
-                                agent.trouble = say("That was not sent. Try again.", "Ce n'est pas parti. Réessaie.")
-                            }
+                            await sendVoice(spoken, name, shown: voice.id)
                         }
                     }
             )
             .accessibilityLabel(say("Hold to record a voice message", "Maintenir pour enregistrer un message vocal"))
+    }
+
+    /// Sends what was recorded: as words when the phone could write
+    /// them down, as the recording itself when it could not; and not at
+    /// all when there was nothing to make out.
+    private func sendVoice(_ spoken: Data, _ name: String, shown: UUID) async {
+        switch await Recorder.written(from: spoken, named: name) {
+        case .said(let said):
+            await agent.send(said, shown: shown)
+        case .nothing:
+            agent.leaving.removeAll { $0.id == shown }
+            agent.trouble = say("I did not catch anything. Try again, closer to the phone.",
+                                "Je n'ai rien entendu. Réessaie, plus près du téléphone.")
+        case .unable:
+            if let token = await agent.upload(spoken, named: name) {
+                await agent.send("", files: [token], shown: shown)
+            } else {
+                agent.leaving.removeAll { $0.id == shown }
+                agent.trouble = say("That was not sent. Try again.", "Ce n'est pas parti. Réessaie.")
+            }
+        }
     }
 
     private func send() {
