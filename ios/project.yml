@@ -20,6 +20,8 @@ targets:
       path: Orbite/Info.plist
       properties:
         CFBundleDisplayName: Orbite
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, fr]
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSCameraUsageDescription: To read the code your agent shows, so that this device is let in.

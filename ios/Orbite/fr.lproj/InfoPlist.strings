@@ -1,0 +1,5 @@
+/* What the phone tells the Owner when it asks for leave, in French. */
+"NSCameraUsageDescription" = "Pour lire le code que ton agent affiche, et faire entrer cet appareil.";
+"NSMicrophoneUsageDescription" = "Pour enregistrer les messages vocaux que tu envoies à ton agent.";
+"NSSpeechRecognitionUsageDescription" = "Pour écrire ce que tu dis, sur ce téléphone, avant de l'envoyer à ton agent.";
+"NSLocalNetworkUsageDescription" = "Pour joindre ton agent quand il est sur ton propre réseau.";
