@@ -99,6 +99,14 @@ struct WelcomeView: View {
             }
             // Started on one of its pages, when it is being tried out.
             step = min(max(UserDefaults.standard.integer(forKey: "page"), 0), steps - 1)
+            // Asked for the microphone at once, when that is being tried out.
+            if UserDefaults.standard.bool(forKey: "askvoice") {
+                let heard = await AVAudioApplication.requestRecordPermission()
+                let written = await withCheckedContinuation { asked in
+                    SFSpeechRecognizer.requestAuthorization { asked.resume(returning: $0 == .authorized) }
+                }
+                voice = heard && written
+            }
         }
     }
 
