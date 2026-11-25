@@ -89,7 +89,11 @@ struct ConversationView: View {
             if UserDefaults.standard.string(forKey: "show") == "look" { looking = true }
             if UserDefaults.standard.string(forKey: "show") == "menu" { menu = true }
             if UserDefaults.standard.string(forKey: "show") == "services" { services = true }
-            if let draft = UserDefaults.standard.string(forKey: "draft") { text = draft }
+            if let draft = UserDefaults.standard.string(forKey: "draft") {
+                // Written a moment after the screen shows, as a hand would.
+                try? await Task.sleep(for: .seconds(3))
+                text = draft
+            }
             // Sends a recording it is handed as if it had just been said, when it is being tried out.
             if let handed = UserDefaults.standard.string(forKey: "hear"),
                let spoken = try? Data(contentsOf: URL(fileURLWithPath: handed)) {
@@ -203,29 +207,31 @@ struct ConversationView: View {
                             TextField(say("Message \(agent.name)", "Écrire à \(agent.name)"), text: $text, axis: .vertical)
                                 .lineLimit(1...6).focused($writing).font(.body)
                                 .padding(.leading, 18).padding(.vertical, 12)
-                            // Sending sits in the field, the size of a letter's line.
-                            if canSend {
-                                Button(action: send) {
-                                    Image(systemName: "arrow.up").font(.subheadline.weight(.bold))
-                                        .foregroundStyle(Color(page: "#0d0d0d"))
-                                        .frame(width: 32, height: 32)
-                                        .background(Color(page: "#f2f2f0"), in: .circle)
-                                }
-                                .padding(.trailing, 7).padding(.bottom, 7)
-                                .transition(.scale.combined(with: .opacity))
-                            } else {
-                                Color.clear.frame(width: 12, height: 1)
+                            // Sending sits in the field, the size of a letter's line. It
+                            // keeps its place whether it shows or not: nothing in the
+                            // field moves when it comes.
+                            Button(action: send) {
+                                Image(systemName: "arrow.up").font(.subheadline.weight(.bold))
+                                    .foregroundStyle(Color(page: "#0d0d0d"))
+                                    .frame(width: 32, height: 32)
+                                    .background(Color(page: "#f2f2f0"), in: .circle)
                             }
+                            .padding(.trailing, 7).padding(.bottom, 7)
+                            .scaleEffect(canSend ? 1 : 0.4).opacity(canSend ? 1 : 0)
+                            .disabled(!canSend)
                         }
                         .glassEffect(.regular, in: .rect(cornerRadius: 24))
-                        .animation(.spring(duration: 0.2), value: canSend)
                     } else {
                         recordingBar
                     }
                     if !(canSend && held == nil) {
                         microphone
+                            .transition(.scale(scale: 0.4).combined(with: .opacity))
                     }
                 }
+                // One movement for all of it: the microphone leaves, the field
+                // takes its room and sending comes, together.
+                .animation(.spring(duration: 0.32, bounce: 0.12), value: canSend)
             }
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
