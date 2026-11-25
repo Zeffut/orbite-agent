@@ -50,33 +50,46 @@ enum Hearing {
 /// it gives at the end is only the last of them.
 private final class Listening: NSObject, SFSpeechRecognitionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
-    /// The stretches written down so far: when each starts in the
-    /// recording, when it ends, and what was said in it.
-    private var stretches: [(from: TimeInterval, to: TimeInterval, said: String)] = []
+    /// The stretches written down so far, in the order they were said.
+    private var stretches: [String] = []
     private var answered = false
     var heard: CheckedContinuation<String?, Never>?
     var task: SFSpeechRecognitionTask?
 
+    /// The words of a text, as they compare: without capitals or marks.
+    private static func words(_ text: String) -> [String] {
+        text.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+    }
+
     /// Keeps what was just written down: more of the stretch under way,
-    /// or the start of a new one.
+    /// said better, or the start of a new one. The phone does not say
+    /// which, and the times it gives start again with each stretch: a
+    /// stretch under way keeps its first word and only grows, so a text
+    /// that starts otherwise, or is suddenly much shorter, is a new one.
     private func keep(_ written: SFTranscription) {
-        guard let first = written.segments.first, let last = written.segments.last else { return }
         let said = written.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !said.isEmpty else { return }
-        let (from, to) = (first.timestamp, last.timestamp + last.duration)
+        let now = Self.words(said)
+        guard !now.isEmpty else { return }
         lock.lock()
         defer { lock.unlock() }
-        // The same stretch as long as it starts before the last one ended.
-        if let under_way = stretches.last, from < under_way.to - 0.05 || abs(from - under_way.from) < 0.05 {
-            stretches[stretches.count - 1] = (min(from, under_way.from), max(to, under_way.to), said)
-        } else {
-            stretches.append((from, to, said))
+        guard let under_way = stretches.last else {
+            stretches.append(said)
+            return
+        }
+        let before = Self.words(under_way)
+        let starts_alike = before.first == now.first
+        let shrank = before.count >= 6 && now.count * 2 < before.count
+        if starts_alike && !shrank {
+            stretches[stretches.count - 1] = said
+        } else if !(before.count >= now.count && Array(before.suffix(now.count)) == now) {
+            // Not the end of what is already kept, said once more.
+            stretches.append(said)
         }
     }
 
     private func answer() {
         lock.lock()
-        let all = stretches.map(\.said).joined(separator: " ")
+        let all = stretches.joined(separator: " ")
         let first = !answered
         answered = true
         lock.unlock()
