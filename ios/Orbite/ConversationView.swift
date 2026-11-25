@@ -65,7 +65,8 @@ struct ConversationView: View {
                         Thinking(look: agent.look, doing: agent.doing)
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
-                    Color.clear.frame(height: 1).id("end")
+                    // Room under the last word, so that it is read clear of the field.
+                    Color.clear.frame(height: 14).id("end")
                 }
                 .padding(.horizontal, 14).padding(.top, 8)
             }
@@ -163,11 +164,17 @@ struct ConversationView: View {
     /// little past the bar there.
     private func fade(from edge: VerticalEdge) -> some View {
         let dark = Color(page: "#0d0d0d")
+        // At the top the words go under the clock and the name, and fade
+        // well before them. At the bottom nothing is read through the
+        // field: the dark only softens the edge just above it.
+        let top = edge == .top
         return LinearGradient(
-            stops: [.init(color: dark, location: 0), .init(color: dark.opacity(0.94), location: 0.7), .init(color: dark.opacity(0), location: 1)],
-            startPoint: edge == .top ? .top : .bottom, endPoint: edge == .top ? .bottom : .top)
-            .padding(edge == .top ? .bottom : .top, -34)
-            .ignoresSafeArea(edges: edge == .top ? .top : .bottom)
+            stops: top
+                ? [.init(color: dark, location: 0), .init(color: dark.opacity(0.94), location: 0.7), .init(color: dark.opacity(0), location: 1)]
+                : [.init(color: dark, location: 0), .init(color: dark, location: 0.82), .init(color: dark.opacity(0), location: 1)],
+            startPoint: top ? .top : .bottom, endPoint: top ? .bottom : .top)
+            .padding(top ? .bottom : .top, top ? -34 : -10)
+            .ignoresSafeArea(edges: top ? .top : .bottom)
             .allowsHitTesting(false)
     }
 
