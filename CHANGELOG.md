@@ -2,6 +2,14 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.1
+
+Released on 2026-11-25.
+
+- **The model is chosen from a device.** The settings a device shows now come with the models your agent can think with: those your ChatGPT plan says it has, or those your provider is known for. The model and the light model are changed with a touch.
+- **On a ChatGPT plan, setup takes the efficient model**, GPT-6.1 Terra, which the plan describes as good at seeing and using a computer, and GPT-6 Luna for summaries and wake-ups, so that a plan lasts longer. An agent already set up keeps the model it has: change it in the settings. This choice is reasoned from what the plan says of its models, not measured over a month.
+- **A voice message your agent cannot hear no longer sends you to a command.** It says so in your language, asks you to write instead, and offers to set the writing down of speech up itself.
+
 ## 0.9.0
 
 Released on 2026-11-23.

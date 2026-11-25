@@ -84,7 +84,10 @@ pub fn usual_models(name: &str) -> (&'static [&'static str], &'static [&'static 
     match name {
         "anthropic" => (&["claude-sonnet-5-5", "claude-opus-5-5"], &["claude-haiku-5-5"]),
         "openai" => (&["gpt-6.2-sol", "gpt-6.1-terra"], &[]),
-        "chatgpt" => (&["gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna"], &[]),
+        // A plan is spent by what it is used for: the efficient model, which
+        // the plan itself says is good at seeing and using a computer, makes
+        // a month of it last; the affordable one does the light work.
+        "chatgpt" => (&["gpt-6.1-terra", "gpt-6.2-sol", "gpt-6-luna"], &["gpt-6-luna"]),
         "google" => (
             &["gemini-4-hydrogen", "gemini-3.8-flash", "gemini-3.6-flash"],
             &["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"],

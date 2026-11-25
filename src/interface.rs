@@ -988,7 +988,47 @@ async fn settings(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Resp
         .collect();
     let colours: serde_json::Map<String, Value> =
         crate::COLOURS.iter().map(|(name, page, _)| ((*name).to_owned(), json!(page))).collect();
-    Json(json!({ "settings": all, "shapes": shapes, "colours": colours })).into_response()
+    let (models, usual) = models_to_choose(&shared.home).await;
+    Json(json!({
+        "settings": all, "shapes": shapes, "colours": colours, "models": models, "usual": usual,
+    }))
+    .into_response()
+}
+
+/// The models the Owner can have their Agent think with, each as what to
+/// set and what to show, and the one Orbite takes unasked: those a plan
+/// says it comes with, or those the Provider is known to serve an Agent
+/// well with. The one in force is always among them.
+async fn models_to_choose(home: &Path) -> (Vec<Value>, Option<String>) {
+    let Some(chosen) = crate::Config::load(home).ok().and_then(|config| config.provider) else {
+        return (Vec::new(), None);
+    };
+    let (usual, lighter) = crate::catalogue::usual_models(&chosen.name);
+    let mut offered: Vec<(String, String)> = if chosen.name == "chatgpt" {
+        let plan = crate::ChatGpt::kept_in(home, &chosen.model);
+        let plan = match &chosen.address {
+            Some(address) => plan.at(address),
+            None => plan,
+        };
+        plan.models().await.into_iter().take(20).collect()
+    } else {
+        Vec::new()
+    };
+    if offered.is_empty() {
+        offered = usual
+            .iter()
+            .chain(lighter)
+            .map(|name| ((*name).to_owned(), (*name).to_owned()))
+            .collect();
+    }
+    if !offered.iter().any(|(name, _)| *name == chosen.model) {
+        offered.insert(0, (chosen.model.clone(), chosen.model.clone()));
+    }
+    let unasked = usual.iter().find(|usual| offered.iter().any(|(name, _)| name == *usual));
+    (
+        offered.iter().map(|(name, shown)| json!({ "value": name, "label": shown })).collect(),
+        unasked.map(|name| (*name).to_owned()),
+    )
 }
 
 /// A setting changed from a device: handed to the Agent, which changes it
