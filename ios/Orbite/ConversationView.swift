@@ -224,13 +224,13 @@ struct ConversationView: View {
                     } else {
                         recordingBar
                     }
-                    if !(canSend && held == nil) {
-                        microphone
-                    }
+                    // Nothing changes place when something is written: the field
+                    // and the microphone stay as they are, and sending comes in
+                    // the room kept for it. Moving glass about under a keyboard
+                    // being typed on does not come out smooth on a phone.
+                    microphone
                 }
-                // One movement for all of it: the microphone leaves, the field
-                // takes its room and sending comes, together.
-                .animation(.spring(duration: 0.32, bounce: 0.12), value: canSend)
+                .animation(.spring(duration: 0.25, bounce: 0.2), value: canSend)
             }
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
