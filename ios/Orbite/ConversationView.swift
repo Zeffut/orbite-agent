@@ -84,6 +84,8 @@ struct ConversationView: View {
             recorder.prepare()
             // Started on its settings, when it is being tried out.
             if UserDefaults.standard.string(forKey: "show") == "settings" { settings = true }
+            if UserDefaults.standard.string(forKey: "show") == "look" { looking = true }
+            if UserDefaults.standard.string(forKey: "show") == "menu" { menu = true }
             if let draft = UserDefaults.standard.string(forKey: "draft") { text = draft }
             // Sends a recording it is handed as if it had just been said, when it is being tried out.
             if let handed = UserDefaults.standard.string(forKey: "hear"),
