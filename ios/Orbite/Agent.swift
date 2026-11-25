@@ -79,8 +79,19 @@ struct Setting: Identifiable, Equatable {
 struct Looks: Equatable {
     var shapes: [String: (outline: String, eyes: Double)] = [:]
     var colours: [String: String] = [:]
+    /// The models the Agent can think with: what to set, and what to show.
+    var models: [Model] = []
+    /// The model Orbite takes unasked, among them.
+    var usual: String?
     static func == (one: Looks, other: Looks) -> Bool {
         one.colours == other.colours && one.shapes.keys.sorted() == other.shapes.keys.sorted()
+            && one.models == other.models
+    }
+
+    struct Model: Identifiable, Equatable {
+        let value: String
+        let label: String
+        var id: String { value }
     }
 }
 
@@ -450,6 +461,11 @@ final class Agent {
             }
         }
         looks.colours = all["colours"] as? [String: String] ?? [:]
+        looks.models = (all["models"] as? [[String: Any]] ?? []).compactMap { one in
+            guard let value = one["value"] as? String else { return nil }
+            return Looks.Model(value: value, label: one["label"] as? String ?? value)
+        }
+        looks.usual = all["usual"] as? String
         return (settings, looks)
     }
 

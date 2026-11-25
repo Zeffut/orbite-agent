@@ -11,6 +11,13 @@ struct SettingsView: View {
     @State private var name = ""
     @State private var loaded = false
     @State private var forgetting = false
+    /// Which of it is shown: who the Agent is, or how it is set.
+    var part = Part.rest
+
+    enum Part {
+        case look
+        case rest
+    }
 
     /// What a setting is called, and what it does, in the Owner's words.
     private static let said: [String: (String, String, String, String)] = [
@@ -79,7 +86,7 @@ struct SettingsView: View {
                             forgetting = true
                         }
                     }
-                } else {
+                } else if part == .look {
                     Section {
                         HStack {
                             Spacer()
@@ -127,6 +134,7 @@ struct SettingsView: View {
                         }
                         .padding(.vertical, 6)
                     }
+                } else {
                     Section {
                         ForEach(["permission", "wakeups", "quiet", "secrets", "language", "voice"], id: \.self) { key in
                             if let setting = settings.first(where: { $0.key == key }) {
@@ -154,9 +162,37 @@ struct SettingsView: View {
                             Label(say("Services", "Services"), systemImage: "point.3.connected.trianglepath.dotted")
                         }
                     }
-                    Section(say("Thinks with", "Réfléchit avec")) {
-                        LabeledContent(label("model"), value: value("model"))
-                        LabeledContent(label("light"), value: worded(value("light")))
+                    Section {
+                        if looks.models.isEmpty {
+                            LabeledContent(label("model"), value: value("model"))
+                            LabeledContent(label("light"), value: worded(value("light")))
+                        } else {
+                            Picker(label("model"), selection: Binding(
+                                get: { value("model") }, set: { change("model", to: $0) })
+                            ) {
+                                ForEach(looks.models) { model in
+                                    Text(model.value == looks.usual
+                                        ? model.label + say(" · Recommended", " · Recommandé") : model.label)
+                                        .tag(model.value)
+                                }
+                            }
+                            Picker(selection: Binding(get: { value("light") }, set: { change("light", to: $0) })) {
+                                Text(worded("off")).tag("off")
+                                ForEach(looks.models) { Text($0.label).tag($0.value) }
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(label("light"))
+                                    Text(say("For summaries and wake-ups.", "Pour les résumés et les réveils."))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text(say("Thinks with", "Réfléchit avec"))
+                    } footer: {
+                        Text(say(
+                            "The recommended model makes a plan last the month. A stronger one thinks further and uses it up faster.",
+                            "Le modèle recommandé fait durer un abonnement tout le mois. Un modèle plus puissant va plus loin et le consomme plus vite."))
                     }
                     Section {
                         Button(say("Remove this agent from this phone", "Retirer cet agent de ce téléphone"), role: .destructive) {
@@ -169,7 +205,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .navigationTitle(say("Settings", "Réglages"))
+            .navigationTitle(part == .look ? say("Your agent", "Ton agent") : say("Settings", "Réglages"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

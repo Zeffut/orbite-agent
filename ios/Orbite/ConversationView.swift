@@ -18,6 +18,8 @@ struct ConversationView: View {
     @State private var place = ScrollPosition(edge: .bottom)
     @Environment(\.scenePhase) private var phase
     @State private var settings = false
+    @State private var looking = false
+    @State private var menu = false
 
     struct Attached: Identifiable, Equatable {
         let id = UUID()
@@ -76,6 +78,8 @@ struct ConversationView: View {
             bottom.background(alignment: .bottom) { fade(from: .bottom) }
         }
         .sheet(isPresented: $settings) { SettingsView() }
+        .sheet(isPresented: $looking) { SettingsView(part: .look) }
+        .overlay { Drawer(open: $menu) { settings = true } }
         .task {
             recorder.prepare()
             // Started on its settings, when it is being tried out.
@@ -123,29 +127,18 @@ struct ConversationView: View {
             .allowsHitTesting(false)
     }
 
+    /// The menu on the left, and the Agent in the middle: touched, it is
+    /// who the Agent is that opens, to give it a name and a look.
     private var top: some View {
         HStack {
+            Button { withAnimation(.snappy(duration: 0.28)) { menu = true } } label: {
+                Image(systemName: "line.3.horizontal").font(.title3.weight(.medium))
+                    .frame(width: 46, height: 46)
+                    .glassEffect(.regular.interactive(), in: .circle)
+            }
+            .accessibilityLabel(say("Menu", "Menu"))
             Spacer()
-            Menu {
-                Button(say("Settings", "Réglages"), systemImage: "slider.horizontal.3") { settings = true }
-                // Every agent this phone knows, to go from one to another.
-                if agent.known.count > 1 {
-                    Section(say("Your agents", "Tes agents")) {
-                        ForEach(agent.known) { other in
-                            Button {
-                                Task { await agent.open(other) }
-                            } label: {
-                                if other.address == agent.address?.absoluteString {
-                                    Label(other.name, systemImage: "checkmark")
-                                } else {
-                                    Text(other.name)
-                                }
-                            }
-                        }
-                    }
-                }
-                Button(say("Add an agent", "Ajouter un agent"), systemImage: "plus") { agent.adding = true }
-            } label: {
+            Button { looking = true } label: {
                 HStack(spacing: 9) {
                     Figure(look: agent.look, working: agent.working, size: 30)
                     Text(agent.name).font(.headline)
@@ -156,10 +149,12 @@ struct ConversationView: View {
                 .padding(.leading, 10).padding(.trailing, 18).padding(.vertical, 8)
                 .glassEffect(.regular.interactive(), in: .capsule)
             }
-            .tint(.primary)
             Spacer()
+            // As wide as the menu's button, so that the Agent sits in the middle.
+            Color.clear.frame(width: 46, height: 46)
         }
-        .padding(.top, 2).padding(.bottom, 6)
+        .tint(.primary)
+        .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 6)
     }
 
     // MARK: The bottom
