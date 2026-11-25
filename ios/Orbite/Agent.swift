@@ -321,6 +321,8 @@ final class Agent {
                         return
                     }
                     self.reached = true
+                    // An Agent that does not number what it says is read anew.
+                    if self.seen == nil { self.entries = [] }
                     for try await line in lines.lines {
                         guard line.hasPrefix("data:") else { continue }
                         let said = line.dropFirst(5).trimmingCharacters(in: .whitespaces)

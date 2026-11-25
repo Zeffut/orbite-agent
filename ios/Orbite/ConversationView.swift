@@ -164,9 +164,9 @@ struct ConversationView: View {
     private func fade(from edge: VerticalEdge) -> some View {
         let dark = Color(page: "#0d0d0d")
         return LinearGradient(
-            stops: [.init(color: dark, location: 0), .init(color: dark.opacity(0.92), location: 0.55), .init(color: dark.opacity(0), location: 1)],
+            stops: [.init(color: dark, location: 0), .init(color: dark.opacity(0.94), location: 0.7), .init(color: dark.opacity(0), location: 1)],
             startPoint: edge == .top ? .top : .bottom, endPoint: edge == .top ? .bottom : .top)
-            .padding(edge == .top ? .bottom : .top, -22)
+            .padding(edge == .top ? .bottom : .top, -34)
             .ignoresSafeArea(edges: edge == .top ? .top : .bottom)
             .allowsHitTesting(false)
     }
