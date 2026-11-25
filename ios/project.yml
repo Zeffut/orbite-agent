@@ -22,7 +22,9 @@ targets:
         CFBundleDisplayName: Orbite
         CFBundleDevelopmentRegion: en
         CFBundleLocalizations: [en, fr]
-        UILaunchScreen: {}
+        # Dark from the first instant: the app is, and a white flash is not.
+        UILaunchScreen:
+          UIColorName: Launch
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         NSCameraUsageDescription: To read the code your agent shows, so that this device is let in.
         NSMicrophoneUsageDescription: To record the voice messages you send your agent.
