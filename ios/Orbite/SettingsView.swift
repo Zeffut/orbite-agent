@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var name = ""
     @State private var loaded = false
     @State private var forgetting = false
+    /// What was chosen and is not taken yet, by setting.
+    @State private var wanted: [String: String] = [:]
     /// Which of it is shown: who the Agent is, or how it is set.
     var part = Part.rest
 
@@ -54,10 +56,24 @@ struct SettingsView: View {
         guard let place = settings.firstIndex(where: { $0.key == key }), settings[place].value != value else { return }
         let before = settings[place].value
         settings[place].value = value
+        wanted[key] = value
         UISelectionFeedbackGenerator().selectionChanged()
         Task {
-            if await !agent.set(key, to: value) {
-                settings[place].value = before
+            // Some changes make the Agent start again, and it takes nothing
+            // for those few seconds: the choice is kept and given again
+            // until it is taken, unless another one was made meanwhile.
+            var taken = false
+            for _ in 0..<25 where wanted[key] == value {
+                if await agent.set(key, to: value) {
+                    taken = true
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(800))
+            }
+            guard wanted[key] == value else { return }
+            wanted[key] = nil
+            if !taken {
+                if let place = settings.firstIndex(where: { $0.key == key }) { settings[place].value = before }
                 return
             }
             // A name or a look takes the Agent a moment to come back with.
