@@ -30,34 +30,72 @@ enum Hearing {
         guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: language)), recognizer.isAvailable
         else { return nil }
         let request = SFSpeechURLRecognitionRequest(url: file)
-        request.shouldReportPartialResults = false
+        // Told as it goes: a long recording is written down a stretch at a
+        // time, each stretch starting afresh, and only the telling as it
+        // goes lets them all be kept.
+        request.shouldReportPartialResults = true
         request.addsPunctuation = true
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-        let once = Once()
+        let listening = Listening()
         return await withCheckedContinuation { (heard: CheckedContinuation<String?, Never>) in
-            recognizer.recognitionTask(with: request) { @Sendable result, error in
-                if let result, result.isFinal {
-                    let text = result.bestTranscription.formattedString
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    if once.first() { heard.resume(returning: text.isEmpty ? nil : text) }
-                } else if error != nil {
-                    if once.first() { heard.resume(returning: nil) }
-                }
-            }
+            listening.heard = heard
+            listening.task = recognizer.recognitionTask(with: request, delegate: listening)
         }
     }
 }
 
-/// True the first time it is asked, from whatever thread, and never again.
-private final class Once: @unchecked Sendable {
+/// Follows the writing down of one recording to its end, keeping every
+/// stretch of it: the phone writes a long recording down in stretches,
+/// each one a text of its own that starts afresh after a pause, and what
+/// it gives at the end is only the last of them.
+private final class Listening: NSObject, SFSpeechRecognitionTaskDelegate, @unchecked Sendable {
     private let lock = NSLock()
-    private var done = false
+    /// The stretches written down so far: when each starts in the
+    /// recording, when it ends, and what was said in it.
+    private var stretches: [(from: TimeInterval, to: TimeInterval, said: String)] = []
+    private var answered = false
+    var heard: CheckedContinuation<String?, Never>?
+    var task: SFSpeechRecognitionTask?
 
-    func first() -> Bool {
+    /// Keeps what was just written down: more of the stretch under way,
+    /// or the start of a new one.
+    private func keep(_ written: SFTranscription) {
+        guard let first = written.segments.first, let last = written.segments.last else { return }
+        let said = written.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !said.isEmpty else { return }
+        let (from, to) = (first.timestamp, last.timestamp + last.duration)
         lock.lock()
         defer { lock.unlock() }
-        if done { return false }
-        done = true
-        return true
+        // The same stretch as long as it starts before the last one ended.
+        if let under_way = stretches.last, from < under_way.to - 0.05 || abs(from - under_way.from) < 0.05 {
+            stretches[stretches.count - 1] = (min(from, under_way.from), max(to, under_way.to), said)
+        } else {
+            stretches.append((from, to, said))
+        }
+    }
+
+    private func answer() {
+        lock.lock()
+        let all = stretches.map(\.said).joined(separator: " ")
+        let first = !answered
+        answered = true
+        lock.unlock()
+        if first { heard?.resume(returning: all.isEmpty ? nil : all) }
+    }
+
+    func speechRecognitionTask(_ task: SFSpeechRecognitionTask, didHypothesizeTranscription transcription: SFTranscription) {
+        keep(transcription)
+    }
+
+    func speechRecognitionTask(_ task: SFSpeechRecognitionTask, didFinishRecognition result: SFSpeechRecognitionResult) {
+        keep(result.bestTranscription)
+    }
+
+    func speechRecognitionTask(_ task: SFSpeechRecognitionTask, didFinishSuccessfully successfully: Bool) {
+        answer()
+    }
+
+    func speechRecognitionTaskWasCancelled(_ task: SFSpeechRecognitionTask) {
+        answer()
     }
 }

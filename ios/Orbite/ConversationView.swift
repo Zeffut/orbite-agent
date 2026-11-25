@@ -13,6 +13,10 @@ struct ConversationView: View {
     @State private var attached: [Attached] = []
     @State private var held: Date?
     @State private var away = false
+    /// True once the recording was locked: it goes on with the finger gone.
+    @State private var locked = false
+    /// How far up towards locking the finger has gone, from 0 to 1.
+    @State private var rising: CGFloat = 0
     @State private var recorder = Recorder()
     @FocusState private var writing: Bool
     @State private var place = ScrollPosition(edge: .bottom)
@@ -145,7 +149,11 @@ struct ConversationView: View {
                 try? await Task.sleep(for: .seconds(2))
                 pressed()
                 try? await Task.sleep(for: .seconds(alone))
-                released()
+                if UserDefaults.standard.bool(forKey: "lock") {
+                    withAnimation(.spring(duration: 0.25, bounce: 0.3)) { locked = true }
+                    try? await Task.sleep(for: .seconds(3))
+                }
+                finish(keeping: true)
             }
         }
         .onDisappear { recorder.rest() }
@@ -278,7 +286,9 @@ struct ConversationView: View {
                     // The microphone gives its room to the field once there is
                     // something to send: its glass melts into the field's, as
                     // the system's own glass does, in one movement.
-                    if !(sendable && held == nil) {
+                    if locked {
+                        sendRecording
+                    } else if !(sendable && held == nil) {
                         microphone
                             .glassEffectID("microphone", in: glass)
                             .glassEffectTransition(.matchedGeometry)
@@ -301,8 +311,17 @@ struct ConversationView: View {
     /// and how to give up.
     private var recordingBar: some View {
         HStack(spacing: 12) {
-            Circle().fill(.red).frame(width: 10, height: 10)
-                .opacity(away ? 0.3 : 1)
+            if locked {
+                // Locked, the hands are free: giving up is a touch, as sending is.
+                Button { finish(keeping: false) } label: {
+                    Image(systemName: "trash").font(.body.weight(.medium)).foregroundStyle(.red)
+                        .frame(width: 34, height: 34)
+                }
+                .accessibilityLabel(say("Discard the recording", "Jeter l'enregistrement"))
+            } else {
+                Circle().fill(.red).frame(width: 10, height: 10)
+                    .opacity(away ? 0.3 : 1)
+            }
             if let held {
                 Text(held, style: .timer).monospacedDigit().font(.body.weight(.medium))
                     .frame(minWidth: 44, alignment: .leading)
@@ -319,12 +338,42 @@ struct ConversationView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .animation(.linear(duration: 0.06), value: recorder.levels)
-                Image(systemName: "chevron.left").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                if !locked {
+                    Image(systemName: "chevron.left").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                }
             }
         }
-        .padding(.horizontal, 18).frame(height: 46)
+        .padding(.leading, locked ? 8 : 18).padding(.trailing, 18).frame(height: 46)
         .glassEffect(.regular, in: .capsule)
         .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .trailing)))
+    }
+
+    /// Sends what is being recorded, once it is locked.
+    private var sendRecording: some View {
+        Button { finish(keeping: true) } label: {
+            Image(systemName: "arrow.up").font(.title3.weight(.bold))
+                .foregroundStyle(Color(page: "#0d0d0d"))
+                .frame(width: 46, height: 46)
+                .background(Color(page: "#f2f2f0"), in: .circle)
+        }
+        .accessibilityLabel(say("Send the recording", "Envoyer l'enregistrement"))
+        .transition(.scale.combined(with: .opacity))
+    }
+
+    /// Above the microphone while it is held: slid up to, it locks the
+    /// recording, and the finger can let go.
+    private var lockHint: some View {
+        VStack(spacing: 6) {
+            Image(systemName: rising > 0.85 ? "lock.fill" : "lock.open.fill").font(.callout.weight(.semibold))
+            Image(systemName: "chevron.up").font(.caption2.weight(.bold)).opacity(0.6)
+        }
+        .foregroundStyle(.primary)
+        .frame(width: 40, height: 64)
+        .glassEffect(.regular, in: .capsule)
+        .scaleEffect(1 + 0.15 * rising)
+        .offset(y: -74 - 10 * rising)
+        .allowsHitTesting(false)
+        .transition(.opacity.combined(with: .offset(y: 16)))
     }
 
     /// Held, it records; let go, it sends; slid away, it gives up. It
@@ -342,8 +391,17 @@ struct ConversationView: View {
             .overlay {
                 Touch(
                     began: { pressed() },
-                    moved: { across in
-                        guard held != nil else { return }
+                    moved: { across, down in
+                        guard held != nil, !locked else { return }
+                        // Up locks it: the finger can then let go.
+                        rising = max(0, min(1, -down / 70))
+                        if down < -70, across > -60 {
+                            withAnimation(.spring(duration: 0.25, bounce: 0.3)) { locked = true }
+                            away = false
+                            rising = 0
+                            Haptic.done()
+                            return
+                        }
                         let now = across < -90
                         if now != away {
                             away = now
@@ -352,6 +410,10 @@ struct ConversationView: View {
                     },
                     ended: { released() })
             }
+            .overlay(alignment: .top) {
+                if held != nil, !locked, !away { lockHint }
+            }
+            .animation(.spring(duration: 0.2), value: held != nil)
             .accessibilityLabel(say("Hold to record a voice message", "Maintenir pour enregistrer un message vocal"))
     }
 
@@ -376,12 +438,22 @@ struct ConversationView: View {
         writing = false
     }
 
-    /// The finger left the microphone.
+    /// The finger left the microphone: what was recorded goes, unless it
+    /// was locked, which keeps recording until it is sent or thrown away.
     private func released() {
+        guard held != nil, !locked else { return }
+        finish(keeping: !away)
+    }
+
+    /// Ends the recording: sent, or given up.
+    private func finish(keeping: Bool) {
         guard held != nil else { return }
-        let keeping = !away
-        held = nil
+        withAnimation(.spring(duration: 0.22)) {
+            held = nil
+            locked = false
+        }
         away = false
+        rising = 0
         Task {
             guard let (spoken, name) = await recorder.end(keeping: keeping) else {
                 if keeping {

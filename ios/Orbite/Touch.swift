@@ -8,8 +8,8 @@ import UIKit
 struct Touch: UIViewRepresentable {
     /// The finger landed.
     let began: () -> Void
-    /// The finger moved: how far across from where it landed.
-    let moved: (CGFloat) -> Void
+    /// The finger moved: how far across and how far down from where it landed.
+    let moved: (CGFloat, CGFloat) -> Void
     /// The finger left, or the system took it away.
     let ended: () -> Void
 
@@ -28,9 +28,9 @@ struct Touch: UIViewRepresentable {
 
     final class Surface: UIView {
         var began: () -> Void = {}
-        var moved: (CGFloat) -> Void = { _ in }
+        var moved: (CGFloat, CGFloat) -> Void = { _, _ in }
         var ended: () -> Void = {}
-        private var landed: CGFloat?
+        private var landed: CGPoint?
 
         // A little more than what is seen takes the finger: a thumb is not a needle.
         override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
@@ -39,13 +39,14 @@ struct Touch: UIViewRepresentable {
 
         override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
             guard landed == nil, let touch = touches.first else { return }
-            landed = touch.location(in: nil).x
+            landed = touch.location(in: nil)
             began()
         }
 
         override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
             guard let landed, let touch = touches.first else { return }
-            moved(touch.location(in: nil).x - landed)
+            let now = touch.location(in: nil)
+            moved(now.x - landed.x, now.y - landed.y)
         }
 
         override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
