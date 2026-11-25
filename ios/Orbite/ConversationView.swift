@@ -115,6 +115,14 @@ struct ConversationView: View {
             if UserDefaults.standard.string(forKey: "show") == "settings" { settings = true }
             if UserDefaults.standard.string(forKey: "show") == "look" { looking = true }
             if UserDefaults.standard.string(forKey: "show") == "menu" { menu = true }
+            // Goes back once in the Conversation, when that is being tried out.
+            if UserDefaults.standard.string(forKey: "show") == "earlier" {
+                try? await Task.sleep(for: .seconds(3))
+                goingBack = true
+                if let first = await agent.earlier() { place.scrollTo(id: first, anchor: .top) }
+                try? await Task.sleep(for: .milliseconds(300))
+                goingBack = false
+            }
             if UserDefaults.standard.string(forKey: "show") == "services" { services = true }
             if let draft = UserDefaults.standard.string(forKey: "draft") {
                 // Written a moment after the screen shows, as a hand would.
