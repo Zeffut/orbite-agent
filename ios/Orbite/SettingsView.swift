@@ -36,8 +36,8 @@ struct SettingsView: View {
         "careful": ("Careful", "Prudent"), "balanced": ("Balanced", "Équilibré"), "free": ("Free", "Libre"),
         "off": ("Off", "Désactivé"), "on": ("On", "Activé"), "strict": ("Strict", "Strict"),
         "en": ("English", "English"), "fr": ("Français", "Français"),
-        "60": ("Every hour", "Toutes les heures"), "240": ("Every 4 hours", "Toutes les 4 heures"),
-        "720": ("Every 12 hours", "Toutes les 12 heures"), "provider": ("By the AI provider", "Par le fournisseur d'IA"),
+        "60": ("Every hour", "Chaque heure"), "240": ("Every 4 h", "Toutes les 4 h"),
+        "720": ("Every 12 h", "Toutes les 12 h"), "provider": ("AI provider", "Fournisseur d'IA"),
     ]
 
     private func label(_ key: String) -> String {
@@ -136,33 +136,6 @@ struct SettingsView: View {
                     }
                 } else {
                     Section {
-                        ForEach(["permission", "wakeups", "quiet", "secrets", "language", "voice"], id: \.self) { key in
-                            if let setting = settings.first(where: { $0.key == key }) {
-                                Picker(selection: Binding(get: { setting.value }, set: { change(key, to: $0) })) {
-                                    ForEach(choices(of: setting), id: \.self) { Text(worded($0)).tag($0) }
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(label(key))
-                                        if let told = Self.said[key], !told.2.isEmpty {
-                                            Text(say(told.2, told.3)).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Toggle(label("updates"), isOn: Binding(
-                            get: { value("updates") == "on" }, set: { change("updates", to: $0 ? "on" : "off") }))
-                            // On is green, as a switch is everywhere else on the phone.
-                            .tint(.green)
-                    }
-                    Section {
-                        NavigationLink {
-                            ConnectorsScreen()
-                        } label: {
-                            Label(say("Services", "Services"), systemImage: "point.3.connected.trianglepath.dotted")
-                        }
-                    }
-                    Section {
                         if looks.models.isEmpty {
                             LabeledContent(label("model"), value: value("model"))
                             LabeledContent(label("light"), value: worded(value("light")))
@@ -193,6 +166,34 @@ struct SettingsView: View {
                         Text(say(
                             "The recommended model makes a plan last the month. A stronger one thinks further and uses it up faster.",
                             "Le modèle recommandé fait durer un abonnement tout le mois. Un modèle plus puissant va plus loin et le consomme plus vite."))
+                    }
+                    Section {
+                        ForEach(["permission", "wakeups", "quiet", "secrets", "language", "voice"], id: \.self) { key in
+                            if let setting = settings.first(where: { $0.key == key }) {
+                                Picker(selection: Binding(get: { setting.value }, set: { change(key, to: $0) })) {
+                                    ForEach(choices(of: setting), id: \.self) { Text(worded($0)).tag($0) }
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(label(key))
+                                        if let told = Self.said[key], !told.2.isEmpty {
+                                            Text(say(told.2, told.3)).font(.caption).foregroundStyle(.secondary)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Toggle(label("updates"), isOn: Binding(
+                            get: { value("updates") == "on" }, set: { change("updates", to: $0 ? "on" : "off") }))
+                            // On is green, as a switch is everywhere else on the phone.
+                            .tint(.green)
+                    }
+                    Section {
+                        NavigationLink {
+                            ConnectorsScreen()
+                        } label: {
+                            Label(say("Services", "Services"), systemImage: "point.3.connected.trianglepath.dotted")
+                        }
                     }
                     Section {
                         Button(say("Remove this agent from this phone", "Retirer cet agent de ce téléphone"), role: .destructive) {
