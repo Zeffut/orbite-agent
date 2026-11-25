@@ -224,14 +224,9 @@ struct ConversationView: View {
                     } else {
                         recordingBar
                     }
-                    // The microphone stays where it is and shrinks away, rather than
-                    // being there one instant and gone the next.
-                    let gone = canSend && held == nil
-                    microphone
-                        .scaleEffect(gone ? 0.3 : 1).opacity(gone ? 0 : 1)
-                        .frame(width: gone ? 0 : 46)
-                        .padding(.leading, gone ? -10 : 0)
-                        .allowsHitTesting(!gone)
+                    if !(canSend && held == nil) {
+                        microphone
+                    }
                 }
                 // One movement for all of it: the microphone leaves, the field
                 // takes its room and sending comes, together.
