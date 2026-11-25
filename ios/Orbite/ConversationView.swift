@@ -19,6 +19,7 @@ struct ConversationView: View {
     @Environment(\.scenePhase) private var phase
     @State private var settings = false
     @State private var looking = false
+    @State private var goingBack = false
     /// What `canSend` says, taken with a movement: glass only moves well
     /// when it is told to, in so many words.
     @State private var sendable = false
@@ -35,6 +36,24 @@ struct ConversationView: View {
     var body: some View {
         ScrollView {
                 LazyVStack(spacing: 12) {
+                    // What was said further back is read when it is asked for.
+                    if agent.further, agent.entries.count >= 30 {
+                        Button {
+                            Task {
+                                // The eye stays on what it was reading: what comes is put above it.
+                                goingBack = true
+                                if let first = await agent.earlier() { place.scrollTo(id: first, anchor: .top) }
+                                try? await Task.sleep(for: .milliseconds(300))
+                                goingBack = false
+                            }
+                        } label: {
+                            Label(say("Earlier messages", "Messages précédents"), systemImage: "arrow.up")
+                                .font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+                                .padding(.horizontal, 14).padding(.vertical, 8)
+                                .glassEffect(.regular.interactive(), in: .capsule)
+                        }
+                        .padding(.top, 4)
+                    }
                     ForEach(agent.entries) { entry in
                         EntryView(entry: entry).id(entry.id)
                     }
@@ -57,7 +76,9 @@ struct ConversationView: View {
                 // The Conversation as it comes back on opening is gone to the
                 // end of at once, and again once it has taken its place; what
                 // is said after that is followed gently.
-                if before == 0 || now - before > 1 {
+                if goingBack {
+                    return
+                } else if before == 0 || now - before > 1 {
                     place.scrollTo(edge: .bottom)
                     Task {
                         for wait in [60, 250, 600] {
@@ -86,6 +107,8 @@ struct ConversationView: View {
         .sheet(isPresented: $looking) { SettingsView(part: .look) }
         .sheet(isPresented: $services) { NavigationStack { ConnectorsScreen() } }
         .overlay { Drawer(open: $menu) { settings = true } }
+        // The keyboard goes when the menu comes.
+        .onChange(of: menu) { if menu { writing = false } }
         .task {
             recorder.prepare()
             // Started on its settings, when it is being tried out.

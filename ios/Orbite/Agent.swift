@@ -107,6 +107,11 @@ final class Agent {
     var name = "Orbite"
     var look: Look?
     var entries: [Entry] = []
+    /// True while there may be more of the Conversation further back.
+    var further = true
+    /// The last entry read, as the Agent numbers them: where to take the
+    /// Conversation up again, rather than read it all anew.
+    private var seen: Int?
     /// What the Owner just said, shown at once, until the Agent has it.
     var leaving: [Leaving] = []
     var doing: String?
@@ -143,6 +148,8 @@ final class Agent {
         guard let to = URL(string: other.address), to != address else { return }
         listening?.cancel()
         entries = []
+        seen = nil
+        further = true
         doing = nil
         working = false
         name = other.name
@@ -158,6 +165,8 @@ final class Agent {
         guard gone.address == address?.absoluteString else { return }
         listening?.cancel()
         entries = []
+        seen = nil
+        further = true
         if let next = known.first, let to = URL(string: next.address) {
             name = next.name
             look = next.look
@@ -255,6 +264,8 @@ final class Agent {
         await enter()
         if paired {
             entries = []
+        seen = nil
+        further = true
             adding = false
         } else if trouble == nil {
             trouble = say("Your agent did not let this device in.", "Ton agent n'a pas laissé entrer cet appareil.")
@@ -298,7 +309,10 @@ final class Agent {
         listening?.cancel()
         listening = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self, let asking = self.request("/api/events") else { return }
+                // Taken up where it was left: only what was missed is read.
+                guard let self,
+                      let asking = self.request(self.seen.map { "/api/events?after=\($0)" } ?? "/api/events")
+                else { return }
                 do {
                     let (lines, answer) = try await self.session.bytes(for: asking)
                     if (answer as? HTTPURLResponse)?.statusCode == 401 {
@@ -307,7 +321,6 @@ final class Agent {
                         return
                     }
                     self.reached = true
-                    self.entries = []
                     for try await line in lines.lines {
                         guard line.hasPrefix("data:") else { continue }
                         let said = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
@@ -326,6 +339,7 @@ final class Agent {
     /// Takes one event of the Conversation.
     private func took(_ event: [String: Any]) {
         let id = (event["id"] as? Int).map(String.init) ?? UUID().uuidString
+        if let number = event["id"] as? Int, number > (seen ?? 0) { seen = number }
         let at = (event["at"] as? Double).map { Date(timeIntervalSince1970: $0) }
         let sent: ([String: Any]) -> Sent? = { file in
             guard let token = file["file"] as? String else { return nil }
@@ -380,6 +394,29 @@ final class Agent {
         default:
             break
         }
+    }
+
+    /// Reads what was said before what is shown: a screenful more, put
+    /// before it. The entry that was first, to keep the eye where it was.
+    func earlier() async -> String? {
+        guard further, let first = entries.first(where: { Int($0.id) != nil }), let before = Int(first.id),
+              let asking = request("/api/earlier?before=\(before)"),
+              let (told, answer) = try? await session.data(for: asking),
+              (answer as? HTTPURLResponse)?.statusCode == 200,
+              let read = try? JSONSerialization.jsonObject(with: told) as? [String: Any]
+        else {
+            further = false
+            return nil
+        }
+        // Taken as any entry is, aside from what is shown, then put before it.
+        let (shown, was_working, was_doing, was_leaving, was_seen) = (entries, working, doing, leaving, seen)
+        entries = []
+        for event in read["entries"] as? [[String: Any]] ?? [] { took(event) }
+        let older = entries
+        (working, doing, leaving, seen) = (was_working, was_doing, was_leaving, was_seen)
+        entries = older + shown
+        further = (read["more"] as? Bool ?? false) && !older.isEmpty
+        return first.id
     }
 
     /// Says something to the Agent, with the files sent ahead of it.

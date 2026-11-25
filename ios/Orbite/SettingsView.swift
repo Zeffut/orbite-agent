@@ -78,6 +78,9 @@ struct SettingsView: View {
             }
             // A name or a look takes the Agent a moment to come back with.
             if ["name", "shape", "colour"].contains(key) {
+                // An Agent of before 0.9.2 starts again for these, and takes a moment.
+                try? await Task.sleep(for: .milliseconds(400))
+                await agent.look_again()
                 try? await Task.sleep(for: .seconds(4))
                 await agent.look_again()
             }
