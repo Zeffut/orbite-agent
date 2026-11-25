@@ -35,7 +35,10 @@ struct ConversationView: View {
 
     var body: some View {
         ScrollView {
-                LazyVStack(spacing: 12) {
+                // All of what is shown is laid out, not only what is in sight:
+                // it is a screenful or two, and its end is then where it is
+                // said to be, which a list laid out as it goes cannot promise.
+                VStack(spacing: 12) {
                     // What was said further back is read when it is asked for.
                     if agent.further, agent.entries.count >= 30 {
                         Button {
@@ -81,12 +84,6 @@ struct ConversationView: View {
                     return
                 } else if before == 0 || now - before > 1 {
                     place.scrollTo(edge: .bottom)
-                    Task {
-                        for wait in [60, 250, 600] {
-                            try? await Task.sleep(for: .milliseconds(wait))
-                            place.scrollTo(edge: .bottom)
-                        }
-                    }
                 } else {
                     withAnimation(.snappy) { place.scrollTo(edge: .bottom) }
                 }
@@ -95,6 +92,11 @@ struct ConversationView: View {
             .animation(.snappy, value: agent.leaving)
             .onChange(of: agent.working) { withAnimation(.snappy) { place.scrollTo(edge: .bottom) } }
             .animation(.snappy, value: agent.working)
+            // Drawn anew once the Conversation is there: it opens at its end,
+            // without being seen to get there.
+            .id(agent.loaded)
+            .opacity(agent.loaded ? 1 : 0)
+            .onChange(of: agent.loaded) { place = ScrollPosition(edge: .bottom) }
         .background(Color(page: "#0d0d0d").ignoresSafeArea())
         // What is said fades out under the top and the bottom, rather than
         // running into the clock and the field.
@@ -182,14 +184,20 @@ struct ConversationView: View {
     /// who the Agent is that opens, to give it a name and a look.
     private var top: some View {
         HStack {
-            Button { withAnimation(.snappy(duration: 0.28)) { menu = true } } label: {
+            Button {
+                Haptic.touched()
+                withAnimation(.snappy(duration: 0.28)) { menu = true }
+            } label: {
                 Image(systemName: "line.3.horizontal").font(.title3.weight(.medium))
                     .frame(width: 46, height: 46)
                     .glassEffect(.regular.interactive(), in: .circle)
             }
             .accessibilityLabel(say("Menu", "Menu"))
             Spacer()
-            Button { looking = true } label: {
+            Button {
+                Haptic.touched()
+                looking = true
+            } label: {
                 HStack(spacing: 9) {
                     Figure(look: agent.look, working: agent.working, size: 30)
                     Text(agent.name).font(.headline)
@@ -552,6 +560,7 @@ struct EntryView: View {
 
     private func answer(_ ask: Ask, _ answer: String) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        if answer == "deny" { Haptic.refused() } else { Haptic.done() }
         Task { await agent.answer(ask.ask, answer) }
     }
 }

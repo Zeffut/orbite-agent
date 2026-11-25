@@ -3,6 +3,7 @@
 // Agent serves, as its own page does.
 
 import Foundation
+import UIKit
 import Observation
 import SwiftUI
 
@@ -107,6 +108,19 @@ final class Agent {
     var name = "Orbite"
     var look: Look?
     var entries: [Entry] = []
+    /// True once the Conversation as it was kept has been read.
+    var loaded = false
+    /// What is being read back of the Conversation, before it is shown:
+    /// shown entry by entry, it would be seen going by.
+    @ObservationIgnored private var read: [Entry] = []
+    @ObservationIgnored private var reading = false
+    /// True while entries are taken that are not news: nothing is felt for them.
+    @ObservationIgnored private var quiet = false
+    /// What an entry is added to: what is shown, or what is being read back.
+    private var shown: [Entry] {
+        get { reading ? read : entries }
+        set { if reading { read = newValue } else { entries = newValue } }
+    }
     /// True while there may be more of the Conversation further back.
     var further = true
     /// The last entry read, as the Agent numbers them: where to take the
@@ -117,7 +131,9 @@ final class Agent {
     var doing: String?
     var working = false
     var reached = true
-    var trouble: String?
+    var trouble: String? {
+        didSet { if trouble != nil, trouble != oldValue { Haptic.wrong() } }
+    }
 
     private(set) var address: URL? {
         didSet { UserDefaults.standard.set(address?.absoluteString, forKey: "agent") }
@@ -148,6 +164,7 @@ final class Agent {
         guard let to = URL(string: other.address), to != address else { return }
         listening?.cancel()
         entries = []
+        loaded = false
         seen = nil
         further = true
         doing = nil
@@ -165,6 +182,7 @@ final class Agent {
         guard gone.address == address?.absoluteString else { return }
         listening?.cancel()
         entries = []
+        loaded = false
         seen = nil
         further = true
         if let next = known.first, let to = URL(string: next.address) {
@@ -264,6 +282,7 @@ final class Agent {
         await enter()
         if paired {
             entries = []
+        loaded = false
         seen = nil
         further = true
             adding = false
@@ -321,8 +340,12 @@ final class Agent {
                         return
                     }
                     self.reached = true
-                    // An Agent that does not number what it says is read anew.
-                    if self.seen == nil { self.entries = [] }
+                    // Read from its start, the Conversation is shown once it is
+                    // all there; taken up where it was left, as it comes.
+                    if self.seen == nil {
+                        self.read = []
+                        self.reading = true
+                    }
                     for try await line in lines.lines {
                         guard line.hasPrefix("data:") else { continue }
                         let said = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
@@ -348,6 +371,14 @@ final class Agent {
             return Sent(file: token, name: file["name"] as? String ?? "", image: file["image"] as? Bool ?? false)
         }
         switch event["kind"] as? String {
+        case "caught-up":
+            // All that was kept has come: it is shown in one go, at its end.
+            if reading {
+                reading = false
+                entries = read
+                read = []
+            }
+            loaded = true
         case "owner":
             let files = (event["files"] as? [[String: Any]] ?? []).compactMap(sent)
             // It has it: what was shown as leaving is this.
@@ -355,13 +386,14 @@ final class Agent {
             if let place = leaving.firstIndex(where: { $0.text == said || ($0.text == nil && said.isEmpty) }) {
                 leaving.remove(at: place)
             }
-            entries.append(Entry(id: id, kind: .owner(text: event["text"] as? String ?? "", files: files), at: at))
+            shown.append(Entry(id: id, kind: .owner(text: event["text"] as? String ?? "", files: files), at: at))
         case "agent":
             let choices = (event["choices"] as? [[String: Any]] ?? []).compactMap { choice -> Choice? in
                 guard let label = choice["label"] as? String, let command = choice["command"] as? String else { return nil }
                 return Choice(label: label, command: command)
             }
-            entries.append(Entry(id: id, kind: .agent(text: event["text"] as? String ?? "", choices: choices), at: at))
+            shown.append(Entry(id: id, kind: .agent(text: event["text"] as? String ?? "", choices: choices), at: at))
+            if !reading, !quiet { Haptic.arrived() }
             working = false
             doing = nil
         case "ask":
@@ -369,22 +401,23 @@ final class Agent {
                 ask: event["ask"] as? String ?? "", summary: event["summary"] as? String ?? "",
                 detail: event["detail"] as? String ?? "", critical: event["critical"] as? Bool ?? false,
                 irreversible: event["irreversible"] as? Bool ?? false)
-            entries.append(Entry(id: id, kind: .ask(ask), at: at))
+            shown.append(Entry(id: id, kind: .ask(ask), at: at))
+            if !reading, !quiet { Haptic.asked() }
         case "settled":
             let settled = event["ask"] as? String
-            if let place = entries.firstIndex(where: {
+            if let place = shown.firstIndex(where: {
                 if case .ask(let ask) = $0.kind { return ask.ask == settled }
                 return false
-            }), case .ask(let ask) = entries[place].kind {
-                entries[place].kind = .settled(summary: ask.summary, answer: event["answer"] as? String ?? "")
+            }), case .ask(let ask) = shown[place].kind {
+                shown[place].kind = .settled(summary: ask.summary, answer: event["answer"] as? String ?? "")
             }
         case "file":
             if let file = sent(event) {
-                entries.append(Entry(id: id, kind: .file(file, caption: event["caption"] as? String ?? ""), at: at))
+                shown.append(Entry(id: id, kind: .file(file, caption: event["caption"] as? String ?? ""), at: at))
             }
         case "erase":
             let gone = Set((event["events"] as? [Int] ?? []).map(String.init))
-            entries.removeAll { gone.contains($0.id) }
+            shown.removeAll { gone.contains($0.id) }
         case "step":
             doing = "\(event["icon"] as? String ?? "") \(event["text"] as? String ?? "")"
             working = true
@@ -413,7 +446,9 @@ final class Agent {
         // Taken as any entry is, aside from what is shown, then put before it.
         let (shown, was_working, was_doing, was_leaving, was_seen) = (entries, working, doing, leaving, seen)
         entries = []
+        quiet = true
         for event in read["entries"] as? [[String: Any]] ?? [] { took(event) }
+        quiet = false
         let older = entries
         (working, doing, leaving, seen) = (was_working, was_doing, was_leaving, was_seen)
         entries = older + shown
@@ -575,4 +610,17 @@ struct Connector: Identifiable, Equatable {
     let does: String
     var connected: Bool
     var id: String { name }
+}
+
+/// What the hand feels, kept to what tells something: an answer came, the
+/// Agent asks leave, something went wrong. Nothing for what the eye sees
+/// well enough.
+@MainActor
+enum Haptic {
+    static func arrived() { UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.7) }
+    static func asked() { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+    static func done() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
+    static func refused() { UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.6) }
+    static func touched() { UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.6) }
+    static func wrong() { UINotificationFeedbackGenerator().notificationOccurred(.error) }
 }
