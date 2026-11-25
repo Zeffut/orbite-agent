@@ -35,23 +35,46 @@ const NO_EXTENSIONS: &str = "There is nowhere to keep Extensions.";
 
 /// The rules for writing an Extension, given to the model when it is about
 /// to write one rather than on every turn.
-const WRITING_AN_EXTENSION: &str = "How to write an Extension. Call create_extension again with: name, \
-description (one sentence for your Owner), hosts (the hosts it reaches, by name, such as api.example.com; \
-none when it reaches nothing), secrets (the names of the secrets it sends them; none when it needs none) \
-and script, the whole JavaScript program.\n\
-The script defines two global functions.\n\
+const WRITING_AN_EXTENSION: &str = "How to write an Extension: a connector of your own to a service your \
+Owner uses, whatever it is. Work as a developer would, to the end.\n\
+1. Find out how the service is spoken to before writing anything: its documentation on the web, its \
+addresses and ports, how it signs in. Do not guess an address.\n\
+2. Whatever it needs that is secret (a password, a key) is entered by your Owner as a secret, never \
+written in the Conversation: see list_secrets, and ask for the one that is missing by its name.\n\
+3. Call create_extension again with: name, description (one sentence for your Owner), hosts, secrets \
+(the names of the secrets it sends; none when it needs none) and script, the whole JavaScript program.\n\
+4. It is checked the moment it is in place: you are told whether its check passed. When it failed, read \
+why, repair the script and create it again, as many times as it takes. Then try each Action once.\n\
+5. Only then tell your Owner, in a sentence, what you can now do. Never say it works before its check \
+passed.\n\
+hosts lists what it reaches, by name: api.example.com for a service of the web, or mail.example.com:993 \
+(a name and a port) for a service that speaks something else, such as a mailbox (IMAP, SMTP, POP).\n\
+The script defines global functions.\n\
 - describe() returns a list of { name, description, parameters }: parameters maps each parameter's name \
 (ending in ? when it may be left out) to its description. Add asks: true to an action that changes \
-something outside.\n\
+something outside (sending, deleting, paying).\n\
 - run(action, input) does the action called `action` and returns its result, a text or an object. It may \
 be async, and throws an Error to say what went wrong.\n\
-It has plain JavaScript and what Orbite lends, nothing else: no fetch, require, file or timer.\n\
+- check() tries the connector for real without changing anything outside: it signs in, reads one small \
+thing, and returns a sentence saying what it found; it throws an Error when anything is wrong. Always \
+write one.\n\
+It has plain JavaScript and what Orbite lends, nothing else: no fetch, require, file or timer. One run \
+lasts 20 seconds at most.\n\
 - store.get(key), store.set(key, value), store.remove(key), store.keys(): data it keeps.\n\
 - http.get(url, { headers }), http.post(url, body, { headers }), also put, patch and delete: they return \
 { status, body, json() } and reach only the hosts listed.\n\
-- To send a secret (see list_secrets), write {{NAME}} in an address, a header or a body: Orbite fills it in \
-on the way, and the script never holds its value.\n\
-Its Actions are then called name_action. Try each one before telling your Owner it works.";
+- net.connect(host, port) opens an encrypted connection to a name:port listed (pass { tls: false } for a \
+plain one, then startTls() if the service asks for it). It returns { write(text), read({ until, \
+timeout }), startTls(), close() }: none of them is awaited. read returns the text received up to and \
+past `until` (for IMAP, the tag of your command at the start of a line), or what is there when no \
+`until` is given; timeout is in seconds; it throws once the service has closed the connection. Lines end \
+with \\r\\n. Close it before returning. With a secret, each read waits a moment for the answer to be \
+whole: ask for little at a time (a list, then one message), never more than 800 kB in one answer.\n\
+- To send a secret, write {{NAME}} in an address, a header, a body or what you write to a connection: \
+Orbite fills it in on the way, and the script never holds its value. {{base64:NAME}} sends it in base64, \
+as SMTP's AUTH LOGIN asks for a password; sign in with what takes the password by itself (IMAP LOGIN, \
+SMTP AUTH LOGIN, POP3 PASS), since you cannot mix it into a text of your own.\n\
+Its Actions are then called name_action.";
 
 const NO_COMPUTER: &str = "You have no Computer on this machine.";
 
@@ -712,11 +735,15 @@ impl Host {
                 Review::Ask(Approval {
                     summary: summary.into(),
                     detail: format!(
-                        "{}: {}\n{reaches}\n{} {}\n\n{}",
+                        "{}: {}\n{reaches}\n{} {}\n{}\n\n{}",
                         wanted.name,
                         wanted.description,
                         self.language.say("Adds:", "Ajoute :"),
                         adds.join(", "),
+                        self.language.say(
+                            "It is tried at once, with what it reaches and sends.",
+                            "Elle est essayée aussitôt, avec ce qu'elle atteint et envoie."
+                        ),
                         preview(&wanted.script)
                     ),
                     irreversible: replaces,
@@ -964,12 +991,34 @@ impl Host {
                             .map(|()| adds)
                             .map_err(|error| format!("Could not keep the Extension: {error}."))
                     }) {
-                        Ok(adds) => format!(
-                            "The Extension {} is in place and adds: {}. Try each of them now, before telling \
-                         your Owner it works.",
-                            wanted.name,
-                            adds.join(", ")
-                        ),
+                        Ok(adds) => {
+                            // What it says of itself is tried at once, for real.
+                            let checked = match extensions
+                                .tried(&wanted.name, self.secrets.as_ref())
+                                .await
+                            {
+                                Some(Ok(found)) => format!(
+                                    " Its check passed: {}. Now try each Action once, then tell \
+                                     your Owner in a sentence what you can do with it.",
+                                    found.chars().take(600).collect::<String>()
+                                ),
+                                Some(Err(problem)) => format!(
+                                    " Its check FAILED: {}. It does not work yet: find out why \
+                                     (read the service's documentation again, or try a smaller \
+                                     step), repair the script and create it again. Do not tell \
+                                     your Owner it works.",
+                                    problem.chars().take(1_200).collect::<String>()
+                                ),
+                                None => " It has no check() of its own: try each Action now, \
+                                         before telling your Owner it works."
+                                    .to_owned(),
+                            };
+                            format!(
+                                "The Extension {} is in place and adds: {}.{checked}",
+                                wanted.name,
+                                adds.join(", ")
+                            )
+                        }
                         Err(problem) => problem,
                     }
                 }

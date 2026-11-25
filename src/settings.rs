@@ -24,8 +24,7 @@ pub const SETTINGS: [&str; 12] = [
 ];
 
 /// The settings that are read when Orbite starts: changing one takes a restart.
-pub const TAKES_A_RESTART: [&str; 7] =
-    ["language", "name", "shape", "colour", "model", "light", "voice"];
+pub const TAKES_A_RESTART: [&str; 4] = ["language", "model", "light", "voice"];
 
 /// The settings of one installation.
 pub struct Settings<'a> {

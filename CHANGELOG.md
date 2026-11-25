@@ -2,6 +2,17 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.2
+
+Released on 2026-11-26.
+
+- **Your agent connects itself to services that are not of the web.** The connectors it writes for itself (extensions) could only speak to web services; they can now hold a connection to a port you grant, encrypted, which is how a mailbox is spoken to (IMAP, SMTP, POP) whatever host it is on. A password is filled in on the way, in base64 when the server asks for it so, and is never shown to the script or the model.
+- **A connector is tried for real the moment you allow it.** It signs in and reads one small thing; when that fails your agent is told why and repairs it, and it does not tell you it works before it does. It is also told to find out how a service is spoken to before writing anything.
+- **A name or a look changed takes effect at once.** Your agent used to start again for them, and refused anything for those few seconds.
+- **A device opens on the end of the conversation**: the last forty entries, and those before on demand, rather than two hundred each time. Each entry now says which one it is, so that a device takes the conversation up where it left it.
+- Five independent reviews before release, each of which found a way for a secret a service says back to reach a script: in two halves across two reads, by the marks a script reads up to, by what was kept back when it looked like the start of a secret, by how a network cuts what it carries, and by how much had come at a given instant. The rule that came out of them is plain: an extension that was lent a secret is handed what a service says only once it is all there, with every secret in it found and named first. They also found that an answer from the web cut at its limit could be cut inside a secret, which is fixed. What remains is said in the documentation: a network or a service that holds the second part of a secret back for more than a moment gets it past in two halves. The rule as it now stands was written after the fifth review and released before a sixth had read it.
+- Tried for real: a model wrote itself a connector to Gmail's mail server over an encrypted connection, was checked, and reported what the server offers. Not tried: signing in to a real mailbox with a password, and sending mail.
+
 ## 0.9.1
 
 Released on 2026-11-25.

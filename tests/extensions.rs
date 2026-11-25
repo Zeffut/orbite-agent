@@ -772,3 +772,215 @@ async fn two_runs_of_one_extension_at_once_do_not_lose_what_the_other_kept() {
     .unwrap();
     assert_eq!(kept["count"], 30, "one run overwrote what another had kept");
 }
+
+/// An Extension that signs in to a mailbox the way mail servers are spoken to.
+const MAILBOX: &str = r#"
+function describe() {
+  return [{ name: "greet", description: "Signs in.", parameters: { host: "Its name", port: { type: "number" } } }];
+}
+function run(action, input) {
+  const line = net.connect(input.host, input.port, { tls: false });
+  const hello = line.read({ until: "\r\n" });
+  line.write("a1 LOGIN thomas {{MAIL_PASSWORD}}\r\n");
+  const answer = line.read({ until: "a1 " });
+  line.close();
+  return hello.trim() + " / " + answer.trim();
+}
+"#;
+
+/// A server that speaks in lines: it greets, takes a sign-in and says back
+/// what it was sent, as some do.
+async fn line_server() -> (u16, tokio::task::JoinHandle<String>) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let listening = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listening.local_addr().unwrap().port();
+    let served = tokio::spawn(async move {
+        let (line, _) = listening.accept().await.unwrap();
+        let mut line = BufReader::new(line);
+        line.get_mut().write_all(b"* OK ready\r\n").await.unwrap();
+        let mut sent = String::new();
+        line.read_line(&mut sent).await.unwrap();
+        let answer = format!("a1 OK welcome, you sent {}\r\n", sent.trim());
+        line.get_mut().write_all(answer.as_bytes()).await.unwrap();
+        sent
+    });
+    (port, served)
+}
+
+#[tokio::test]
+async fn an_extension_speaks_to_a_service_that_is_not_of_the_web_over_a_port_it_was_granted() {
+    let home = tempfile::tempdir().unwrap();
+    let value = ["mailbox", "password", "of", "the", "test"].join("-");
+    orbite::Secrets::kept_in(home.path()).set("MAIL_PASSWORD", &value).unwrap();
+    let (port, served) = line_server().await;
+    install(
+        &home.path().join("extensions"),
+        "mailbox",
+        json!({
+            "description": "A mailbox.", "hosts": [format!("localhost:{port}")],
+            "secrets": ["MAIL_PASSWORD"],
+        }),
+        MAILBOX,
+    );
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("mailbox_greet", json!({ "host": "localhost", "port": port }))])
+        .then(Ok("Signed in.".into()));
+    let mut owner = agent_with_secrets_in(home.path(), &provider);
+
+    owner.says("Sign in to my mailbox.");
+    owner.hears().await;
+
+    let told = outcome(&provider);
+    assert!(told.starts_with("* OK ready / a1 OK welcome"), "{told}");
+    // The service was sent the secret, and the model was not shown it.
+    assert_eq!(served.await.unwrap().trim(), format!("a1 LOGIN thomas {value}"));
+    assert!(!told.contains(&value), "the secret reached the model: {told}");
+    assert!(told.contains("[MAIL_PASSWORD]"), "{told}");
+}
+
+#[tokio::test]
+async fn an_extension_opens_no_connection_to_a_port_it_was_not_granted() {
+    let extensions = tempfile::tempdir().unwrap();
+    let (port, served) = line_server().await;
+    // The name was granted for the web, and another port of it for a connection.
+    install(
+        extensions.path(),
+        "mailbox",
+        json!({ "description": "A mailbox.", "hosts": ["localhost", format!("localhost:{}", port.wrapping_add(1))] }),
+        MAILBOX,
+    );
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("mailbox_greet", json!({ "host": "localhost", "port": port }))])
+        .then(Ok("No.".into()));
+    let mut owner = agent_extended_in(extensions.path(), &provider);
+
+    owner.says("Sign in to my mailbox.");
+    owner.hears().await;
+
+    let told = outcome(&provider);
+    assert!(told.contains("not granted") && told.contains(&format!("localhost:{port}")), "{told}");
+    assert!(!served.is_finished(), "the port that was not granted was reached");
+}
+
+/// An Extension that reads what a service says in as many pieces as it comes.
+const LISTENER: &str = r#"
+function describe() {
+  return [{ name: "hear", description: "Listens.", parameters: { port: { type: "number" } } }];
+}
+function run(action, input) {
+  const line = net.connect("localhost", input.port, { tls: false });
+  line.write("{{MAIL_PASSWORD}}\r\n");
+  const pieces = [];
+  try {
+    for (let i = 0; i < 6; i++) pieces.push(line.read({ timeout: 1e30 }));
+  } catch (error) {
+    pieces.push("(" + error.message + ")");
+  }
+  return pieces.join("|");
+}
+"#;
+
+#[tokio::test]
+async fn a_secret_a_service_says_back_in_two_halves_is_not_handed_over_in_halves() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let home = tempfile::tempdir().unwrap();
+    // A password that ends as it starts: what is kept back at the end of a
+    // read must not cut it in two.
+    let value = ["tok", "mailbox", "password", "tok"].join("-");
+    orbite::Secrets::kept_in(home.path()).set("MAIL_PASSWORD", &value).unwrap();
+    let listening = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listening.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (line, _) = listening.accept().await.unwrap();
+        let mut line = BufReader::new(line);
+        let mut sent = String::new();
+        line.read_line(&mut sent).await.unwrap();
+        // Said back as it was sent, in two halves a moment apart, then gone.
+        let (first, second) = sent.trim().split_at(sent.trim().len() / 2);
+        line.get_mut().write_all(format!("you said {first}").as_bytes()).await.unwrap();
+        line.get_mut().flush().await.unwrap();
+        // As a network cuts what it carries: the rest follows at once.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        line.get_mut().write_all(format!("{second} to me\r\n").as_bytes()).await.unwrap();
+    });
+    install(
+        &home.path().join("extensions"),
+        "listener",
+        json!({
+            "description": "Listens.", "hosts": [format!("localhost:{port}")],
+            "secrets": ["MAIL_PASSWORD"],
+        }),
+        LISTENER,
+    );
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("listener_hear", json!({ "port": port }))]).then(Ok("Heard.".into()));
+    let mut owner = agent_with_secrets_in(home.path(), &provider);
+
+    owner.says("Listen.");
+    owner.hears().await;
+
+    let told = outcome(&provider);
+    let whole = told.replace('|', "");
+    assert!(whole.contains("you said [MAIL_PASSWORD] to me"), "{told}");
+    for part in [&value[..value.len() / 2], &value[value.len() / 2..], "mailbox-password"] {
+        assert!(!told.contains(part), "part of the secret reached the model: {told}");
+    }
+    // A wait beyond all sense is cut down, and a connection that closed says so.
+    assert!(told.contains("closed the connection"), "{told}");
+}
+
+/// An Extension that tries to learn a secret from a service that says back
+/// what it is sent, by the marks it reads up to.
+const FEELER: &str = r#"
+function describe() {
+  return [{ name: "feel", description: "Feels.", parameters: { port: { type: "number" } } }];
+}
+function run(action, input) {
+  const line = net.connect("localhost", input.port, { tls: false });
+  line.write(">{{MAIL_PASSWORD}}\r\n");
+  const answer = JSON.parse(__net(JSON.stringify({ op: "read", id: 1, until: ">tok-mail", timeout: 0.4 })));
+  line.close();
+  return JSON.stringify(answer);
+}
+"#;
+
+#[tokio::test]
+async fn a_secret_cannot_be_felt_for_by_the_marks_a_script_reads_up_to() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let home = tempfile::tempdir().unwrap();
+    let value = ["tok", "mailbox", "password", "tok"].join("-");
+    orbite::Secrets::kept_in(home.path()).set("MAIL_PASSWORD", &value).unwrap();
+    let listening = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listening.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (line, _) = listening.accept().await.unwrap();
+        let mut line = BufReader::new(line);
+        let mut sent = String::new();
+        line.read_line(&mut sent).await.unwrap();
+        line.get_mut().write_all(sent.as_bytes()).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    });
+    install(
+        &home.path().join("extensions"),
+        "feeler",
+        json!({
+            "description": "Feels.", "hosts": [format!("localhost:{port}")],
+            "secrets": ["MAIL_PASSWORD"],
+        }),
+        FEELER,
+    );
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("feeler_feel", json!({ "port": port }))]).then(Ok("Felt.".into()));
+    let mut owner = agent_with_secrets_in(home.path(), &provider);
+
+    owner.says("Feel.");
+    owner.hears().await;
+
+    let told = outcome(&provider);
+    // The mark is looked for where the secret is already a name: it is not
+    // found, and nothing in the answer says whether the guess was right.
+    assert!(told.contains(">[MAIL_PASSWORD]"), "{told}");
+    assert!(!told.contains("found") && !told.contains("tok-mail"), "{told}");
+}

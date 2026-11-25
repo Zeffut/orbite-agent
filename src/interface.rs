@@ -30,7 +30,7 @@ const UPLOAD_LIMIT: usize = 50_000_000;
 /// How many files may wait to be sent with a message.
 const WAITING_FILES: usize = 20;
 /// How much of the Conversation a device is shown when it opens the page.
-const SHOWN_AT_FIRST: i64 = 200;
+const SHOWN_AT_FIRST: i64 = 40;
 
 const PAGE: &str = include_str!("interface/index.html");
 const SCRIPT: &str = include_str!("interface/app.js");
@@ -86,10 +86,6 @@ struct Shared {
     names: Vec<String>,
     /// True when the Owner's devices reach the interface encrypted.
     encrypted: bool,
-    /// What the Owner called their Agent.
-    agent: String,
-    /// How the Agent looks, when its Owner chose.
-    look: Option<crate::Look>,
     language: String,
 }
 
@@ -328,18 +324,6 @@ impl Interface {
                     Some(vec![named])
                 })
                 .unwrap_or_default(),
-            agent: crate::Config::load(home)
-                .ok()
-                .and_then(|config| config.agent_name)
-                .unwrap_or_else(|| "Orbite".to_owned()),
-            look: crate::Config::load(home).ok().filter(|config| config.agent_shape.is_some()).map(
-                |config| {
-                    crate::Look::called(
-                        config.agent_shape.as_deref(),
-                        config.agent_colour.as_deref(),
-                    )
-                },
-            ),
             language: language.to_owned(),
         });
         let listening = tokio::net::TcpListener::bind(address).await?;
@@ -371,6 +355,7 @@ impl Interface {
             .route("/api/pair", post(pair))
             .route("/api/me", get(me))
             .route("/api/events", get(events))
+            .route("/api/earlier", get(earlier))
             .route("/api/say", post(say))
             .route("/api/answer", post(answer))
             .route("/api/settings", get(settings).post(set))
@@ -637,16 +622,25 @@ async fn me(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
     match shared.device(&headers) {
         Some(name) => {
             let seen = shared.screen.lock().expect("not poisoned").0;
+            // Read as they are now: a name or a look just changed shows at once.
+            let config = crate::Config::load(&shared.home).ok();
+            let agent = config
+                .as_ref()
+                .and_then(|config| config.agent_name.clone())
+                .unwrap_or_else(|| "Orbite".to_owned());
+            let look = config.filter(|config| config.agent_shape.is_some()).map(|config| {
+                crate::Look::called(config.agent_shape.as_deref(), config.agent_colour.as_deref())
+            });
             Json(json!({
                 "device": name, "language": shared.language, "screen": seen,
-                "agent": shared.agent,
+                "agent": agent,
                 // True once the Owner has been shown round, on any device.
                 "welcomed": crate::Store::open(shared.home.join("orbite.db"))
                     .ok()
                     .and_then(|store| store.setting("welcomed").ok().flatten())
                     .is_some(),
                 // Drawn by the page: the outline, the colour, where the eyes sit.
-                "look": shared.look.map(|look| json!({
+                "look": look.map(|look| json!({
                     "shape": look.shape, "colour": look.on_a_page(),
                     "outline": look.outline(), "eyes": 36.0 + 42.0 * look.eyes_down(),
                 })),
@@ -657,6 +651,51 @@ async fn me(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
             (StatusCode::UNAUTHORIZED, Json(json!({ "language": shared.language }))).into_response()
         }
     }
+}
+
+/// An entry as a device reads it, saying itself which one it is: a device
+/// that does not read the numbers its line comes with still knows where
+/// it is in the Conversation.
+fn numbered(id: i64, body: String) -> String {
+    // Said last: should a body ever carry a number of its own, this one holds.
+    match body.trim_end().strip_suffix('}') {
+        Some(rest) if id > 0 && rest.trim() != "{" && rest.starts_with('{') => {
+            format!("{rest},\"id\":{id}}}")
+        }
+        _ => body,
+    }
+}
+
+/// What was said before what a device holds: the few entries before
+/// `before`, oldest first, and whether there is more further back. A
+/// device opens on the end of the Conversation and goes back on demand.
+async fn earlier(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(asked): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let Some(before) = asked.get("before").and_then(|before| before.parse::<i64>().ok()) else {
+        return refused(StatusCode::BAD_REQUEST, "before which entry");
+    };
+    let database = shared.database.lock().expect("not poisoned");
+    let mut read: Vec<Value> = database
+        .prepare("SELECT id, body FROM shown WHERE id < ?1 ORDER BY id DESC LIMIT ?2")
+        .and_then(|mut reading| {
+            reading
+                .query_map([before, SHOWN_AT_FIRST + 1], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map(|rows| rows.filter_map(Result::ok).collect::<Vec<Told>>())
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(id, body)| serde_json::from_str(&numbered(id, body)).ok())
+        .collect();
+    let more = read.len() as i64 > SHOWN_AT_FIRST;
+    read.truncate(SHOWN_AT_FIRST as usize);
+    read.reverse();
+    Json(json!({ "entries": read, "more": more })).into_response()
 }
 
 async fn events(
@@ -703,7 +742,7 @@ async fn events(
     };
     let last = earlier.last().map(|(id, _)| *id).or(seen).unwrap_or_default();
     let told = |(id, body): Told| {
-        let event = Event::default().data(body);
+        let event = Event::default().data(numbered(id, body));
         Ok::<_, Infallible>(if id > 0 { event.id(id.to_string()) } else { event })
     };
     let stream: std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>> = Box::pin(

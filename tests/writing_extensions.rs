@@ -362,3 +362,47 @@ async fn an_extension_is_named_so_that_its_actions_are_its_own_and_every_provide
     assert!(told[3].contains("already adds an Action called visit_counter_bump"), "{}", told[3]);
     assert!(!extensions.path().join("visit-counter").exists());
 }
+
+/// An Extension that says of itself whether it works.
+const CHECKED: &str = r#"
+function describe() {
+  return [{ name: "bump", description: "Counts one more.", parameters: {} }];
+}
+function run() { return "Count: 1"; }
+function check() { return "counted to 1"; }
+"#;
+
+#[tokio::test]
+async fn what_the_agent_writes_is_tried_the_moment_it_is_in_place() {
+    let extensions = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("create_extension", counter(CHECKED))]).then(Ok("It works.".into()));
+    let mut owner = agent_extended_in(extensions.path(), &provider);
+
+    owner.says("Write yourself a counter.");
+    owner.is_asked().await;
+    owner.allows();
+    owner.hears().await;
+
+    let told = outcomes(&provider).pop().unwrap();
+    assert!(told.contains("Its check passed: counted to 1"), "{told}");
+}
+
+#[tokio::test]
+async fn what_does_not_work_is_said_so_and_sent_back_to_be_repaired() {
+    let extensions = tempfile::tempdir().unwrap();
+    let broken = CHECKED
+        .replace(r#"return "counted to 1";"#, r#"throw new Error("the service answered 401");"#);
+    let provider = ScriptedProvider::default();
+    provider.then_acts([("create_extension", counter(&broken))]).then(Ok("Not yet.".into()));
+    let mut owner = agent_extended_in(extensions.path(), &provider);
+
+    owner.says("Write yourself a counter.");
+    owner.is_asked().await;
+    owner.allows();
+    owner.hears().await;
+
+    let told = outcomes(&provider).pop().unwrap();
+    assert!(told.contains("check FAILED: the service answered 401"), "{told}");
+    assert!(told.contains("Do not tell your Owner it works"), "{told}");
+}

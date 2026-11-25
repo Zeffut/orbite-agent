@@ -1318,7 +1318,14 @@ impl<P: Provider + 'static> Agent<P> {
     /// Who the Agent is, what it remembers and what it knows how to do, as
     /// told to the model.
     fn instructions(&self) -> String {
-        let mut instructions = match &self.name {
+        // As its Owner calls it now: a name just given holds from the next word.
+        let named = self
+            .home
+            .as_ref()
+            .and_then(|home| crate::Config::load(home).ok())
+            .and_then(|config| config.agent_name)
+            .or_else(|| self.name.clone());
+        let mut instructions = match &named {
             Some(name) => format!("Your name is {name}. {INSTRUCTIONS}"),
             None => INSTRUCTIONS.to_owned(),
         };

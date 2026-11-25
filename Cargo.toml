@@ -1,6 +1,6 @@
 [package]
 name = "orbite"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2024"
 license = "AGPL-3.0-only"
 description = "An open-source, self-hosted personal AI agent that lives on your own machine."
@@ -31,6 +31,7 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 tar = "0.4.46"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "io-std", "time", "process", "signal"] }
+rustls-platform-verifier = "0.7.1"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 url = "2.5.8"

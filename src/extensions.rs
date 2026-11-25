@@ -1,6 +1,7 @@
 //! Extensions: scripts that add Actions to the Agent, run in a sandbox where
 //! they reach nothing but what Orbite lends them: a store of their own and
-//! the hosts they were granted.
+//! the hosts they were granted, over the web or, for a service that speaks
+//! something else (mail, say), over a connection to one of its ports.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -38,6 +39,23 @@ const STORE_LIMIT: usize = 10_000_000;
 /// The longest name of an Action: what every Provider accepts.
 const NAME_LIMIT: usize = 64;
 
+/// How many connections one run of an Extension holds at once.
+const CONNECTIONS_AT_ONCE: usize = 4;
+
+/// How many connections one run opens in all.
+const CONNECTIONS_IN_ALL: u32 = 12;
+
+/// The longest mark a read is asked to go up to.
+const MARK_LIMIT: usize = 1_000;
+
+/// How long nothing must have come for what has come to be all of it,
+/// beyond a few times what the service takes to reach; and at the most.
+const QUIET: Duration = Duration::from_millis(200);
+const QUIET_AT_MOST: Duration = Duration::from_secs(2);
+
+/// How long a connection is waited on for what it has to say, unasked.
+const READ_WAIT: Duration = Duration::from_secs(10);
+
 /// How many redirections in a row an Extension's request follows.
 const REDIRECTIONS_FOLLOWED: usize = 6;
 
@@ -71,6 +89,24 @@ const http = (() => {
     post: (url, body, options) => request("POST", url, { ...options, body }),
     put: (url, body, options) => request("PUT", url, { ...options, body }),
     patch: (url, body, options) => request("PATCH", url, { ...options, body }),
+  });
+})();
+const net = (() => {
+  const ask = request => {
+    const answer = JSON.parse(__net(JSON.stringify(request)));
+    if (answer.error) throw new Error(answer.error);
+    return answer;
+  };
+  return Object.freeze({
+    connect: (host, port, options) => {
+      const id = ask({ op: "connect", host: String(host), port: Number(port), tls: !(options && options.tls === false) }).id;
+      return Object.freeze({
+        write: data => { ask({ op: "write", id, data: String(data) }); },
+        read: options => ask({ op: "read", id, until: options && options.until, timeout: options && options.timeout }).data,
+        startTls: () => { ask({ op: "starttls", id }); },
+        close: () => { ask({ op: "close", id }); },
+      });
+    },
   });
 })();
 "#;
@@ -265,8 +301,9 @@ impl Extensions {
         };
         let described = self.described(&extension).map_err(|problem| {
             format!(
-                "The script does not load: {problem}. It must define two global functions: \
-                 describe(), returning a list of {{ name, description, parameters }}, and run(action, input)."
+                "The script does not load: {problem}. It must define the global functions \
+                 describe(), returning a list of {{ name, description, parameters }}, and \
+                 run(action, input); and check(), which tries it for real."
             )
         })?;
         if described.is_empty() {
@@ -390,6 +427,15 @@ impl Extensions {
             request.input
         );
         let name = extension.name.clone();
+        // What the Agent wrote for itself is its own to mend: its Owner is
+        // not left with something that does not work.
+        let mend = if extension.official {
+            ""
+        } else {
+            "\nIf this is the Extension's own fault and not what you asked of it (the service \
+             changed, a case it did not foresee), do not leave it there: read it with \
+             read_extension, repair it, create it again, and do what your Owner asked."
+        };
         let runner = Arc::clone(self);
         let handle = tokio::runtime::Handle::current();
         let ran =
@@ -404,16 +450,59 @@ impl Extensions {
                     problem if problem.contains("out of memory") => {
                         self.broke(&name, "it took more memory than an Extension may")
                     }
-                    problem => format!("The Extension {name} could not do it: {problem}"),
+                    problem => format!("The Extension {name} could not do it: {problem}{mend}"),
                 },
                 _ => format!("The Extension {name} did not finish what it started."),
             },
             Ok(Err(Failure::Threw(problem))) => {
-                format!("The Extension {name} could not do it: {problem}")
+                format!("The Extension {name} could not do it: {problem}{mend}")
             }
             Ok(Err(Failure::Broke(problem))) => self.broke(&name, &problem),
             Err(_) => self.broke(&name, "it crashed"),
         })
+    }
+
+    /// Tries the Extension called `name` for real, as its own `check()`
+    /// says to: what it found, or what went wrong. None when the script
+    /// has no check of its own.
+    pub(crate) async fn tried(
+        self: &Arc<Self>,
+        name: &str,
+        secrets: Option<&Secrets>,
+    ) -> Option<Result<String, String>> {
+        let extension = self.all().into_iter().find(|extension| extension.name == name)?;
+        let lent: Vec<(String, String)> = extension
+            .secrets
+            .iter()
+            .filter(|name| !name.starts_with("ORBITE_"))
+            .filter_map(|name| Some((name.clone(), secrets?.get(name).ok()??)))
+            .collect();
+        let call = "globalThis.__settled = null;
+             if (typeof check !== 'function') { __settled = { none: true }; }
+             else Promise.resolve().then(() => check()).then(
+               value => { __settled = { ok: value === undefined || value === null ? 'It works.'
+                 : typeof value === 'string' ? value : JSON.stringify(value, null, 1) }; },
+               error => { __settled = { error: String((error && error.message) || error) }; });"
+            .to_owned();
+        let runner = Arc::clone(self);
+        let handle = tokio::runtime::Handle::current();
+        let ran =
+            tokio::task::spawn_blocking(move || runner.run(&extension, call, Some((handle, lent))))
+                .await;
+        match ran {
+            Ok(Ok(settled)) => match serde_json::from_str::<Value>(&settled) {
+                Ok(Value::Object(settled)) if settled.contains_key("none") => None,
+                Ok(Value::Object(settled)) if settled.contains_key("ok") => {
+                    Some(Ok(settled["ok"].as_str().unwrap_or_default().to_owned()))
+                }
+                Ok(Value::Object(settled)) => {
+                    Some(Err(settled["error"].as_str().unwrap_or("?").to_owned()))
+                }
+                _ => Some(Err("it did not finish what it started".into())),
+            },
+            Ok(Err(Failure::Threw(problem) | Failure::Broke(problem))) => Some(Err(problem)),
+            Err(_) => Some(Err("it crashed".into())),
+        }
     }
 
     /// Turns off an Extension that does not work; the text tells the model.
@@ -609,6 +698,7 @@ impl Extensions {
                     json!(kept.lock().unwrap().0.keys().collect::<Vec<_>>()).to_string()
                 }),
             )?;
+            let connecting = reaching.clone();
             let (http, hosts) = (self.http.clone(), extension.hosts.clone());
             lend(
                 &ctx,
@@ -626,6 +716,23 @@ impl Extensions {
                                 .block_on(reach(&http, &hosts, lent, &request, deadline))
                                 .map_err(|problem| named(&problem, lent))
                         }
+                    };
+                    answer.unwrap_or_else(|problem| json!({ "error": problem })).to_string()
+                }),
+            )?;
+            let (ports, wires) = (extension.hosts.clone(), Arc::new(Wires::default()));
+            lend(
+                &ctx,
+                "__net",
+                Function::new(ctx.clone(), move |request: String| {
+                    let answer = match &connecting {
+                        None => {
+                            Err("nothing can be reached while an Extension describes itself"
+                                .to_owned())
+                        }
+                        Some((handle, lent)) => handle
+                            .block_on(wire(&wires, &ports, lent, &request, deadline))
+                            .map_err(|problem| named(&problem, lent)),
                     };
                     answer.unwrap_or_else(|problem| json!({ "error": problem })).to_string()
                 }),
@@ -675,6 +782,235 @@ impl Extensions {
         }
         Ok(result)
     }
+}
+
+/// A connection an Extension holds to a port it was granted.
+enum Wire {
+    Plain(tokio::net::TcpStream),
+    Secure(Box<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>),
+}
+
+/// A connection that is held.
+struct Held {
+    /// The name it was opened to.
+    host: String,
+    wire: Wire,
+    /// What was read from it and not yet given to the script.
+    read: Vec<u8>,
+    /// How long it took to reach: what a network cuts in two comes back
+    /// together within a few of these.
+    reached_in: Duration,
+}
+
+/// The connections of one run, by the number the script knows each by.
+#[derive(Default)]
+struct Wires {
+    held: Mutex<HashMap<u32, Held>>,
+    opened: Mutex<u32>,
+}
+
+/// What a connection is checked against: the certificates this machine trusts.
+fn trusting() -> Result<tokio_rustls::TlsConnector, String> {
+    use rustls_platform_verifier::ConfigVerifierExt;
+    let config = rustls::ClientConfig::with_platform_verifier()
+        .map_err(|error| format!("this machine's certificates could not be read: {error}"))?;
+    Ok(tokio_rustls::TlsConnector::from(Arc::new(config)))
+}
+
+/// Carries out what a script asks of a connection: opening one to a port
+/// it was granted, writing to it, reading from it, encrypting it, closing it.
+async fn wire(
+    wires: &Wires,
+    hosts: &[String],
+    lent: &[(String, String)],
+    request: &str,
+    deadline: Instant,
+) -> Result<Value, String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    #[derive(Deserialize)]
+    struct Asked {
+        op: String,
+        #[serde(default)]
+        id: u32,
+        #[serde(default)]
+        host: String,
+        #[serde(default)]
+        port: u16,
+        #[serde(default)]
+        tls: bool,
+        data: Option<String>,
+        until: Option<String>,
+        timeout: Option<f64>,
+    }
+    let asked: Asked = serde_json::from_str(request).map_err(|error| error.to_string())?;
+    let left = || deadline.saturating_duration_since(Instant::now());
+    let encrypted = |name: String, plain: tokio::net::TcpStream| async move {
+        let server = rustls::pki_types::ServerName::try_from(name.clone())
+            .map_err(|_| format!("{name} is not a name a certificate can be checked against"))?;
+        let secure = tokio::time::timeout(left(), trusting()?.connect(server, plain))
+            .await
+            .map_err(|_| format!("{name} did not answer in time"))?
+            .map_err(|error| format!("{name} could not be reached encrypted: {error}"))?;
+        Ok::<_, String>(Wire::Secure(Box::new(secure)))
+    };
+    if asked.op == "connect" {
+        let host = asked.host.trim().to_lowercase();
+        let wanted = format!("{host}:{}", asked.port);
+        if !hosts.iter().any(|granted| granted.trim().to_lowercase() == wanted) {
+            return Err(format!(
+                "this Extension was not granted {wanted}: it can only reach {}",
+                listed(hosts)
+            ));
+        }
+        if wires.held.lock().unwrap().len() >= CONNECTIONS_AT_ONCE {
+            return Err(format!(
+                "an Extension holds at most {CONNECTIONS_AT_ONCE} connections at once: close one"
+            ));
+        }
+        let asked_at = Instant::now();
+        let plain = tokio::time::timeout(left(), tokio::net::TcpStream::connect(&wanted))
+            .await
+            .map_err(|_| format!("{wanted} did not answer in time"))?
+            .map_err(|error| format!("{wanted} could not be reached: {error}"))?;
+        let reached_in = asked_at.elapsed();
+        // Sent as it is written, not gathered: less of it is cut in two.
+        let _ = plain.set_nodelay(true);
+        let wire =
+            if asked.tls { encrypted(host.clone(), plain).await? } else { Wire::Plain(plain) };
+        let id = {
+            let mut opened = wires.opened.lock().unwrap();
+            *opened += 1;
+            *opened
+        };
+        if id > CONNECTIONS_IN_ALL {
+            return Err(format!(
+                "an Extension opens at most {CONNECTIONS_IN_ALL} connections in one run"
+            ));
+        }
+        let held = Held { host, wire, read: Vec::new(), reached_in };
+        wires.held.lock().unwrap().insert(id, held);
+        return Ok(json!({ "id": id }));
+    }
+    // Taken out while it is used, and put back unless it was closed.
+    let taken = wires.held.lock().unwrap().remove(&asked.id);
+    let Some(Held { host, mut wire, mut read, reached_in }) = taken else {
+        return Err("this connection is closed".into());
+    };
+    let answer = match asked.op.as_str() {
+        "close" => return Ok(json!({})),
+        "starttls" => match wire {
+            Wire::Secure(_) => Err(format!("the connection to {host} is already encrypted")),
+            Wire::Plain(plain) => {
+                wire = encrypted(host.clone(), plain).await?;
+                Ok(json!({}))
+            }
+        },
+        "write" => {
+            // A secret is filled in on the way out, as on the web.
+            let data = filled(asked.data.as_deref().unwrap_or_default(), lent)?;
+            let wrote = async {
+                match &mut wire {
+                    Wire::Plain(plain) => plain.write_all(data.as_bytes()).await,
+                    Wire::Secure(secure) => {
+                        secure.write_all(data.as_bytes()).await?;
+                        secure.flush().await
+                    }
+                }
+            };
+            match tokio::time::timeout(left(), wrote).await {
+                Err(_) => Err(format!("{host} did not take it in time")),
+                Ok(Err(error)) => Err(format!("{host} could not be written to: {error}")),
+                Ok(Ok(())) => Ok(json!({})),
+            }
+        }
+        "read" => {
+            // In seconds; a wait written in thousandths, as scripts often
+            // do, is taken as such. Never longer than the run has left.
+            let wait = match asked.timeout.filter(|wait| wait.is_finite() && *wait > 0.0) {
+                None => READ_WAIT,
+                Some(wait) if wait > 120.0 => Duration::from_secs_f64((wait / 1000.0).min(60.0)),
+                Some(wait) => Duration::from_secs_f64(wait.min(60.0)),
+            }
+            .min(left());
+            let until: Option<String> = asked
+                .until
+                .filter(|mark| !mark.is_empty())
+                .map(|mark| mark.chars().take(MARK_LIMIT).collect());
+            let stop = Instant::now() + wait;
+            let mut part = vec![0u8; 16 * 1024];
+            let mut closed = false;
+            // A secret a service says back may come in pieces, and how much
+            // has come at a given instant says something of how long it is.
+            // So an Extension that was lent a secret is handed what a
+            // service says only once it is all there: nothing more has come
+            // for a moment, or the connection closed. By then a secret is
+            // whole, and found. The moment is a few times what the service
+            // takes to reach, since that is what a network cuts apart by.
+            let careful = lent.iter().any(|(_, value)| !value.is_empty());
+            let quiet = (reached_in * 3 + QUIET).min(QUIET_AT_MOST);
+            let mut settled = false;
+            // The mark is looked for in what the script would be given,
+            // where a secret is already a name.
+            let (text, taken) = loop {
+                let whole = !careful || settled || closed;
+                if !whole && read.len() >= BODY_LIMIT * 4 {
+                    // Never in parts: how much of it came would tell.
+                    return Err(format!(
+                        "{host} says more at once than an Extension that holds a secret can be \
+                         given ({} kB): ask it for less at a time",
+                        BODY_LIMIT * 4 / 1000
+                    ));
+                }
+                let (text, taken) =
+                    if whole { handed_over(&read, lent) } else { (String::new(), 0) };
+                let found = whole
+                    && match &until {
+                        Some(mark) => text.contains(mark.as_str()),
+                        None => taken > 0,
+                    };
+                if found || closed || (whole && read.len() >= BODY_LIMIT * 4) {
+                    break (text, taken);
+                }
+                let waiting_for_quiet = !whole && !read.is_empty();
+                let patience = if waiting_for_quiet {
+                    // Not for ever: a service that never stops talking does
+                    // not hold a read much past the wait it was given.
+                    let last = (stop + quiet).saturating_duration_since(Instant::now());
+                    quiet.min(left()).min(last)
+                } else {
+                    stop.saturating_duration_since(Instant::now())
+                };
+                if patience.is_zero() {
+                    break (text, taken);
+                }
+                let reading = async {
+                    match &mut wire {
+                        Wire::Plain(plain) => plain.read(&mut part).await,
+                        Wire::Secure(secure) => secure.read(&mut part).await,
+                    }
+                };
+                match tokio::time::timeout(patience, reading).await {
+                    // Nothing more for a moment: what has come is all of it.
+                    Err(_) if waiting_for_quiet => settled = true,
+                    Err(_) => break (text, taken),
+                    Ok(Ok(0)) | Ok(Err(_)) => closed = true,
+                    Ok(Ok(count)) => {
+                        read.extend_from_slice(&part[..count]);
+                        settled = false;
+                    }
+                }
+            };
+            read.drain(..taken);
+            if closed && text.is_empty() && read.is_empty() {
+                return Err(format!("{host} closed the connection"));
+            }
+            Ok(json!({ "data": text }))
+        }
+        other => Err(format!("a connection cannot {other}")),
+    };
+    let held = Held { host, wire, read, reached_in };
+    wires.held.lock().unwrap().insert(asked.id, held);
+    answer
 }
 
 /// Lends `function` to the scripts of `ctx` under `name`.
@@ -797,7 +1133,12 @@ format!(
                 }
             }
         }
-        read.truncate(BODY_LIMIT * 4);
+        // Cut at the limit, a body is cut before what may be the start of a
+        // secret: half of one would not be known for what it is.
+        if read.len() >= BODY_LIMIT * 4 {
+            let longest = lent.iter().flat_map(|(_, value)| dresses(value)).map(|d| d.len()).max();
+            read.truncate((BODY_LIMIT * 4).saturating_sub(longest.unwrap_or(0)));
+        }
         let text = String::from_utf8_lossy(&read).into_owned();
         // A service that sends a secret back does not hand it to the script:
         // named before the text is cut, so that no part of one is left.
@@ -819,7 +1160,17 @@ pub(crate) fn filled(text: &str, lent: &[(String, String)]) -> Result<String, St
             rest = after;
             continue;
         };
+        // A password is often asked for in base64 (SMTP's AUTH LOGIN): the
+        // script names it so, and still never holds it.
+        let (name, in_base64) = match name.strip_prefix("base64:") {
+            Some(name) => (name, true),
+            None => (name, false),
+        };
         match lent.iter().find(|(granted, _)| granted == name) {
+            Some((_, value)) if in_base64 => {
+                use base64::Engine;
+                filled.push_str(&base64::engine::general_purpose::STANDARD.encode(value));
+            }
             Some((_, value)) => filled.push_str(value),
             None => {
                 return Err(format!(
@@ -833,39 +1184,108 @@ pub(crate) fn filled(text: &str, lent: &[(String, String)]) -> Result<String, St
     Ok(filled + rest)
 }
 
+/// The dresses a secret may come back in: as it is, in other capitals, as
+/// an address carries it, and in base64 of either alphabet, with or
+/// without its padding.
+fn dresses(value: &str) -> Vec<String> {
+    use base64::Engine;
+    use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
+    let mut dresses = vec![value.to_owned(), value.to_lowercase(), value.to_uppercase()];
+    let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+    if encoded != *value {
+        dresses.push(encoded);
+    }
+    dresses.extend([
+        STANDARD.encode(value),
+        STANDARD_NO_PAD.encode(value),
+        URL_SAFE.encode(value),
+        URL_SAFE_NO_PAD.encode(value),
+    ]);
+    dresses.retain(|dress| !dress.is_empty());
+    dresses
+}
+
 /// `text` with the value of each secret lent replaced by its name, in the
 /// forms an address or an error may give it.
 fn named(text: &str, lent: &[(String, String)]) -> String {
     let mut named = text.to_owned();
     for (name, value) in lent {
         let marked = format!("[{name}]");
-        for form in [value.clone(), value.to_lowercase(), value.to_uppercase()] {
-            if !form.is_empty() {
-                named = named.replace(&form, &marked);
-            }
-        }
-        let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
-        if encoded != *value {
-            named = named.replace(&encoded, &marked);
-        }
-        // And as services often carry a key: in base64, either alphabet,
-        // with or without its padding.
-        {
-            use base64::Engine;
-            use base64::engine::general_purpose::{
-                STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD,
-            };
-            for dressed in [
-                STANDARD.encode(value),
-                STANDARD_NO_PAD.encode(value),
-                URL_SAFE.encode(value),
-                URL_SAFE_NO_PAD.encode(value),
-            ] {
-                named = named.replace(&dressed, &marked);
-            }
+        for dress in dresses(value) {
+            named = named.replace(&dress, &marked);
         }
     }
     named
+}
+
+/// What of `read` a script is handed, and how many of its bytes that
+/// takes. Every secret in the whole of it, in any dress, is found first
+/// and given as its name, however often it is there. It is then measured
+/// as the script will see it, a secret counting for its name, and cut at
+/// what a script may be given at once: never inside a secret, nor inside
+/// a letter, and nowhere that tells how long a secret is.
+fn handed_over(read: &[u8], lent: &[(String, String)]) -> (String, usize) {
+    // Whose secret each byte is part of, if any.
+    let mut whose: Vec<Option<usize>> = vec![None; read.len()];
+    for (index, (_, value)) in lent.iter().enumerate() {
+        for dress in dresses(value) {
+            let dress = dress.as_bytes();
+            if dress.len() > read.len() {
+                continue;
+            }
+            for start in 0..=read.len() - dress.len() {
+                if read[start] == dress[0] && read[start..start + dress.len()] == *dress {
+                    for part in &mut whose[start..start + dress.len()] {
+                        part.get_or_insert(index);
+                    }
+                }
+            }
+        }
+    }
+    // The runs of it: plain, or a secret, with what each weighs once shown.
+    let mut runs: Vec<(usize, usize, Option<usize>, usize)> = Vec::new();
+    let mut at = 0;
+    while at < read.len() {
+        let mut end = at;
+        while end < read.len() && whose[end].is_some() == whose[at].is_some() {
+            end += 1;
+        }
+        let weight = match whose[at] {
+            Some(index) => lent[index].0.len() + 2,
+            None => end - at,
+        };
+        runs.push((at, end, whose[at], weight));
+        at = end;
+    }
+    let mut room = BODY_LIMIT;
+    let (mut text, mut taken) = (String::new(), 0);
+    for (start, end, secret, weight) in runs {
+        match secret {
+            // A secret is given whole, as its name, or not yet.
+            Some(index) if weight <= room => {
+                text.push_str(&format!("[{}]", lent[index].0));
+                room -= weight;
+                taken = end;
+            }
+            Some(_) => break,
+            None => {
+                let mut upto = start + weight.min(room);
+                // Not inside a letter.
+                for _ in 0..3 {
+                    if upto > start && upto < read.len() && (read[upto] & 0xC0) == 0x80 {
+                        upto -= 1;
+                    }
+                }
+                text.push_str(&String::from_utf8_lossy(&read[start..upto]));
+                taken = upto;
+                if upto < end {
+                    break;
+                }
+                room -= weight;
+            }
+        }
+    }
+    (text, taken)
 }
 
 fn listed(hosts: &[String]) -> String {

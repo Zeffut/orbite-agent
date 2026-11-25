@@ -257,8 +257,10 @@ async fn the_agents_name_and_its_model_for_light_work_are_changed_from_the_conve
     // A name of several words, capitals kept.
     owner.says("/settings name Marie Curie");
     let said = owner.hears().await;
-    assert!(said.contains("Marie Curie") && said.to_lowercase().contains("restart"), "{said}");
+    // A name holds at once: nothing starts again for it.
+    assert!(said.contains("Marie Curie") && !said.to_lowercase().contains("restart"), "{said}");
     assert_eq!(Config::load(home.path()).unwrap().agent_name.as_deref(), Some("Marie Curie"));
+    running.abort();
     let _ = running.await;
 
     let (mut owner, running) = converse(home.path());
