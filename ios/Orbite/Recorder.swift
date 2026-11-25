@@ -42,11 +42,10 @@ final class Recorder {
 
     /// Starts recording. The hand feels it and the screen shows it at
     /// once; the phone starts hearing on its own, a breath later, without
-    /// either waiting for it. `touched` is when the finger landed, as the
-    /// system counts it.
-    func begin(touched: TimeInterval) {
+    /// either waiting for it.
+    func begin() {
         starting.impactOccurred(intensity: 1)
-        tape.begin(touched: touched)
+        tape.begin()
         crossing.prepare()
         sending.prepare()
         giving_up.prepare()
@@ -134,9 +133,10 @@ private final class Tape: @unchecked Sendable {
         }
     }
 
-    func begin(touched: TimeInterval) {
+    func begin() {
         let asked = ProcessInfo.processInfo.systemUptime
         turn.async {
+            let before = ProcessInfo.processInfo.systemUptime
             self.wake()
             let recorder = self.ready ?? Self.blank()
             self.ready = nil
@@ -157,8 +157,8 @@ private final class Tape: @unchecked Sendable {
             meter.resume()
             self.meter = meter
             Self.note(String(
-                format: "begin started=%@ finger-to-app=%.0fms app-to-hearing=%.0fms",
-                started ? "yes" : "no", (asked - touched) * 1000, (hearing - asked) * 1000))
+                format: "begin started=%@ waited-its-turn=%.0fms starting=%.0fms",
+                started ? "yes" : "no", (before - asked) * 1000, (hearing - before) * 1000))
         }
     }
 

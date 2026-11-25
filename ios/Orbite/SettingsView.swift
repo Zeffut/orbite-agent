@@ -144,6 +144,8 @@ struct SettingsView: View {
                         }
                         Toggle(label("updates"), isOn: Binding(
                             get: { value("updates") == "on" }, set: { change("updates", to: $0 ? "on" : "off") }))
+                            // On is green, as a switch is everywhere else on the phone.
+                            .tint(.green)
                     }
                     Section {
                         NavigationLink {

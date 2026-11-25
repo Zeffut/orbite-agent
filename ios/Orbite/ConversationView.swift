@@ -15,6 +15,7 @@ struct ConversationView: View {
     @State private var away = false
     @State private var recorder = Recorder()
     @FocusState private var writing: Bool
+    @State private var place = ScrollPosition(edge: .bottom)
     @Environment(\.scenePhase) private var phase
     @State private var settings = false
 
@@ -25,8 +26,7 @@ struct ConversationView: View {
     }
 
     var body: some View {
-        ScrollViewReader { scroll in
-            ScrollView {
+        ScrollView {
                 LazyVStack(spacing: 12) {
                     ForEach(agent.entries) { entry in
                         EntryView(entry: entry).id(entry.id)
@@ -45,12 +45,27 @@ struct ConversationView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
-            .onChange(of: agent.entries.count) { withAnimation(.snappy) { scroll.scrollTo("end", anchor: .bottom) } }
-            .onChange(of: agent.leaving.count) { withAnimation(.snappy) { scroll.scrollTo("end", anchor: .bottom) } }
+            .scrollPosition($place)
+            .onChange(of: agent.entries.count) { before, now in
+                // The Conversation as it comes back on opening is gone to the
+                // end of at once, and again once it has taken its place; what
+                // is said after that is followed gently.
+                if before == 0 || now - before > 1 {
+                    place.scrollTo(edge: .bottom)
+                    Task {
+                        for wait in [60, 250, 600] {
+                            try? await Task.sleep(for: .milliseconds(wait))
+                            place.scrollTo(edge: .bottom)
+                        }
+                    }
+                } else {
+                    withAnimation(.snappy) { place.scrollTo(edge: .bottom) }
+                }
+            }
+            .onChange(of: agent.leaving.count) { withAnimation(.snappy) { place.scrollTo(edge: .bottom) } }
             .animation(.snappy, value: agent.leaving)
-            .onChange(of: agent.working) { withAnimation(.snappy) { scroll.scrollTo("end", anchor: .bottom) } }
+            .onChange(of: agent.working) { withAnimation(.snappy) { place.scrollTo(edge: .bottom) } }
             .animation(.snappy, value: agent.working)
-        }
         .background(Color(page: "#0d0d0d").ignoresSafeArea())
         .safeAreaInset(edge: .top) { top }
         .safeAreaInset(edge: .bottom) { bottom }
@@ -71,15 +86,9 @@ struct ConversationView: View {
             let alone = UserDefaults.standard.double(forKey: "record")
             if alone > 0, recorder.allowed {
                 try? await Task.sleep(for: .seconds(2))
-                withAnimation(.spring(duration: 0.18)) { held = Date() }
-                recorder.begin(touched: ProcessInfo.processInfo.systemUptime)
+                pressed()
                 try? await Task.sleep(for: .seconds(alone))
-                withAnimation(.spring(duration: 0.22)) { held = nil }
-                if let (spoken, name) = await recorder.end(keeping: true) {
-                    let voice = Leaving()
-                    agent.leaving.append(voice)
-                    await sendVoice(spoken, name, shown: voice.id)
-                }
+                released()
             }
         }
         .onDisappear { recorder.rest() }
@@ -245,59 +254,68 @@ struct ConversationView: View {
         Image(systemName: "mic.fill").font(.title3.weight(.medium))
             .foregroundStyle(held == nil ? Color.primary : Color.white)
             .frame(width: 46, height: 46)
-            .glassEffect(held == nil ? .regular.interactive() : .regular.tint(away ? .gray : .red), in: .circle)
+            .glassEffect(held == nil ? .regular : .regular.tint(away ? .gray : .red), in: .circle)
             .scaleEffect(held == nil ? 1 : (away ? 1.1 : 1.4))
-            .animation(.spring(duration: 0.22, bounce: 0.35), value: held == nil)
+            .animation(.spring(duration: 0.16, bounce: 0.3), value: held == nil)
             .animation(.spring(duration: 0.2), value: away)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { finger in
-                        if held == nil {
-                            // The first touch ever asks for the microphone: nothing is recorded yet.
-                            guard recorder.allowed else {
-                                Task {
-                                    if await !recorder.ask() {
-                                        agent.trouble = say(
-                                            "Orbite may not use the microphone: allow it in Settings.",
-                                            "Orbite n'a pas accès au micro : autorise-le dans Réglages.")
-                                    }
-                                }
-                                return
-                            }
-                            agent.trouble = nil
-                            writing = false
-                            away = false
-                            withAnimation(.spring(duration: 0.18)) { held = Date() }
-                            recorder.begin(touched: ProcessInfo.processInfo.systemUptime - Date().timeIntervalSince(finger.time))
-                        }
-                        let now = finger.translation.width < -90
+            // Touched, not gestured: a gesture waits to know what it is, and
+            // recording is to start the instant the finger lands.
+            .overlay {
+                Touch(
+                    began: { pressed() },
+                    moved: { across in
+                        guard held != nil else { return }
+                        let now = across < -90
                         if now != away {
                             away = now
                             recorder.crossed()
                         }
-                    }
-                    .onEnded { _ in
-                        guard held != nil else { return }
-                        let keeping = !away
-                        withAnimation(.spring(duration: 0.22)) { held = nil }
-                        away = false
-                        Task {
-                            guard let (spoken, name) = await recorder.end(keeping: keeping) else {
-                                if keeping {
-                                    agent.trouble = say("Keep it pressed to record.", "Reste appuyé pour enregistrer.")
-                                }
-                                return
-                            }
-                            // Shown as leaving at once. Written down on the phone itself,
-                            // what was said goes as words: the Agent reads it whatever
-                            // it thinks with.
-                            let voice = Leaving()
-                            agent.leaving.append(voice)
-                            await sendVoice(spoken, name, shown: voice.id)
-                        }
-                    }
-            )
+                    },
+                    ended: { released() })
+            }
             .accessibilityLabel(say("Hold to record a voice message", "Maintenir pour enregistrer un message vocal"))
+    }
+
+    /// The finger landed on the microphone.
+    private func pressed() {
+        guard held == nil else { return }
+        // The first touch ever asks for the microphone: nothing is recorded yet.
+        guard recorder.allowed else {
+            Task {
+                if await !recorder.ask() {
+                    agent.trouble = say(
+                        "Orbite may not use the microphone: allow it in Settings.",
+                        "Orbite n'a pas accès au micro : autorise-le dans Réglages.")
+                }
+            }
+            return
+        }
+        held = Date()
+        away = false
+        recorder.begin()
+        agent.trouble = nil
+        writing = false
+    }
+
+    /// The finger left the microphone.
+    private func released() {
+        guard held != nil else { return }
+        let keeping = !away
+        held = nil
+        away = false
+        Task {
+            guard let (spoken, name) = await recorder.end(keeping: keeping) else {
+                if keeping {
+                    agent.trouble = say("Keep it pressed to record.", "Reste appuyé pour enregistrer.")
+                }
+                return
+            }
+            // Shown as leaving at once. Written down on the phone itself, what
+            // was said goes as words: the Agent reads it whatever it thinks with.
+            let voice = Leaving()
+            agent.leaving.append(voice)
+            await sendVoice(spoken, name, shown: voice.id)
+        }
     }
 
     /// Sends what was recorded: as words when the phone could write
@@ -570,7 +588,6 @@ struct FileView: View {
 struct Thinking: View {
     let look: Look?
     let doing: String?
-    @State private var passing = false
 
     /// The first few words of what is being done: enough to know, at a glance.
     private var words: String {
@@ -586,23 +603,22 @@ struct Thinking: View {
     var body: some View {
         HStack(spacing: 10) {
             Figure(look: look, working: true, size: 28)
-            Text(words).font(.callout.weight(.medium))
-                .foregroundStyle(.secondary)
-                .overlay {
-                    // A light that goes across the words, again and again.
-                    LinearGradient(
-                        colors: [.clear, .white.opacity(0.9), .clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: 60)
-                        .offset(x: passing ? 120 : -120)
-                        .blendMode(.plusLighter)
-                        .mask(Text(words).font(.callout.weight(.medium)))
-                }
-                .contentTransition(.opacity)
-                .animation(.easeInOut(duration: 0.25), value: words)
+            // One text, lit by a light that goes across it: nothing laid over it.
+            TimelineView(.animation) { now in
+                let along = now.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.8) / 1.8
+                let middle = -0.3 + 1.6 * along
+                Text(words).font(.callout.weight(.medium))
+                    .foregroundStyle(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .white.opacity(0.45), location: 0),
+                                .init(color: .white.opacity(0.45), location: max(0, min(1, middle - 0.22))),
+                                .init(color: .white, location: max(0, min(1, middle))),
+                                .init(color: .white.opacity(0.45), location: max(0, min(1, middle + 0.22))),
+                                .init(color: .white.opacity(0.45), location: 1),
+                            ], startPoint: .leading, endPoint: .trailing))
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 4).padding(.vertical, 4)
-        .onAppear {
-            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { passing = true }
-        }
     }
 }
