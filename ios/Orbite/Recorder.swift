@@ -149,7 +149,11 @@ private final class Tape: @unchecked Sendable {
                 guard let self, let recording = self.recording else { return }
                 recording.updateMeters()
                 // From decibels to something a bar can show.
-                let level = CGFloat(max(0.05, min(1, pow(10, recording.averagePower(forChannel: 0) / 28))))
+                // A voice at arm's length sits around -35 to -15: that span is
+                // what fills the bars, the peaks lifting them a little more.
+                let loud = 0.7 * recording.averagePower(forChannel: 0) + 0.3 * recording.peakPower(forChannel: 0)
+                let span = max(0, min(1, (Double(loud) + 50) / 38))
+                let level = CGFloat(max(0.05, pow(span, 1.3)))
                 self.lock.lock()
                 self.heard = level
                 self.lock.unlock()

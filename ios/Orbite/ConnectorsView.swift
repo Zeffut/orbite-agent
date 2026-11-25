@@ -40,9 +40,7 @@ struct ConnectorsList: View {
                 }
                 ForEach(connectors) { connector in
                     HStack(spacing: 12) {
-                        Text(String(connector.label.prefix(1)))
-                            .font(.headline).frame(width: 38, height: 38)
-                            .background(Color.primary.opacity(0.1), in: .rect(cornerRadius: 10))
+                        Mark(of: connector)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(connector.label).font(.headline)
                             Text(connector.does).font(.footnote).foregroundStyle(.secondary)
@@ -120,5 +118,39 @@ struct ConnectorsScreen: View {
         .background(Color(page: "#0d0d0d").ignoresSafeArea())
         .navigationTitle(say("Services", "Services"))
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// The mark of a service, in its own colour on a light tile; its first
+/// letter where this app does not carry its mark.
+struct Mark: View {
+    let name: String
+    let label: String
+
+    init(of connector: Connector) {
+        name = connector.name
+        label = connector.label
+    }
+
+    /// The colour each service is known by.
+    private static let colours: [String: String] = [
+        "notion": "#111111", "calendly": "#006bff", "trello": "#0052cc", "linear": "#5e6ad2",
+        "atlassian": "#0052cc", "clickup": "#7b68ee", "airtable": "#18bfff", "stripe": "#635bff",
+        "paypal": "#003087", "sentry": "#362d59", "supabase": "#2fae76", "cloudflare": "#f38020",
+    ]
+
+    var body: some View {
+        Group {
+            if UIImage(named: "logo-" + name) != nil {
+                Image("logo-" + name).resizable().scaledToFit().padding(9)
+                    .foregroundStyle(Color(page: Self.colours[name] ?? "#111111"))
+                    .background(Color(page: "#f2f2f0"), in: .rect(cornerRadius: 11))
+            } else {
+                Text(String(label.prefix(1))).font(.headline)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.primary.opacity(0.1), in: .rect(cornerRadius: 11))
+            }
+        }
+        .frame(width: 42, height: 42)
     }
 }

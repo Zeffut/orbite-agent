@@ -19,6 +19,7 @@ struct ConversationView: View {
     @Environment(\.scenePhase) private var phase
     @State private var settings = false
     @State private var looking = false
+    @State private var services = false
     @State private var menu = false
 
     struct Attached: Identifiable, Equatable {
@@ -79,6 +80,7 @@ struct ConversationView: View {
         }
         .sheet(isPresented: $settings) { SettingsView() }
         .sheet(isPresented: $looking) { SettingsView(part: .look) }
+        .sheet(isPresented: $services) { NavigationStack { ConnectorsScreen() } }
         .overlay { Drawer(open: $menu) { settings = true } }
         .task {
             recorder.prepare()
@@ -86,6 +88,7 @@ struct ConversationView: View {
             if UserDefaults.standard.string(forKey: "show") == "settings" { settings = true }
             if UserDefaults.standard.string(forKey: "show") == "look" { looking = true }
             if UserDefaults.standard.string(forKey: "show") == "menu" { menu = true }
+            if UserDefaults.standard.string(forKey: "show") == "services" { services = true }
             if let draft = UserDefaults.standard.string(forKey: "draft") { text = draft }
             // Sends a recording it is handed as if it had just been said, when it is being tried out.
             if let handed = UserDefaults.standard.string(forKey: "hear"),
@@ -250,7 +253,7 @@ struct ConversationView: View {
             } else {
                 HStack(spacing: 3) {
                     ForEach(Array(recorder.levels.enumerated()), id: \.offset) { _, level in
-                        Capsule().fill(.primary.opacity(0.85)).frame(width: 3, height: 4 + 26 * level)
+                        Capsule().fill(.primary.opacity(0.85)).frame(width: 3, height: 4 + 30 * level)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
