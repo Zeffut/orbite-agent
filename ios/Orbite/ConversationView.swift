@@ -19,6 +19,10 @@ struct ConversationView: View {
     @Environment(\.scenePhase) private var phase
     @State private var settings = false
     @State private var looking = false
+    /// What `canSend` says, taken with a movement: glass only moves well
+    /// when it is told to, in so many words.
+    @State private var sendable = false
+    @Namespace private var glass
     @State private var services = false
     @State private var menu = false
 
@@ -217,23 +221,29 @@ struct ConversationView: View {
                                     .background(Color(page: "#f2f2f0"), in: .circle)
                             }
                             .padding(.trailing, 7).padding(.bottom, 7)
-                            .scaleEffect(canSend ? 1 : 0.4).opacity(canSend ? 1 : 0)
+                            .scaleEffect(sendable ? 1 : 0.4).opacity(sendable ? 1 : 0)
                             .disabled(!canSend)
                         }
                         .glassEffect(.regular, in: .rect(cornerRadius: 24))
+                        .glassEffectID("field", in: glass)
                     } else {
                         recordingBar
                     }
-                    // Nothing changes place when something is written: the field
-                    // and the microphone stay as they are, and sending comes in
-                    // the room kept for it. Moving glass about under a keyboard
-                    // being typed on does not come out smooth on a phone.
-                    microphone
+                    // The microphone gives its room to the field once there is
+                    // something to send: its glass melts into the field's, as
+                    // the system's own glass does, in one movement.
+                    if !(sendable && held == nil) {
+                        microphone
+                            .glassEffectID("microphone", in: glass)
+                            .glassEffectTransition(.matchedGeometry)
+                    }
                 }
-                .animation(.spring(duration: 0.25, bounce: 0.2), value: canSend)
             }
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
+        .onChange(of: canSend, initial: true) {
+            withAnimation(.smooth(duration: 0.32)) { sendable = canSend }
+        }
     }
 
     private var canSend: Bool {
