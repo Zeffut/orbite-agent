@@ -67,8 +67,14 @@ struct ConversationView: View {
             .onChange(of: agent.working) { withAnimation(.snappy) { place.scrollTo(edge: .bottom) } }
             .animation(.snappy, value: agent.working)
         .background(Color(page: "#0d0d0d").ignoresSafeArea())
-        .safeAreaInset(edge: .top) { top }
-        .safeAreaInset(edge: .bottom) { bottom }
+        // What is said fades out under the top and the bottom, rather than
+        // running into the clock and the field.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            top.background(alignment: .top) { fade(from: .top) }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottom.background(alignment: .bottom) { fade(from: .bottom) }
+        }
         .sheet(isPresented: $settings) { SettingsView() }
         .task {
             recorder.prepare()
@@ -104,6 +110,18 @@ struct ConversationView: View {
     }
 
     // MARK: The top
+
+    /// The page's own dark, full at an edge of the screen and gone a
+    /// little past the bar there.
+    private func fade(from edge: VerticalEdge) -> some View {
+        let dark = Color(page: "#0d0d0d")
+        return LinearGradient(
+            stops: [.init(color: dark, location: 0), .init(color: dark.opacity(0.92), location: 0.55), .init(color: dark.opacity(0), location: 1)],
+            startPoint: edge == .top ? .top : .bottom, endPoint: edge == .top ? .bottom : .top)
+            .padding(edge == .top ? .bottom : .top, -22)
+            .ignoresSafeArea(edges: edge == .top ? .top : .bottom)
+            .allowsHitTesting(false)
+    }
 
     private var top: some View {
         HStack {
