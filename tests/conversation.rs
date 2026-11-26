@@ -187,3 +187,41 @@ async fn a_model_that_keeps_failing_or_declining_is_named_as_the_cause_with_what
     owner.says("Do it.");
     assert!(!owner.hears().await.contains("/settings model"));
 }
+
+#[tokio::test]
+async fn a_plan_with_nothing_left_is_asked_again_and_what_was_asked_is_answered_unasked() {
+    let provider = ScriptedProvider::default();
+    provider
+        .then(Err(ProviderError::Busy {
+            reason: "Usage limit reached: your ChatGPT plan has no usage left for me for now. \
+                     Manage usage: https://chatgpt.com/settings/usage"
+                .into(),
+            retry_after: Some(Duration::from_secs(3600)),
+        }))
+        // Asked again by itself: the plan answers, then what was asked is.
+        .then(Ok("ok".into()))
+        .then(Ok("Paris is the capital of France.".into()));
+    let (mut channel, mut owner) = memory_channel();
+    let agent_provider = provider.clone();
+    tokio::spawn(async move {
+        Agent::new(agent_provider, Store::in_memory())
+            .checking_time_every(Duration::from_millis(5))
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("What is the capital of France?");
+
+    // Said as what it is, with where to see it, and that it is taken care of.
+    let told = owner.hears().await;
+    assert!(
+        told.contains("no usage left") && told.contains("chatgpt.com/settings/usage"),
+        "{told}"
+    );
+    assert!(told.contains("tell you as soon as it answers"), "{told}");
+    assert!(owner.hears().await.contains("answers again"));
+    // What they had asked was kept: it is answered without their asking again.
+    assert_eq!(owner.hears().await, "Paris is the capital of France.");
+    let asked = format!("{:?}", provider.last_asked());
+    assert!(asked.contains("What is the capital of France?"), "{asked}");
+}

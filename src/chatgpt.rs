@@ -548,6 +548,18 @@ impl ChatGpt {
             .await
             .map_err(|error| (0, ProviderError::Unreachable(root_cause(&error))))?;
         let status = response.status().as_u16();
+        // What OpenAI says of the plan beside its answer: when it has
+        // something to say of what is left, or of when there is more.
+        let beside: Vec<(String, String)> = response
+            .headers()
+            .iter()
+            .filter(|(name, _)| {
+                ["limit", "reset", "retry", "credit", "usage", "plan"]
+                    .iter()
+                    .any(|sign| name.as_str().contains(sign))
+            })
+            .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_owned())))
+            .collect();
         let retry_after = response
             .headers()
             .get("retry-after")
@@ -559,6 +571,10 @@ impl ChatGpt {
             .await
             .map_err(|error| (status, ProviderError::Failed(root_cause(&error))))?;
         if status != 200 {
+            // Kept where whoever looks after the machine reads it: a refusal
+            // holds no key, and says more than what is passed on.
+            let shown: String = written.chars().take(1500).collect();
+            eprintln!("ChatGPT refused (HTTP {status}): {shown} {beside:?}");
             let body = serde_json::from_str(&written).unwrap_or(json!({ "message": written }));
             return Err((status, refused(status, &body, retry_after)));
         }
@@ -615,9 +631,15 @@ impl ChatGpt {
                     ended = true;
                 }
                 "response.failed" => {
+                    let shown: String = event.to_string().chars().take(1500).collect();
+                    eprintln!("ChatGPT gave up while answering: {shown} {beside:?}");
                     return Err((status, refused(status, &event["response"], None)));
                 }
-                "error" => return Err((status, refused(status, &event, None))),
+                "error" => {
+                    let shown: String = event.to_string().chars().take(1500).collect();
+                    eprintln!("ChatGPT gave up while answering: {shown} {beside:?}");
+                    return Err((status, refused(status, &event, None)));
+                }
                 "response.incomplete" => {
                     let why = event["response"]["incomplete_details"]["reason"]
                         .as_str()

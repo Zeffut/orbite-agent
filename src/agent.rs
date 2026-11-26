@@ -195,6 +195,9 @@ pub struct Agent<P> {
     model_at_fault: u8,
     /// True when a notice was added that the Agent has yet to respond to.
     owed: bool,
+    /// Since when the Owner's plan was last asked and had nothing left:
+    /// the Agent asks again by itself, and says when it answers.
+    waits_for_plan: Option<std::time::Instant>,
     /// Commands the Owner wrote while the Agent worked: carried out as
     /// commands once it is done, not handed to the model as something said.
     /// With each, who it is from.
@@ -276,6 +279,7 @@ impl<P: Provider + 'static> Agent<P> {
             interface_switch: None,
             model_at_fault: 0,
             owed: false,
+            waits_for_plan: None,
             set_aside: std::collections::VecDeque::new(),
             awaiting_secret: None,
             held_secrets: Vec::new(),
@@ -571,6 +575,24 @@ impl<P: Provider + 'static> Agent<P> {
                     }
                     if !self.quiet_now() && !self.release_held(channel).await {
                         return;
+                    }
+                    // A plan that had nothing left is asked again now and
+                    // then: the Owner is told when it answers, and what
+                    // they had asked is taken up without their saying it again.
+                    if self.waits_for_plan.is_some_and(|since| since.elapsed() >= self.time_check * 30) {
+                        self.waits_for_plan = Some(std::time::Instant::now());
+                        if self.plan_answers().await {
+                            self.waits_for_plan = None;
+                            let back = self.language.say(
+                                "✅ My ChatGPT plan answers again. I am taking up where we were.",
+                                "✅ Mon abonnement ChatGPT répond de nouveau. Je reprends où on en était.",
+                            );
+                            if channel.send(back).await.is_err()
+                                || !self.respond_on(channel, true).await
+                            {
+                                return;
+                            }
+                        }
                     }
                     if self.wake_up_is_due() {
                         self.wake_up().await;
@@ -1552,6 +1574,7 @@ impl<P: Provider + 'static> Agent<P> {
                 }
                 Attended::Done(Ok(reply)) => {
                     self.model_at_fault = 0;
+                    self.waits_for_plan = None;
                     if let Some(usage) = &reply.usage {
                         self.store
                             .record_usage(&(self.clock)().format("%Y-%m-%d").to_string(), usage)?;
@@ -1575,7 +1598,12 @@ impl<P: Provider + 'static> Agent<P> {
                 Attended::Done(Err(error)) => {
                     // The Owner will say it again: a message the Provider
                     // failed on must not stay and be answered twice.
-                    if matches!(conversation.last(), Some(Message::Owner(_))) {
+                    // But for a plan with nothing left for now: what was
+                    // asked is kept, and answered when the plan has more.
+                    let out_of_plan = is_a_plan_used_up(&error);
+                    if out_of_plan {
+                        self.waits_for_plan = Some(std::time::Instant::now());
+                    } else if matches!(conversation.last(), Some(Message::Owner(_))) {
                         self.store.forget_latest()?;
                     }
                     let mut said = explain(&error, self.language);
@@ -2119,6 +2147,12 @@ fn search_spec() -> ActionSpec {
     }
 }
 
+/// True when a Provider gave no answer because the Owner's plan has no
+/// usage left for now.
+fn is_a_plan_used_up(error: &ProviderError) -> bool {
+    matches!(error, ProviderError::Busy { reason, .. } if reason.contains(crate::chatgpt::MANAGE_USAGE))
+}
+
 /// Asks the Provider, waiting and asking again while it is only busy.
 pub(crate) async fn patiently(
     provider: &impl Provider,
@@ -2153,6 +2187,20 @@ impl<P: Provider + 'static> Agent<P> {
         }
         let kept = clip(&outcome, limit);
         format!("{kept}\n[cut to fit: {} more characters]", outcome.len() - kept.len())
+    }
+
+    /// True when the Provider answers the smallest thing there is to ask:
+    /// a plan that had nothing left has some again.
+    async fn plan_answers(&self) -> bool {
+        let asked = [Message::from_owner("Reply with the single word: ok")];
+        let request = Request {
+            instructions: "You answer in one word.",
+            conversation: &asked,
+            actions: &[],
+            images: &[],
+            light: true,
+        };
+        self.provider.reply(request).await.is_ok()
     }
 
     /// Tells the Owner, and the model for later, that the work was stopped.
@@ -4760,6 +4808,23 @@ pub(crate) fn explain(error: &ProviderError, language: Language) -> String {
         ProviderError::Unreachable(reason) => {
             format!("I couldn't reach my AI provider ({reason}). Try again in a moment.")
         }
+        // A plan with nothing left: said as what it is, with what the Owner
+        // can do about it. OpenAI does not say when there is more.
+        ProviderError::Busy { .. } if is_a_plan_used_up(error) => language
+            .say(
+                "Your ChatGPT plan has no usage left for me for now. OpenAI does not tell me when \
+                 it comes back: it is shown on https://chatgpt.com/settings/usage, where a limit \
+                 for each app can also be set (on a Plus plan, usage comes back in windows of five \
+                 hours). I keep what you asked, ask again by myself every few minutes, and tell you \
+                 as soon as it answers.",
+                "Ton abonnement ChatGPT n'a plus d'usage disponible pour moi pour l'instant. OpenAI \
+                 ne me dit pas quand il revient : c'est affiché sur \
+                 https://chatgpt.com/settings/usage, où une limite par application se règle aussi \
+                 (avec un abonnement Plus, l'usage revient par fenêtres de cinq heures). Je garde ta \
+                 demande, je réessaie tout seul toutes les quelques minutes, et je te préviens dès \
+                 que ça répond.",
+            )
+            .to_owned(),
         ProviderError::Busy { reason, .. } => {
             // Providers explain rate limits at length; the start says it all.
             let reason = clip(reason, 160);

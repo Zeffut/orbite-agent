@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.10
+
+Released on 2026-11-26.
+
+- **A ChatGPT plan with no usage left is said as what it is.** Your agent no longer says its provider is "too busy": it says your plan has no usage left for it for now, that OpenAI does not say when it comes back, and where you see it. It keeps what you asked, asks again by itself every ten minutes, tells you when the plan answers, and then answers what you had asked without your saying it again.
+- What ChatGPT says when it refuses is now written in the service's journal, for whoever looks after the machine.
+
 ## 0.9.9
 
 Released on 2026-11-26.

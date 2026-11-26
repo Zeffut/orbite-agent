@@ -38,7 +38,18 @@ pub struct Held {
     /// What the Owner called it when it was made.
     pub name: String,
     /// What the server shows the Agent to be known by it.
-    token: String,
+    pub(crate) token: String,
+}
+
+impl Held {
+    /// One more Agent, called `name`, known by nothing another is.
+    pub(crate) fn new(name: &str, others: &[Held]) -> io::Result<Self> {
+        let mut id = random(6)?;
+        while others.iter().any(|other| other.id == id) {
+            id = random(6)?;
+        }
+        Ok(Self { id, name: name.to_owned(), token: random(32)? })
+    }
 }
 
 /// What runs the Agents' containers. Docker, on a Host; something that
@@ -57,15 +68,98 @@ pub trait Engine: Send + Sync + 'static {
     fn reached_at(&self, id: &str) -> Result<String, String>;
     /// Removes the container of the Agent `id` and everything it kept.
     fn remove(&self, id: &str) -> Result<(), String>;
+    /// Clears what earlier versions left that nothing uses any more.
+    fn tidy(&self) {}
 }
 
 /// Docker, asked through its own program.
 pub struct Docker {
     /// The image an Agent runs from.
     pub image: String,
+    /// True when that image is this machine's to build, from this very
+    /// program: built the first time it is needed, once per version.
+    pub built_here: bool,
 }
 
+/// How an Agent's image is made.
+const DOCKERFILE: &str = include_str!("../container/Dockerfile");
+
+/// Held while an image is built: one at a time.
+static BUILDING: Mutex<()> = Mutex::new(());
+
 impl Docker {
+    /// Docker running Agents from the image of this version of Orbite,
+    /// built on this machine from this program.
+    pub fn of_this_version() -> Self {
+        Self { image: format!("orbite-agent:{}", env!("CARGO_PKG_VERSION")), built_here: true }
+    }
+
+    /// True when Docker answers to whoever runs this.
+    pub fn answers(&self) -> Result<(), String> {
+        self.ask(&["version", "-f", "{{.Server.Version}}"]).map(|_| ())
+    }
+
+    /// Builds the image when it is this machine's to build and is not
+    /// there yet. It takes a few minutes, once per version.
+    pub fn built(&self) -> Result<(), String> {
+        if !self.built_here {
+            return Ok(());
+        }
+        let _one_at_a_time = BUILDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.ask(&["image", "inspect", "-f", "{{.Id}}", &self.image]).is_ok() {
+            return Ok(());
+        }
+        let told = |error: io::Error| format!("the agent's image could not be prepared: {error}");
+        let folder = tempfile::tempdir().map_err(told)?;
+        std::fs::write(folder.path().join("Dockerfile"), DOCKERFILE).map_err(told)?;
+        let program = std::env::current_exe().map_err(told)?;
+        std::fs::copy(program, folder.path().join("orbite")).map_err(told)?;
+        let folder = folder.path().to_string_lossy().into_owned();
+        self.ask(&["build", "-q", "-t", &self.image, &folder]).map(|_| ())
+    }
+
+    /// Removes the images of other versions that no container runs from.
+    pub fn forget_other_versions(&self) {
+        if !self.built_here {
+            return;
+        }
+        let Ok(kept) =
+            self.ask(&["image", "ls", "orbite-agent", "--format", "{{.Repository}}:{{.Tag}}"])
+        else {
+            return;
+        };
+        for other in kept.lines().filter(|other| *other != self.image) {
+            // Refused while a container still runs from it: left alone then.
+            let _ = self.ask(&["image", "rm", other]);
+        }
+    }
+
+    /// Fills the volume of the Agent `id` with what is in `folder`, as the
+    /// account the Agent runs as in its container.
+    pub fn fill(&self, id: &str, folder: &Path) -> Result<(), String> {
+        self.built()?;
+        let named = format!("orbite-agent-{id}");
+        self.ask(&["volume", "create", &named])?;
+        let (to, from) = (format!("{named}:/to"), format!("{}:/from:ro", folder.display()));
+        self.ask(&[
+            "run",
+            "--rm",
+            "--user",
+            "0",
+            "--network",
+            "none",
+            "-v",
+            &to,
+            "-v",
+            &from,
+            &self.image,
+            "sh",
+            "-c",
+            "cp -a /from/. /to/ && chown -R orbite:orbite /to && chmod 700 /to",
+        ])
+        .map(|_| ())
+    }
+
     fn ask(&self, asked: &[&str]) -> Result<String, String> {
         let answered = std::process::Command::new("docker")
             .args(asked)
@@ -89,11 +183,29 @@ impl Engine for Docker {
     }
 
     fn start(&self, id: &str, given: &[(String, String)]) -> Result<(), String> {
+        self.built()?;
         let named = format!("orbite-agent-{id}");
+        // There already, from this image and told the same: left as it is.
+        // From another version, or told something else: made again, with
+        // everything it kept, which is in its volume.
+        let asked = "{{.Config.Image}}\n{{.State.Running}}\n{{json .Config.Env}}";
+        if let Ok(there) = self.ask(&["inspect", "-f", asked, &named]) {
+            let mut said = there.lines();
+            let same = said.next() == Some(self.image.as_str()) && said.next() == Some("true");
+            let told: Vec<String> =
+                serde_json::from_str(said.next().unwrap_or("[]")).unwrap_or_default();
+            if same && given.iter().all(|(key, value)| told.contains(&format!("{key}={value}"))) {
+                return Ok(());
+            }
+            self.ask(&["rm", "-f", &named])?;
+        }
         self.ask(&["volume", "create", &named])?;
         // A network of its own: no Agent, and no other container of the
         // machine, is on the same wire as another Agent.
-        self.ask(&["network", "create", &named])?;
+        match self.ask(&["network", "create", &named]) {
+            Err(why) if !why.contains("already exists") => return Err(why),
+            _ => {}
+        }
         let kept = format!("{named}:/var/lib/orbite");
         let mut asked: Vec<String> = [
             "run",
@@ -111,6 +223,8 @@ impl Engine for Docker {
             "--security-opt=no-new-privileges",
             "--pids-limit=1024",
             "--memory=3g",
+            // A browser keeps what its pages share in memory there.
+            "--shm-size=1g",
             // The machine itself, as an Agent names it to reach the server.
             "--add-host=host.docker.internal:host-gateway",
         ]
@@ -149,6 +263,10 @@ impl Engine for Docker {
         Ok(format!("http://{address}:8377"))
     }
 
+    fn tidy(&self) {
+        self.forget_other_versions();
+    }
+
     fn remove(&self, id: &str) -> Result<(), String> {
         let named = format!("orbite-agent-{id}");
         // Gone already is gone; still there after this is not removed.
@@ -174,6 +292,9 @@ struct Shared {
     thinks: Option<Thinks>,
     /// Where Agents reach the server from their containers.
     for_agents: Mutex<Option<String>>,
+    /// Where the Owner's devices reach the server, when it is encrypted.
+    reached_at: Option<String>,
+    language: String,
     /// Held while the list of Agents is changed: one change at a time.
     changing: tokio::sync::Mutex<()>,
     /// How many things each Agent has the server thinking about at once.
@@ -192,6 +313,23 @@ pub type Thinks = Arc<
 >;
 
 impl Shared {
+    /// What an Agent is told when its container is made: what to trust the
+    /// server by, what it is first called, where the server is, and where
+    /// its Owner's devices reach it.
+    fn given_to(&self, agent: &Held) -> Vec<(String, String)> {
+        let mut given = vec![
+            ("ORBITE_SERVER_TOKEN".to_owned(), agent.token.clone()),
+            ("ORBITE_AGENT_NAME".to_owned(), agent.name.clone()),
+        ];
+        if let Some(at) = self.for_agents.lock().expect("not poisoned").clone() {
+            given.push(("ORBITE_SERVER_AT".to_owned(), at));
+        }
+        if let Some(reached_at) = &self.reached_at {
+            given.push(("ORBITE_REACHED_AT".to_owned(), format!("{reached_at}/a/{}", agent.id)));
+        }
+        given
+    }
+
     /// The Agents of this server. Why not, when what is kept of them
     /// cannot be read: taken for none, the next one made would write over
     /// those that are there.
@@ -256,6 +394,14 @@ impl Server {
             at_most: AGENTS_AT_MOST,
             thinks,
             for_agents: Mutex::new(None),
+            reached_at: crate::Config::load(home)
+                .ok()
+                .and_then(|config| config.interface_reached_at)
+                .filter(|reached| reached.starts_with("https://")),
+            language: crate::Config::load(home)
+                .ok()
+                .and_then(|config| config.language)
+                .unwrap_or_else(|| "en".into()),
             changing: tokio::sync::Mutex::new(()),
             thinking: Mutex::new(std::collections::HashMap::new()),
         });
@@ -284,11 +430,28 @@ impl Server {
                 let _ = axum::serve(listening, asked).await;
             }));
         }
-        let routes = Router::new()
+        // The Agents there already are started again as this version runs
+        // them: made anew from its image when they were of another, which
+        // takes the time to build it once. They answer as they were meanwhile.
+        let again = shared.clone();
+        tokio::task::spawn_blocking(move || {
+            for agent in again.agents().unwrap_or_default() {
+                if let Err(why) = again.engine.start(&agent.id, &again.given_to(&agent)) {
+                    eprintln!("The agent {} could not be started: {why}", agent.name);
+                }
+            }
+            again.engine.tidy();
+        });
+        // The interface's own page, served by the server: what it asks of
+        // an Agent is asked of the one chosen there.
+        let routes = crate::interface::pages()
             .route("/api/pair", post(pair))
+            .route("/api/me", get(me))
             .route("/api/agents", get(agents).post(create))
             .route("/api/agents/{id}", axum::routing::delete(remove))
+            .route("/a/{id}/signed-in", get(signed_in))
             .route("/a/{id}/{*rest}", any(carry))
+            .layer(axum::middleware::from_fn_with_state(shared.clone(), asked_by_its_name))
             .with_state(shared);
         let listening = tokio::net::TcpListener::bind(address).await?;
         let address = listening.local_addr()?;
@@ -321,6 +484,76 @@ async fn pair(
         return refused(StatusCode::FORBIDDEN, "not from the interface");
     }
     let_in(&shared.database, &sent, came_encrypted(&headers)).await
+}
+
+/// Says whether this device is let in, and that this is a server: the page
+/// then asks which Agents it holds.
+async fn me(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    match device_in(&shared.database, &headers) {
+        Some(device) => {
+            Json(json!({ "device": device, "language": shared.language, "server": true }))
+                .into_response()
+        }
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "not paired", "language": shared.language, "server": true })),
+        )
+            .into_response(),
+    }
+}
+
+/// Answers only what was asked of the server by a name of its own, as the
+/// interface of one Agent does.
+async fn asked_by_its_name(
+    State(shared): State<Arc<Shared>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let asked = request.headers().get(header::HOST).and_then(|host| host.to_str().ok());
+    if !crate::interface::is_a_name_of_its_own(asked, &shared.names) {
+        return refused(StatusCode::MISDIRECTED_REQUEST, "not this place");
+    }
+    next.run(request).await
+}
+
+/// Where a service sends the Owner back once they signed in for one Agent:
+/// that Agent is told, and the page that says how it went is the server's
+/// own, never one an Agent wrote. Whoever comes here is known by what the
+/// service gave them, which the Agent checks: a device is not asked for,
+/// since a browser coming back from another site shows none.
+async fn signed_in(
+    State(shared): State<Arc<Shared>>,
+    Named(id): Named<String>,
+    axum::extract::RawQuery(asked): axum::extract::RawQuery,
+) -> Response {
+    let french = shared.language == "fr";
+    let agent = shared.agents().ok().and_then(|held| held.into_iter().find(|agent| agent.id == id));
+    let mut went = None;
+    if let Some(agent) = agent {
+        let engine = shared.clone();
+        let wanted = agent.id.clone();
+        if let Ok(Ok(at)) =
+            tokio::task::spawn_blocking(move || engine.engine.reached_at(&wanted)).await
+            && let Ok(answer) = shared
+                .http
+                .get(format!("{at}/signed-in?{}", asked.unwrap_or_default()))
+                .header("x-orbite-server", &agent.token)
+                .send()
+                .await
+            && let Ok(told) = answer.json::<Value>().await
+        {
+            went = Some((
+                told["well"].as_bool().unwrap_or(false),
+                told["said"].as_str().unwrap_or_default().chars().take(200).collect::<String>(),
+            ));
+        }
+    }
+    let (well, said) = went.unwrap_or_else(|| {
+        let none =
+            if french { "La connexion n'a pas abouti." } else { "The sign-in did not go through." };
+        (false, none.to_owned())
+    });
+    crate::interface::sign_in_page(french, well, &said)
 }
 
 /// The Agents of this server, for a device let in.
@@ -364,31 +597,16 @@ async fn create(
     if held.len() >= shared.at_most {
         return refused(StatusCode::CONFLICT, "this server holds no more agents");
     }
-    let (Ok(mut id), Ok(token)) = (random(6), random(32)) else {
+    // Its own for good: never known by what another Agent already is.
+    let Ok(agent) = Held::new(&name, &held) else {
         return refused(StatusCode::INTERNAL_SERVER_ERROR, "nothing random could be made");
     };
-    // Its own for good: never one that another Agent already has.
-    while held.iter().any(|agent| agent.id == id) {
-        match random(6) {
-            Ok(other) => id = other,
-            Err(_) => {
-                return refused(StatusCode::INTERNAL_SERVER_ERROR, "nothing random could be made");
-            }
-        }
-    }
-    let agent = Held { id: id.clone(), name: name.clone(), token: token.clone() };
+    let (id, given) = (agent.id.clone(), shared.given_to(&agent));
     // Kept before it is started: a container without its Agent written
     // down would be one nobody can remove.
     held.push(agent);
     if shared.keep(&held).is_err() {
         return refused(StatusCode::INTERNAL_SERVER_ERROR, "it could not be written down");
-    }
-    let mut given = vec![
-        ("ORBITE_SERVER_TOKEN".to_owned(), token.clone()),
-        ("ORBITE_AGENT_NAME".to_owned(), name.clone()),
-    ];
-    if let Some(at) = shared.for_agents.lock().expect("not poisoned").clone() {
-        given.push(("ORBITE_SERVER_AT".to_owned(), at));
     }
     let engine = shared.clone();
     let started = tokio::task::spawn_blocking(move || engine.engine.start(&id, &given)).await;

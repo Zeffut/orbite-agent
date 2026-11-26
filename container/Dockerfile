@@ -9,11 +9,24 @@ FROM debian:13-slim
 
 # The Agent's computer, as the installer sets one up on a Debian; then
 # what a person working at a computer expects to find there.
+# The browser is Mozilla's own current one, from Mozilla's own packages:
+# what a browser kept on a machine opens again here, where an older one
+# would refuse what a newer one wrote.
 RUN apt-get update -qq \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-        xvfb xdotool firefox-esr \
+        ca-certificates curl \
+    && install -d -m 0755 /etc/apt/keyrings \
+    && curl -fsSL https://packages.mozilla.org/apt/repo-signing-key.gpg \
+        -o /etc/apt/keyrings/packages.mozilla.org.asc \
+    && echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" \
+        > /etc/apt/sources.list.d/mozilla.list \
+    && printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' \
+        > /etc/apt/preferences.d/mozilla \
+    && apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+        xvfb xdotool firefox \
         fonts-liberation fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
-        ca-certificates curl git python3 jq unzip zip file procps less \
+        git python3 jq unzip zip file procps less \
     && rm -rf /var/lib/apt/lists/*
 
 # The Agent is not root in its own container either.

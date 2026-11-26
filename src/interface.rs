@@ -309,19 +309,13 @@ impl Interface {
             files,
             inbox: home.join("workspace/inbox"),
             home: home.to_owned(),
-            reached_at: crate::Config::load(home)
-                .ok()
-                .and_then(|config| config.interface_reached_at)
-                .filter(|reached| reached.starts_with("https://")),
+            reached_at: reached(home),
             connectors: offered.to_vec(),
             signing_in: tokio::sync::Mutex::new(None),
             waiting: Mutex::new(Vec::new()),
             screen: Mutex::new((0, Vec::new())),
             computer: Mutex::new(None),
-            encrypted: crate::Config::load(home)
-                .ok()
-                .and_then(|config| config.interface_reached_at)
-                .is_some_and(|reached| reached.starts_with("https://")),
+            encrypted: reached(home).is_some(),
             names: crate::Config::load(home)
                 .ok()
                 .and_then(|config| config.interface_reached_at)
@@ -334,31 +328,7 @@ impl Interface {
         });
         let listening = tokio::net::TcpListener::bind(address).await?;
         let address = listening.local_addr()?;
-        let mut pages = Router::new();
-        for (path, picture) in ICONS {
-            pages = pages.route(
-                path,
-                get(move || async move {
-                    (
-                        [
-                            (header::CONTENT_TYPE, "image/png"),
-                            (header::CACHE_CONTROL, "public, max-age=86400"),
-                        ],
-                        picture,
-                    )
-                }),
-            );
-        }
-        let pages = pages
-            .route("/", get(|| async { page("text/html; charset=utf-8", PAGE) }))
-            .route("/app.js", get(|| async { page("text/javascript; charset=utf-8", SCRIPT) }))
-            .route("/app.css", get(|| async { page("text/css; charset=utf-8", STYLE) }))
-            .route("/desk.js", get(|| async { page("text/javascript; charset=utf-8", DESK) }))
-            .route("/icon.svg", get(|| async { page("image/svg+xml", ICON) }))
-            .route(
-                "/manifest.webmanifest",
-                get(|| async { page("application/manifest+json", MANIFEST) }),
-            )
+        let pages = pages()
             .route("/api/pair", post(pair))
             .route("/api/me", get(me))
             .route("/api/events", get(events))
@@ -534,6 +504,75 @@ fn page(kind: &'static str, body: &'static str) -> Response {
         .into_response()
 }
 
+/// The interface's own page and what it is made of: the same whether one
+/// Agent serves it or the server that holds several.
+pub(crate) fn pages<S: Clone + Send + Sync + 'static>() -> Router<S> {
+    let mut pages = Router::new();
+    for (path, picture) in ICONS {
+        pages = pages.route(
+            path,
+            get(move || async move {
+                (
+                    [
+                        (header::CONTENT_TYPE, "image/png"),
+                        (header::CACHE_CONTROL, "public, max-age=86400"),
+                    ],
+                    picture,
+                )
+            }),
+        );
+    }
+    pages
+        .route("/", get(|| async { page("text/html; charset=utf-8", PAGE) }))
+        .route("/app.js", get(|| async { page("text/javascript; charset=utf-8", SCRIPT) }))
+        .route("/app.css", get(|| async { page("text/css; charset=utf-8", STYLE) }))
+        .route("/desk.js", get(|| async { page("text/javascript; charset=utf-8", DESK) }))
+        .route("/icon.svg", get(|| async { page("image/svg+xml", ICON) }))
+        .route(
+            "/manifest.webmanifest",
+            get(|| async { page("application/manifest+json", MANIFEST) }),
+        )
+}
+
+/// True when `host`, as a request names the place it asks, is a name of
+/// this place: an address, the Host itself, or a name it is served under.
+pub(crate) fn is_a_name_of_its_own(host: Option<&str>, names: &[String]) -> bool {
+    let name = host.map(|host| match host.rsplit_once(':') {
+        // Not the colons of an address written in brackets.
+        Some((name, port)) if port.chars().all(|c| c.is_ascii_digit()) => name,
+        _ => host,
+    });
+    name.is_some_and(|name| {
+        name.eq_ignore_ascii_case("localhost")
+            || name.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok()
+            || names.iter().any(|own| own.eq_ignore_ascii_case(name))
+    })
+}
+
+/// Where the Owner's devices reach this Agent, when it is encrypted: said
+/// by the server that holds it, or kept from when the interface was opened.
+fn reached(home: &Path) -> Option<String> {
+    std::env::var("ORBITE_REACHED_AT")
+        .ok()
+        .or_else(|| crate::Config::load(home).ok().and_then(|config| config.interface_reached_at))
+        .filter(|reached| reached.starts_with("https://"))
+}
+
+/// The page that says how a sign-in went, once the service sent the Owner back.
+pub(crate) fn sign_in_page(french: bool, well: bool, said: &str) -> Response {
+    let mark = if well { "✓" } else { "✗" };
+    let back = if french { "Tu peux revenir à Orbite." } else { "You can go back to Orbite." };
+    axum::response::Html(format!(
+        "<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, \
+         initial-scale=1\"><title>Orbite</title><body style=\"margin:0;min-height:100vh;display:grid;\
+         place-items:center;background:#0d0d0d;color:#ededed;font:17px/1.5 system-ui,sans-serif;\
+         text-align:center\"><div><div style=\"font-size:54px\">{mark}</div><p><strong>{}</strong></p>\
+         <p style=\"color:#8b8b8b\">{back}</p></div>",
+        html_text(said)
+    ))
+    .into_response()
+}
+
 /// Answers only what was asked of the interface by a name of its own: the
 /// address it listens on, the Host itself, or the name it is served under.
 /// A page of another site that has a browser reach this place under its
@@ -544,17 +583,7 @@ async fn asked_by_its_name(
     next: axum::middleware::Next,
 ) -> Response {
     let asked = request.headers().get(header::HOST).and_then(|host| host.to_str().ok());
-    let name = asked.map(|host| match host.rsplit_once(':') {
-        // Not the colons of an address written in brackets.
-        Some((name, port)) if port.chars().all(|c| c.is_ascii_digit()) => name,
-        _ => host,
-    });
-    let own = name.is_some_and(|name| {
-        name.eq_ignore_ascii_case("localhost")
-            || name.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok()
-            || shared.names.iter().any(|own| own.eq_ignore_ascii_case(name))
-    });
-    if !own {
+    if !is_a_name_of_its_own(asked, &shared.names) {
         return refused(StatusCode::MISDIRECTED_REQUEST, "not this place");
     }
     next.run(request).await
@@ -995,21 +1024,19 @@ async fn begin_sign_in(
 /// is taken; anything else changes nothing and reaches nobody.
 async fn signed_in(
     State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
     axum::extract::RawQuery(asked): axum::extract::RawQuery,
 ) -> Response {
     let french = shared.language == "fr";
+    // The server that holds this Agent shows a page of its own: it is told
+    // how it went, in so many words.
+    let for_the_server = sent_by_the_server(&headers).is_some();
     let page = |well: bool, said: &str| {
-        let mark = if well { "✓" } else { "✗" };
-        let back = if french { "Tu peux revenir à Orbite." } else { "You can go back to Orbite." };
-        axum::response::Html(format!(
-            "<!doctype html><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, \
-             initial-scale=1\"><title>Orbite</title><body style=\"margin:0;min-height:100vh;display:grid;\
-             place-items:center;background:#0d0d0d;color:#ededed;font:17px/1.5 system-ui,sans-serif;\
-             text-align:center\"><div><div style=\"font-size:54px\">{mark}</div><p><strong>{}</strong></p>\
-             <p style=\"color:#8b8b8b\">{back}</p></div>",
-            html_text(said)
-        ))
-        .into_response()
+        if for_the_server {
+            Json(json!({ "well": well, "said": said })).into_response()
+        } else {
+            sign_in_page(french, well, said)
+        }
     };
     let none = if french { "Aucune connexion en cours." } else { "No sign-in is under way." };
     let Some(reached_at) = &shared.reached_at else { return page(false, none) };

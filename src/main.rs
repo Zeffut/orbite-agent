@@ -171,9 +171,12 @@ async fn server() -> Result<(), Failure> {
                     thinking.reply(asked.as_request()).await
                 })
             });
-            let image = setting("ORBITE_AGENT_IMAGE").unwrap_or_else(|| {
-                format!("ghcr.io/zeffut/orbite-agent:{}", env!("CARGO_PKG_VERSION"))
-            });
+            // The Agents' image is built on this machine from this very
+            // program, unless another one is named.
+            let engine = match setting("ORBITE_AGENT_IMAGE") {
+                Some(image) => orbite::Docker { image, built_here: false },
+                None => orbite::Docker::of_this_version(),
+            };
             let names = Config::load(&home)
                 .ok()
                 .and_then(|config| config.interface_reached_at)
@@ -184,7 +187,7 @@ async fn server() -> Result<(), Failure> {
             let serving = orbite::Server::serving(
                 &home,
                 address,
-                orbite::Docker { image },
+                engine,
                 names,
                 Some(thinks),
                 // Where the Agents find the server, from their containers.
