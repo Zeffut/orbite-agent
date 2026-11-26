@@ -55,6 +55,44 @@ jobs:
             app/target/release/bundle/**/*.exe
           if-no-files-found: error
 
+  # What was built for computers is put where anyone can fetch it: one
+  # release, replaced by each build of the app's branch, and never the one
+  # the installer takes Orbite itself from.
+  publish:
+    name: Publish the computer app
+    if: github.event_name == 'push' && github.ref == 'refs/heads/app'
+    needs: desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: orbite-app-*
+          path: built
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out
+          # One of each kind, under a name that says what it is for.
+          pick() { find built -name "$1" | sort | head -1; }
+          give() { [ -z "$1" ] || cp "$1" "out/$2"; }
+          give "$(pick '*-setup.exe')" Orbite-Windows-setup.exe
+          give "$(pick '*.msi')" Orbite-Windows.msi
+          give "$(pick '*.dmg')" Orbite-macOS.dmg
+          give "$(pick '*.AppImage')" Orbite-Linux.AppImage
+          give "$(pick '*.deb')" Orbite-Linux.deb
+          ls -la out
+          gh release delete app-desktop --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create app-desktop out/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Orbite for computers" --prerelease --latest=false \
+            --notes "Orbite's app for Windows, macOS and Linux, built from the app's branch at ${GITHUB_SHA}. It is a window on the page your agent serves: open it, then paste the link your agent's settings give for a new device. It is not signed yet: Windows and macOS ask you to confirm before opening it."
+
   android:
     name: Android
     runs-on: ubuntu-latest
