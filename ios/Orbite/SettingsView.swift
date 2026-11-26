@@ -32,6 +32,7 @@ struct SettingsView: View {
         "model": ("Model", "Modèle", "", ""),
         "light": ("Light model", "Modèle léger", "For summaries and wake-ups.", "Pour les résumés et les réveils."),
         "voice": ("Voice messages", "Messages vocaux", "What writes down what you say.", "Ce qui transcrit ce que tu dis."),
+        "daily_limit": ("Daily limit for this agent", "Limite par jour pour cet agent", "What it may use of your AI provider in a day.", "Ce qu'il peut utiliser de ton fournisseur d'IA en une journée."),
     ]
 
     private static let values: [String: (String, String)] = [
@@ -40,6 +41,7 @@ struct SettingsView: View {
         "en": ("English", "English"), "fr": ("Français", "Français"),
         "60": ("Every hour", "Chaque heure"), "240": ("Every 4 h", "Toutes les 4 h"),
         "720": ("Every 12 h", "Toutes les 12 h"), "provider": ("AI provider", "Fournisseur d'IA"),
+        "500000": ("Small", "Petite"), "2000000": ("Medium", "Moyenne"), "10000000": ("Large", "Grande"),
     ]
 
     private func label(_ key: String) -> String {
@@ -187,7 +189,7 @@ struct SettingsView: View {
                             "Le modèle recommandé fait durer un abonnement tout le mois. Un modèle plus puissant va plus loin et le consomme plus vite."))
                     }
                     Section {
-                        ForEach(["permission", "wakeups", "quiet", "secrets", "language", "voice"], id: \.self) { key in
+                        ForEach(["daily_limit", "permission", "wakeups", "quiet", "secrets", "language", "voice"], id: \.self) { key in
                             if let setting = settings.first(where: { $0.key == key }) {
                                 Picker(selection: Binding(get: { setting.value }, set: { change(key, to: $0) })) {
                                     ForEach(choices(of: setting), id: \.self) { Text(worded($0)).tag($0) }
