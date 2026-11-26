@@ -322,8 +322,9 @@ pub fn run() {
                 let opening = app.handle().clone();
                 window
                     .title("Orbite")
-                    .inner_size(460.0, 780.0)
-                    .min_inner_size(340.0, 480.0)
+                    // A window for a computer: wide, as a desk has room for.
+                    .inner_size(1180.0, 780.0)
+                    .min_inner_size(720.0, 520.0)
                     // A link the agent's page opens apart is another site's.
                     .on_new_window(move |to, _| {
                         open_outside(&opening, &to);
@@ -331,6 +332,39 @@ pub fn run() {
                     })
             };
             let window = window.build()?;
+            // The menus a Mac expects of any app: without Edit there, nothing
+            // can be pasted into a field, not even the link that lets it in.
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::menu::{MenuBuilder, SubmenuBuilder};
+                let french = sys_locale::get_locale().is_some_and(|locale| locale.starts_with("fr"));
+                let own = SubmenuBuilder::new(app, "Orbite")
+                    .about(None)
+                    .separator()
+                    .hide()
+                    .hide_others()
+                    .show_all()
+                    .separator()
+                    .quit()
+                    .build()?;
+                let edit = SubmenuBuilder::new(app, if french { "Édition" } else { "Edit" })
+                    .undo()
+                    .redo()
+                    .separator()
+                    .cut()
+                    .copy()
+                    .paste()
+                    .select_all()
+                    .build()?;
+                let windows = SubmenuBuilder::new(app, if french { "Fenêtre" } else { "Window" })
+                    .minimize()
+                    .maximize()
+                    .fullscreen()
+                    .separator()
+                    .close_window()
+                    .build()?;
+                app.set_menu(MenuBuilder::new(app).items(&[&own, &edit, &windows]).build()?)?;
+            }
             #[cfg(desktop)]
             {
                 // Where the system keeps apps beside the clock, closing the
