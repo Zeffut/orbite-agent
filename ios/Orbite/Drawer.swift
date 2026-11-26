@@ -10,6 +10,9 @@ struct Drawer: View {
     /// What opens the settings.
     let settings: () -> Void
     @State private var pushed: CGFloat = 0
+    @State private var naming = false
+    @State private var named = ""
+    @State private var making = false
 
     private let width: CGFloat = 304
 
@@ -50,6 +53,37 @@ struct Drawer: View {
             }
         }
         .animation(.snappy(duration: 0.28), value: open)
+        // One more agent is a name away.
+        .alert(say("New agent", "Nouvel agent"), isPresented: $naming) {
+            TextField(say("Its name", "Son nom"), text: $named)
+            Button(say("Create", "Créer")) {
+                let name = named.trimmingCharacters(in: .whitespaces)
+                named = ""
+                guard !name.isEmpty else { return }
+                making = true
+                Task {
+                    if let why = await agent.create(named: name) { agent.trouble = why }
+                    making = false
+                }
+            }
+            Button(say("Cancel", "Annuler"), role: .cancel) { named = "" }
+        } message: {
+            Text(say(
+                "It gets a computer, a memory and a conversation of its own.",
+                "Il a son ordinateur, sa mémoire et sa conversation à lui."))
+        }
+        .overlay {
+            if making {
+                ZStack {
+                    Color.black.opacity(0.55).ignoresSafeArea()
+                    VStack(spacing: 14) {
+                        ProgressView().controlSize(.large)
+                        Text(say("Waking it up…", "Il se réveille…")).font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
     }
 
     private func close() {
@@ -60,45 +94,59 @@ struct Drawer: View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Orbite").font(.title2.weight(.bold))
                 .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 22)
-            Text(agent.known.count > 1 ? say("My agents", "Mes agents") : say("My agent", "Mon agent"))
+            Text((agent.several ? agent.held.count : agent.known.count) > 1
+                ? say("My agents", "Mes agents") : say("My agent", "Mon agent"))
                 .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                 .padding(.horizontal, 20).padding(.bottom, 8)
             ScrollView {
                 VStack(spacing: 2) {
-                    ForEach(agent.known) { other in
-                        let here = other.address == agent.address?.absoluteString
-                        Button {
-                            close()
-                            if !here { Task { await agent.open(other) } }
-                        } label: {
-                            HStack(spacing: 12) {
-                                Figure(look: look(of: other, here: here), size: 38)
-                                Text(here ? agent.name : other.name).font(.body.weight(.medium))
-                                    .lineLimit(1)
-                                Spacer()
+                    if agent.several {
+                        // The Agents of the server this phone was let in to.
+                        ForEach(agent.held) { other in
+                            let here = other.id == agent.chosen
+                            Button {
+                                close()
+                                if !here { Task { await agent.choose(other.id) } }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Figure(look: here ? agent.look : nil, size: 38)
+                                    Text(here ? agent.name : other.name).font(.body.weight(.medium)).lineLimit(1)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 12).padding(.vertical, 9)
+                                .background(here ? Color.white.opacity(0.08) : .clear, in: .rect(cornerRadius: 14))
+                                .contentShape(.rect)
                             }
-                            .padding(.horizontal, 12).padding(.vertical, 9)
-                            .background(here ? Color.white.opacity(0.08) : .clear, in: .rect(cornerRadius: 14))
-                            .contentShape(.rect)
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                    }
-                    Button {
-                        close()
-                        agent.adding = true
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: "plus").font(.body.weight(.semibold))
-                                .frame(width: 38, height: 38)
-                                .background(.white.opacity(0.08), in: .circle)
-                            Text(say("Add an agent", "Ajouter un agent")).font(.body)
-                            Spacer()
+                        row(say("New agent", "Nouvel agent")) {
+                            close()
+                            naming = true
                         }
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12).padding(.vertical, 9)
-                        .contentShape(.rect)
+                    } else {
+                        ForEach(agent.known) { other in
+                            let here = other.address == agent.address?.absoluteString
+                            Button {
+                                close()
+                                if !here { Task { await agent.open(other) } }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Figure(look: look(of: other, here: here), size: 38)
+                                    Text(here ? agent.name : other.name).font(.body.weight(.medium))
+                                        .lineLimit(1)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 12).padding(.vertical, 9)
+                                .background(here ? Color.white.opacity(0.08) : .clear, in: .rect(cornerRadius: 14))
+                                .contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        row(say("Add an agent", "Ajouter un agent")) {
+                            close()
+                            agent.adding = true
+                        }
                     }
-                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 8)
             }
@@ -118,6 +166,23 @@ struct Drawer: View {
             .buttonStyle(.plain)
             .padding(.bottom, 4)
         }
+    }
+
+    /// One more thing to do, under the agents.
+    private func row(_ words: String, _ done: @escaping () -> Void) -> some View {
+        Button(action: done) {
+            HStack(spacing: 12) {
+                Image(systemName: "plus").font(.body.weight(.semibold))
+                    .frame(width: 38, height: 38)
+                    .background(.white.opacity(0.08), in: .circle)
+                Text(words).font(.body)
+                Spacer()
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 
     /// How an agent this phone knows looks: the one open as it is now, the

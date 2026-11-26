@@ -21,6 +21,12 @@ struct Entry: Identifiable, Equatable {
     var at: Date?
 }
 
+/// An Agent of a server that holds several.
+struct Held: Identifiable, Equatable {
+    let id: String
+    var name: String
+}
+
 /// A sign-in the Agent opened: the service, what it is called, and where.
 struct SignIn: Identifiable, Equatable {
     let name: String
@@ -116,6 +122,13 @@ final class Agent {
     var name = "Orbite"
     var look: Look?
     var entries: [Entry] = []
+    /// True when this phone was let in to a server that holds several
+    /// Agents, rather than to one Agent.
+    var several = false
+    /// The Agents of that server.
+    var held: [Held] = []
+    /// The one of them that is open.
+    var chosen: String?
     /// A service the Agent asks its Owner to sign in to, now: opened at
     /// once, over the Conversation.
     var signing: SignIn?
@@ -235,6 +248,12 @@ final class Agent {
 
     /// A request to the Agent's interface, made as its own page makes them.
     private func request(_ path: String, method: String = "GET", body: Data? = nil, kind: String? = "application/json") -> URLRequest? {
+        // On a server that holds several Agents, what is asked of an Agent
+        // is asked of the one chosen; what is the server's is asked of it.
+        var path = path
+        if several, let chosen, !path.hasPrefix("/api/pair"), !path.hasPrefix("/api/agents") {
+            path = "/a/\(chosen)\(path)"
+        }
         guard let address, let to = URL(string: path, relativeTo: address) else { return nil }
         var request = URLRequest(url: to)
         request.httpMethod = method
@@ -304,6 +323,15 @@ final class Agent {
 
     /// Finds out who the Agent is, then listens to it.
     private func enter() async {
+        await look_for_agents()
+        // A server with no Agent yet: there is one to make first.
+        if several, chosen == nil {
+            paired = true
+            reached = true
+            loaded = true
+            UserDefaults.standard.set(true, forKey: "paired")
+            return
+        }
         guard let asking = request("/api/me"), let (told, answer) = try? await session.data(for: asking) else {
             // Kept, and not reached right now: the Conversation opens when it is.
             paired = address != nil && UserDefaults.standard.bool(forKey: "paired")
@@ -331,6 +359,98 @@ final class Agent {
         UserDefaults.standard.set(true, forKey: "paired")
         remember()
         listen()
+    }
+
+    /// Asks where this phone was let in whether it holds several Agents,
+    /// and which; the one last open there is the one chosen.
+    private func look_for_agents() async {
+        guard let address, let to = URL(string: "/api/agents", relativeTo: address) else { return }
+        guard let (told, answer) = try? await session.data(from: to) else { return }
+        guard (answer as? HTTPURLResponse)?.statusCode == 200,
+              let all = try? JSONSerialization.jsonObject(with: told) as? [String: Any],
+              let listed = all["agents"] as? [[String: Any]]
+        else {
+            // One Agent alone answers no such thing.
+            if (answer as? HTTPURLResponse)?.statusCode == 404 { several = false }
+            return
+        }
+        several = true
+        held = listed.compactMap { one in
+            guard let id = one["id"] as? String else { return nil }
+            return Held(id: id, name: one["name"] as? String ?? id)
+        }
+        let last = UserDefaults.standard.string(forKey: "chosen-" + address.absoluteString)
+        if let chosen, held.contains(where: { $0.id == chosen }) { return }
+        chosen = held.first(where: { $0.id == last })?.id ?? held.first?.id
+    }
+
+    /// Goes over to another Agent of the same server.
+    func choose(_ id: String) async {
+        guard several, id != chosen, held.contains(where: { $0.id == id }) else { return }
+        listening?.cancel()
+        chosen = id
+        if let address { UserDefaults.standard.set(id, forKey: "chosen-" + address.absoluteString) }
+        entries = []
+        loaded = false
+        seen = nil
+        further = true
+        doing = nil
+        working = false
+        look = nil
+        name = held.first(where: { $0.id == id })?.name ?? "Orbite"
+        await enter()
+    }
+
+    /// Makes one more Agent on the server, called `name`, and goes over to
+    /// it once it is there. Why not, when it could not be made.
+    func create(named name: String) async -> String? {
+        let body = try? JSONSerialization.data(withJSONObject: ["name": name])
+        guard let asking = request("/api/agents", method: "POST", body: body),
+              let (told, answer) = try? await session.data(for: asking)
+        else { return say("The server did not answer.", "Le serveur n'a pas répondu.") }
+        guard (answer as? HTTPURLResponse)?.statusCode == 200,
+              let made = try? JSONSerialization.jsonObject(with: told) as? [String: Any],
+              let id = made["id"] as? String
+        else {
+            let why = (try? JSONSerialization.jsonObject(with: told) as? [String: Any])?["error"] as? String
+            return why ?? say("It could not be made.", "Il n'a pas pu être créé.")
+        }
+        held.append(Held(id: id, name: name))
+        // It takes a moment to wake up: gone over to once it answers.
+        listening?.cancel()
+        chosen = id
+        if let address { UserDefaults.standard.set(id, forKey: "chosen-" + address.absoluteString) }
+        entries = []
+        loaded = false
+        seen = nil
+        further = true
+        look = nil
+        self.name = name
+        for _ in 0..<40 {
+            if let asking = request("/api/me"), let (_, answer) = try? await session.data(for: asking),
+               (answer as? HTTPURLResponse)?.statusCode == 200 { break }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        await enter()
+        return nil
+    }
+
+    /// Removes an Agent from the server, with everything it kept.
+    func remove(_ id: String) async -> Bool {
+        guard let asking = request("/api/agents/\(id)", method: "DELETE"),
+              let (_, answer) = try? await session.data(for: asking),
+              (answer as? HTTPURLResponse)?.statusCode == 200
+        else { return false }
+        held.removeAll { $0.id == id }
+        if chosen == id {
+            listening?.cancel()
+            chosen = nil
+            entries = []
+            loaded = false
+            seen = nil
+            await enter()
+        }
+        return true
     }
 
     /// Listens to what the Agent says, for as long as the app is open,
