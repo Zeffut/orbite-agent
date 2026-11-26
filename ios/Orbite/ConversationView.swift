@@ -622,13 +622,17 @@ struct EntryView: View {
             .frame(maxWidth: .infinity, alignment: .trailing).padding(.leading, 44)
         case .agent(let text, let choices):
             VStack(alignment: .leading, spacing: 10) {
+                // Said in a bubble of its own, as the Owner's words are: two
+                // people talking, each on their side.
                 Written(text: text)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .background(Color(page: "#1b1b1c"), in: .rect(cornerRadius: 22))
                 ForEach(choices, id: \.self) { choice in
                     Button(choice.label) { Task { await agent.send(choice.command, tapped: true) } }
                         .buttonStyle(.glass)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 20).padding(.horizontal, 4)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(.trailing, 36)
         case .ask(let ask):
             VStack(alignment: .leading, spacing: 10) {
                 Text(ask.summary).font(.headline)
