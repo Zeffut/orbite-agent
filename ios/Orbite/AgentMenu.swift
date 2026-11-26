@@ -20,7 +20,6 @@ struct AgentMenu: View {
                         Text(say("My agent", "Mon agent")).font(.subheadline).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
                     .listRowBackground(Color.clear)
                 }
                 Section {
@@ -37,7 +36,7 @@ struct AgentMenu: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.fraction(0.62), .large])
         .sheet(isPresented: $customizing) { SettingsView(part: .look) }
         .fullScreenCover(isPresented: $watching) { ScreenView() }
         .onAppear {
@@ -105,12 +104,13 @@ struct ScreenView: View {
                         if starting { ProgressView() } else {
                             Text(taken ? say("Give it back to \(agent.name)", "Rendre la main à \(agent.name)") : say("Take over", "Prendre le contrôle"))
                                 .font(.headline)
+                                .foregroundStyle(taken ? Color.primary : Color(.systemBackground))
                         }
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 6)
                 }
                 .buttonStyle(.glassProminent)
-                .tint(taken ? .secondary : .accentColor)
+                .tint(taken ? Color.secondary.opacity(0.35) : Color.primary)
                 .disabled(starting)
                 .padding(.horizontal, 20).padding(.bottom, 12)
             }
