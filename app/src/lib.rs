@@ -337,7 +337,8 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 use tauri::menu::{MenuBuilder, SubmenuBuilder};
-                let french = sys_locale::get_locale().is_some_and(|locale| locale.starts_with("fr"));
+                let french =
+                    sys_locale::get_locale().is_some_and(|locale| locale.starts_with("fr"));
                 let own = SubmenuBuilder::new(app, "Orbite")
                     .about(None)
                     .separator()
