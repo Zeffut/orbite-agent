@@ -73,6 +73,9 @@ async fn asked() -> ExitCode {
     let changes_the_machine = match command.as_str() {
         "update" => env::args().nth(2).is_none(),
         "uninstall" | "export" | "restore" | "version" | "providers" | "news" => true,
+        // Making a server of an installation changes the machine: its
+        // service, and what its account may do.
+        "server" => env::args().nth(2).as_deref() == Some("adopt"),
         // What an earlier version left in a session: it says so and ends.
         "desk" => true,
         _ => false,
@@ -157,55 +160,353 @@ async fn server() -> Result<(), Failure> {
             println!("{}", orbite::pairing_code(&home)?);
             Ok(())
         }
-        Some("run") => {
-            let address = setting("ORBITE_SERVER").unwrap_or_else(|| DEFAULT_INTERFACE.to_owned());
-            let address = address.parse().map_err(|_| format!("{address} is not an address."))?;
-            // Who every Agent thinks with is the server's: it holds the keys,
-            // asks for each of them, and counts what all of them spend.
-            let (thinking, _) = thinking_with(&home, &Config::load(&home)?)?;
-            let thinking = std::sync::Arc::new(thinking);
-            let thinks: orbite::Thinks = std::sync::Arc::new(move |asked: orbite::Asked| {
-                let thinking = thinking.clone();
-                Box::pin(async move {
-                    use orbite::Provider;
-                    thinking.reply(asked.as_request()).await
-                })
-            });
-            // The Agents' image is built on this machine from this very
-            // program, unless another one is named.
-            let engine = match setting("ORBITE_AGENT_IMAGE") {
-                Some(image) => orbite::Docker { image, built_here: false },
-                None => orbite::Docker::of_this_version(),
-            };
-            let names = Config::load(&home)
-                .ok()
-                .and_then(|config| config.interface_reached_at)
-                .and_then(|reached| {
-                    Some(vec![reached.split("://").nth(1)?.split(['/', ':']).next()?.to_owned()])
-                })
-                .unwrap_or_default();
-            let serving = orbite::Server::serving(
-                &home,
-                address,
-                engine,
-                names,
-                Some(thinks),
-                // Where the Agents find the server, from their containers.
-                setting("ORBITE_SERVER_FOR_AGENTS")
-                    .and_then(|port| port.parse().ok())
-                    .unwrap_or(8378),
-            )
-            .await?;
-            println!("Serving at http://{}", serving.address());
-            until_asked_to_stop(std::future::pending()).await;
-            Ok(())
-        }
-        _ => Err("Usage: orbite server run | pair".into()),
+        Some("run") => serve(&home).await,
+        Some("adopt") => adopt(&home).await,
+        Some("settle") => settle(&home),
+        _ => Err("Usage: orbite server run | pair | adopt".into()),
     }
+}
+
+/// Makes of this installation a server whose first Agent it is: the Agent
+/// goes into a container with everything of its own, and what is the
+/// Owner's stays with the server. Nothing is lost if it does not work: the
+/// installation is left as it was, and a copy of it is kept either way.
+async fn adopt(home: &std::path::Path) -> Result<(), Failure> {
+    // SAFETY: a plain system call.
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("This changes the machine: run it with sudo: sudo orbite server adopt".into());
+    }
+    // Asked a second time, it would undo the first: a server is one already.
+    if home.join("agents.json").exists() || fs::symlink_metadata(home.join("agents.json")).is_ok() {
+        return Err("This installation already is a server: there is nothing to do.".into());
+    }
+    if Config::load(home)?.interface_public.is_some() {
+        return Err("This installation is reached from the Internet under a name of its own, \
+                    which a server does not serve yet: it is left as it is."
+            .into());
+    }
+    let docker = orbite::Docker::of_this_version();
+    docker.answers().map_err(|why| {
+        format!(
+            "Each agent runs in a container of its own, which takes Docker, and Docker does not \
+             answer on this machine ({why}). Install it (https://docs.docker.com/engine/install/), \
+             then run this again."
+        )
+    })?;
+    let owner = {
+        use std::os::unix::fs::MetadataExt;
+        fs::metadata(home)?.uid()
+    };
+    // What is done in the folder itself is done by this program started
+    // again, which goes on as the account the folder is before it touches
+    // anything: nothing there becomes root's, and root follows nothing there.
+    let settled = |what: &str, given: Option<String>| -> std::io::Result<()> {
+        use std::io::Write;
+        let mut doing = std::process::Command::new(env::current_exe()?)
+            .args(["server", "settle", what])
+            .env("ORBITE_HOME", home)
+            .env_remove("SUDO_UID")
+            .env_remove("SUDO_COMMAND")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+        if let (Some(given), Some(mut taking)) = (given, doing.stdin.take()) {
+            taking.write_all(given.as_bytes())?;
+        }
+        let done = doing.wait_with_output()?;
+        if done.status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(String::from_utf8_lossy(&done.stderr).trim().to_owned()))
+        }
+    };
+    let run = |program: &str, asked: &[&str]| {
+        std::process::Command::new(orbite::system_program(program))
+            .args(asked)
+            .output()
+            .is_ok_and(|done| done.status.success())
+    };
+    // An installed Orbite is what becomes a server: its service is what
+    // starts the Agent in its container, and shows that it answers there.
+    // Another folder is someone's try, and the machine's own Orbite is not
+    // theirs to stop.
+    let of_the_service =
+        PathBuf::from(format!("{}/var/lib/orbite", setting("ORBITE_ROOT").unwrap_or_default()));
+    let installed = fs::canonicalize(home).ok() == fs::canonicalize(of_the_service).ok()
+        && run("systemctl", &["cat", "orbite"]);
+    if !installed {
+        return Err("Only an Orbite installed on this machine becomes a server: this folder is \
+                    not the one its service keeps everything in."
+            .into());
+    }
+    // The account the server runs as asks Docker for its Agents'
+    // containers. Docker lets whoever asks do anything on the machine: it
+    // is let to only once the Agent no longer runs as that account.
+    let told_by_id = |asked: &[&str]| {
+        std::process::Command::new(orbite::system_program("id"))
+            .args(asked)
+            .output()
+            .ok()
+            .map(|told| String::from_utf8_lossy(&told.stdout).trim().to_owned())
+            .unwrap_or_default()
+    };
+    let named = told_by_id(&["-nu", &owner.to_string()]);
+    if named.is_empty() {
+        return Err("The account Orbite runs as could not be named.".into());
+    }
+    let already = told_by_id(&["-nG", &named]).split_whitespace().any(|group| group == "docker");
+    let waits = PathBuf::from("/etc/systemd/system/orbite.service.d/docker.conf");
+    let day = chrono::Local::now().format("%Y-%m-%d-%H%M");
+    let backup = home.with_file_name(format!("orbite-before-server-{day}.orbite"));
+    println!("Preparing your agent's own computer. The first time takes a few minutes...");
+    docker.built()?;
+    // What the account planned for itself would run with what the server
+    // is let to do: it has no business planning anything.
+    let planned = std::process::Command::new(orbite::system_program("crontab"))
+        .args(["-l", "-u", &named])
+        .output()
+        .is_ok_and(|told| told.status.success() && !told.stdout.trim_ascii().is_empty());
+    if planned {
+        return Err(format!(
+            "The account {named} has jobs of its own planned on this machine (crontab -l -u \
+             {named}), which would then run with what a server is let to do. Look at them and \
+             remove them first."
+        )
+        .into());
+    }
+    // From here to the end nothing interrupts it: stopped halfway, it
+    // would leave the agent neither where it was nor where it goes.
+    // SAFETY: plain system calls, before anything is started.
+    unsafe {
+        for signal in [libc::SIGINT, libc::SIGHUP, libc::SIGTERM] {
+            libc::signal(signal, libc::SIG_IGN);
+        }
+    }
+    run("systemctl", &["stop", "orbite"]);
+    if run("systemctl", &["is-active", "--quiet", "orbite"]) {
+        return Err("Your agent could not be stopped to be moved: nothing was changed.".into());
+    }
+    // True once this run wrote the server's agents down: only then are
+    // they this run's to take back.
+    let wrote = std::cell::Cell::new(false);
+    let back_as_it_was = |why: String| -> Failure {
+        if wrote.get() {
+            let _ = fs::remove_file(home.join("agents.json"));
+        }
+        let _ = fs::remove_file(&waits);
+        // No longer let to ask Docker, when it was not before.
+        if owner != 0 && !already {
+            run("gpasswd", &["-d", &named, "docker"]);
+        }
+        run("systemctl", &["daemon-reload"]);
+        let copy = if backup.exists() {
+            format!(" A copy of everything is in {}.", backup.display())
+        } else {
+            String::new()
+        };
+        if run("systemctl", &["start", "orbite"]) {
+            format!("{why}\nNothing was changed: your agent is back as it was.{copy}").into()
+        } else {
+            format!(
+                "{why}\nNothing of your agent was changed, but its service did not start again: \
+                 sudo systemctl start orbite.{copy}"
+            )
+            .into()
+        }
+    };
+    println!("Saving everything first, in {} ...", backup.display());
+    let held = match orbite::adopt(home, &docker, &backup) {
+        Ok(held) => held,
+        Err(why) => return Err(back_as_it_was(why)),
+    };
+    // Written down, the installation is a server: started as one, it
+    // starts its Agent, which must answer before anything is cleared.
+    // Written as the account the folder is, like all that is written there
+    // from now on: nothing in it is root's, and root follows nothing there.
+    let written = serde_json::to_string(std::slice::from_ref(&held))
+        .map_err(std::io::Error::other)
+        .and_then(|agents| settled("write", Some(agents)));
+    wrote.set(written.is_ok());
+    if let Err(error) = written {
+        let _ = orbite::Engine::remove(&docker, &held.id);
+        return Err(back_as_it_was(format!(
+            "The server's agents could not be written down: {error}"
+        )));
+    }
+    println!("Starting {} in its container...", held.name);
+    if owner != 0 && !already && !run("usermod", &["-aG", "docker", &named]) {
+        let _ = orbite::Engine::remove(&docker, &held.id);
+        return Err(back_as_it_was(format!("The account {named} could not be let to use Docker.")));
+    }
+    // Docker is there before the server asks it anything, at every start.
+    if let Some(folder) = waits.parent()
+        && fs::create_dir_all(folder).is_ok()
+        // And it asks Docker as the system set it up: nothing kept in the
+        // account's own folder has a say in it.
+        && fs::write(
+            &waits,
+            "[Unit]\nAfter=docker.service\nWants=docker.service\n\n[Service]\n\
+             Environment=DOCKER_CONFIG=/nonexistent\n",
+        )
+        .is_ok()
+    {
+        run("systemctl", &["daemon-reload"]);
+    }
+    run("systemctl", &["start", "orbite"]);
+    let http = reqwest::Client::new();
+    let mut answers = false;
+    for _ in 0..90 {
+        if answers {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let Ok(at) = orbite::Engine::reached_at(&docker, &held.id) else { continue };
+        answers = http
+            .get(format!("{at}/api/me"))
+            .header("x-orbite-server", held.token())
+            .header("x-orbite-device", "adopting")
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .is_ok_and(|answer| answer.status().is_success())
+            // And it reaches the server from there, or it could not think.
+            && docker.reaches_the_server(&held.id);
+    }
+    if !answers {
+        run("systemctl", &["stop", "orbite"]);
+        let mut why = "Your agent did not answer from its container, or could not reach the \
+                       server from it."
+            .to_owned();
+        if let Err(left) = orbite::Engine::remove(&docker, &held.id) {
+            why.push_str(&format!(
+                " The container made for it could not be removed ({left}): docker rm -f \
+                 orbite-agent-{0}; docker volume rm orbite-agent-{0}.",
+                held.id
+            ));
+        }
+        return Err(back_as_it_was(why));
+    }
+    // It answers from its container with everything of its own: what is
+    // left here is the server's alone.
+    if let Err(error) = settled("clear", None) {
+        return Err(format!(
+            "{} runs in its container with everything of its own, but what it left here could \
+             not all be cleared ({error}). Nothing is lost, and it is finished with: sudo orbite \
+             server settle clear. A copy of everything as it was is in {}.",
+            held.name,
+            backup.display()
+        )
+        .into());
+    }
+    println!(
+        "Done. {} now runs in a container of its own, and this machine holds as many agents as \
+         you make: from the app, or from its page on a computer.\nA copy of everything as it was \
+         is in {}: delete it once you are sure, it holds your agent's secrets.",
+        held.name,
+        backup.display()
+    );
+    Ok(())
+}
+
+/// What `adopt` has done in the folder itself, by a program of its own
+/// that runs as the account the folder is: `write` keeps the Agents read
+/// from what it is given, `clear` leaves there only what is the server's.
+fn settle(home: &std::path::Path) -> Result<(), Failure> {
+    // Never for an Agent in its container, and clearing only where the
+    // Agents are written down: what is cleared is in their containers.
+    let held = home.join("agents.json").exists();
+    if setting("ORBITE_SERVER_TOKEN").is_some() {
+        return Err("This is an agent's own folder: there is nothing to settle here.".into());
+    }
+    match env::args().nth(3).as_deref() {
+        Some("write") if held => Err("This installation already is a server.".into()),
+        Some("clear") if !held => {
+            Err("This installation is not a server: nothing is cleared.".into())
+        }
+        Some("write") => {
+            let mut given = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut given)?;
+            let agents: Vec<orbite::Held> = serde_json::from_str(&given)?;
+            Ok(orbite::keep_agents(home, &agents)?)
+        }
+        Some("clear") => Ok(orbite::as_the_server(home)?),
+        _ => Err("Usage: orbite server run | pair | adopt".into()),
+    }
+}
+
+/// Serves the server kept in `home`.
+async fn serve(home: &std::path::Path) -> Result<(), Failure> {
+    let home = home.to_owned();
+    let address = setting("ORBITE_SERVER")
+        .or(Config::load(&home).ok().and_then(|config| config.interface))
+        .unwrap_or_else(|| DEFAULT_INTERFACE.to_owned());
+    let address = address.parse().map_err(|_| format!("{address} is not an address."))?;
+    // Who every Agent thinks with is the server's: it holds the keys,
+    // asks for each of them, and counts what all of them spend.
+    let (thinking, _) = thinking_with(&home, &Config::load(&home)?)?;
+    // Set again when the Owner changes the model, from the settings of any
+    // Agent: the next thought is with the new one.
+    let written = |home: &std::path::Path| {
+        fs::metadata(home.join("config.json")).and_then(|kept| kept.modified()).ok()
+    };
+    let now = std::sync::Mutex::new((written(&home), std::sync::Arc::new(thinking)));
+    let kept_in = home.clone();
+    let thinks: orbite::Thinks = std::sync::Arc::new(move |asked: orbite::Asked| {
+        let thinking = {
+            let mut now = now.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let last = written(&kept_in);
+            if last != now.0 {
+                now.0 = last;
+                // Settings that cannot be read leave things as they are.
+                if let Ok(config) = Config::load(&kept_in)
+                    && let Ok((thinking, _)) = thinking_with(&kept_in, &config)
+                {
+                    now.1 = std::sync::Arc::new(thinking);
+                }
+            }
+            now.1.clone()
+        };
+        Box::pin(async move {
+            use orbite::Provider;
+            thinking.reply(asked.as_request()).await
+        })
+    });
+    // The Agents' image is built on this machine from this very
+    // program, unless another one is named.
+    let engine = match setting("ORBITE_AGENT_IMAGE") {
+        Some(image) => orbite::Docker { image, built_here: false },
+        None => orbite::Docker::of_this_version(),
+    };
+    let names = Config::load(&home)
+        .ok()
+        .and_then(|config| config.interface_reached_at)
+        .and_then(|reached| {
+            Some(vec![reached.split("://").nth(1)?.split(['/', ':']).next()?.to_owned()])
+        })
+        .unwrap_or_default();
+    let serving = orbite::Server::serving(
+        &home,
+        address,
+        engine,
+        names,
+        Some(thinks),
+        // Where the Agents find the server, from their containers.
+        setting("ORBITE_SERVER_FOR_AGENTS").and_then(|port| port.parse().ok()).unwrap_or(8378),
+    )
+    .await?;
+    println!("Serving at http://{}", serving.address());
+    until_asked_to_stop(std::future::pending()).await;
+    Ok(())
 }
 
 async fn run() -> Result<(), Failure> {
     let home = home()?;
+    // An installation that became a server serves its Agents: each of
+    // them runs in a container of its own, where it is told who holds it.
+    if home.join("agents.json").exists() && setting("ORBITE_SERVER_TOKEN").is_none() {
+        return serve(&home).await;
+    }
     // An Agent made by a server is called what its Owner said there.
     if let Some(named) = setting("ORBITE_AGENT_NAME")
         && let Ok(mut config) = Config::load(&home)
@@ -1081,6 +1382,14 @@ fn uninstall() -> Result<(), Failure> {
     };
     systemctl(&["disable", "--now", "orbite"]);
     systemctl(&["disable", "--now", "orbite-update.timer"]);
+    // The Agents a server held go with it: their containers, which would
+    // otherwise run on, and what they kept unless it is asked to be kept.
+    let docker = orbite::Docker::of_this_version();
+    for agent in orbite::held_in(&data) {
+        if let Err(why) = docker.stop(&agent.id, !keep) {
+            eprintln!("The container of {} could not be removed: {why}", agent.name);
+        }
+    }
     // What Tailscale serves for the web interface goes with it.
     if let Ok(Config { interface_reached_at: Some(_), .. }) = Config::load(&data)
         && let (Some(tailscale), Ok(local)) = (orbite::tailscale(), DEFAULT_INTERFACE.parse())

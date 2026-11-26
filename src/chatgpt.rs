@@ -26,7 +26,7 @@ const SCOPES: &str =
 const PLAN_SCOPE: &str = "chatgpt.tokens.use.direct";
 /// Under which the Agent's Actions are grouped: this path takes no bare ones.
 const NAMESPACE: &str = "orbite";
-const KEPT_AS: &str = "ORBITE_CHATGPT";
+pub(crate) const KEPT_AS: &str = "ORBITE_CHATGPT";
 /// Where the Owner sees and limits what their plan is used for.
 pub(crate) const MANAGE_USAGE: &str = "https://chatgpt.com/settings/usage";
 const SIGN_IN_AGAIN: &str = "sign in to ChatGPT again: send me /providers connect chatgpt, or run \

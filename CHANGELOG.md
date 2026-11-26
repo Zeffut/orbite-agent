@@ -2,6 +2,16 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.10.0
+
+Released on 2026-11-26.
+
+- **One installation can hold several agents.** `sudo orbite server adopt` makes of an installation a server whose first agent is the one it had: that agent moves, with its conversation, memory, secrets, connected services and its computer's sign-ins, into a container of its own, and you then make as many agents as you like from the phone app or from the page on a computer. Each has its own name and look, its own memory and conversation, and its own computer; none can read another's. The devices already let in stay let in. It takes Docker on the machine. Everything is saved to a file first, and nothing is cleared before the agent answers from its container: if anything fails, the installation is left as it was.
+- Your AI providers and their keys stay with the server, which thinks for every agent: an agent holds no key. The model is the server's too: changed from the settings of any agent, it is changed for all of them, at once.
+- On a computer, the column lists every agent, with *New agent* under them; an agent is removed from its own menu.
+- The agents' image is built on the machine from the program itself, and containers are made again from it after an update, keeping everything they held.
+- Not yet for a server: agents talking to one another, a limit on what each one spends, and `orbite export` saving the agents' own data.
+
 ## 0.9.10
 
 Released on 2026-11-26.

@@ -24,7 +24,11 @@
     box.setAttribute("viewBox", "0 0 100 100");
     box.setAttribute("width", size);
     box.setAttribute("height", size);
-    const at = eyes === undefined ? 36 : eyes;
+    // Drawn only from what a look is made of: a path of points, a colour
+    // written as one, a number. Another agent's look is its own to say.
+    const at = Number.isFinite(Number(eyes)) ? Number(eyes) : 36;
+    if (!/^[MLZ0-9 .,-]+$/.test(outline || "")) outline = "";
+    if (!/^#[0-9a-fA-F]{3,8}$/.test(colour || "")) colour = "#f2f2f0";
     box.innerHTML = outline
       ? `<path d="${outline}" fill="${colour}"/><g fill="#0d0d0d"><rect x="38" y="${at}" width="7" height="15" rx="3.5"/><rect x="55" y="${at}" width="7" height="15" rx="3.5"/></g>`
       : `<g transform="rotate(-24 50 50)"><ellipse cx="50" cy="50" rx="44" ry="13" fill="none" stroke="currentColor" stroke-width="5"/></g><circle cx="50" cy="50" r="26" fill="currentColor"/><g fill="var(--ground)"><rect x="40" y="40" width="6" height="13" rx="3"/><rect x="54" y="40" width="6" height="13" rx="3"/></g>`;
@@ -37,21 +41,74 @@
     // Every agent, each its Conversation; what is set for all, at the bottom.
     side.append(make("small", "over", say("Agents", "Agents")));
     const mine = ["talk", "agent", "look", "screen"].includes(showing);
-    const who = make("button", "agent" + (mine ? " here" : ""));
-    who.type = "button";
-    const look = me && me.look;
-    who.append(figure(look && look.outline, look && look.colour, look && look.eyes, 34));
-    const named = make("span");
-    named.append(make("strong", "", (me && me.agent) || "Orbite"));
-    who.append(named);
-    who.onclick = () => open("talk");
-    side.append(who);
+    const place = window.orbite || {};
+    const one = (id, name, look, here) => {
+      const who = make("button", "agent" + (here && mine ? " here" : ""));
+      who.type = "button";
+      who.append(figure(look && look.outline, look && look.colour, look && look.eyes, 34));
+      const named = make("span");
+      named.append(make("strong", "", name));
+      who.append(named);
+      who.onclick = () => (here ? open("talk") : go(id));
+      side.append(who);
+    };
+    if (place.agents) {
+      // Every agent of this server: the one talked to, then the others.
+      for (const agent of place.agents) {
+        const here = agent.id === place.chosen;
+        one(agent.id, here ? (me && me.agent) || agent.name : (others[agent.id] || {}).agent || agent.name,
+          here ? me && me.look : (others[agent.id] || {}).look, here);
+      }
+      const more = make("button", "new");
+      more.type = "button";
+      more.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
+      more.append(make("span", "", say("New agent", "Nouvel agent")));
+      more.onclick = () => {
+        const name = make("input");
+        name.placeholder = say("Its name", "Son nom");
+        name.maxLength = 40;
+        more.replaceWith(name);
+        name.focus();
+        name.onblur = () => { if (!name.value.trim()) column(); };
+        name.onkeydown = async (pressed) => {
+          if (pressed.key === "Escape") return column();
+          if (pressed.key !== "Enter" || !name.value.trim() || name.disabled) return;
+          name.disabled = true;
+          const made = await post("/api/agents", { name: name.value.trim() }).catch(() => null);
+          const agent = made && made.ok ? await made.json() : null;
+          if (agent) return go(agent.id);
+          name.disabled = false;
+          name.value = "";
+          name.placeholder = say("It could not be made", "Il n'a pas pu être créé");
+        };
+      };
+      side.append(more);
+    } else {
+      one("", (me && me.agent) || "Orbite", me && me.look, true);
+    }
     const set = make("button", "low" + (showing === "settings" || showing === "services" ? " here" : ""));
     set.type = "button";
     set.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM4 12h2M18 12h2M12 4v2M12 18v2M6.5 6.5l1.4 1.4M16.1 16.1l1.4 1.4M6.5 17.5l1.4-1.4M16.1 7.9l1.4-1.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     set.append(make("span", "", say("Settings", "Réglages")));
     set.onclick = () => open("settings");
     side.append(set);
+  }
+
+  // Goes over to another agent of this server: the page starts again with it.
+  function go(id) {
+    try { localStorage.setItem("agent", id); } catch (_) { /* a browser that keeps nothing */ }
+    location.reload();
+  }
+  // How the other agents of this server look and are called now.
+  const others = {};
+  async function meet() {
+    const place = window.orbite || {};
+    for (const agent of place.agents || []) {
+      if (agent.id === place.chosen || others[agent.id]) continue;
+      const told = await place.plain("/a/" + agent.id + "/api/me").catch(() => null);
+      if (told && told.ok) others[agent.id] = await told.json();
+    }
+    column();
   }
 
   function open(place) {
@@ -280,6 +337,28 @@
       list.append(go);
     }
     panel.append(top, list);
+    // On a server that holds several, one can be removed: with everything
+    // it kept, which is said before it is done.
+    const place = window.orbite || {};
+    if (place.agents && place.agents.length > 1) {
+      const gone = make("section");
+      const remove = make("button", "go danger");
+      remove.type = "button";
+      remove.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7 7l1 12h8l1-12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      const words = make("span");
+      words.append(make("strong", "", say("Remove this agent", "Supprimer cet agent")), make("small", "", say("With its conversation, its memory and its computer.", "Avec sa conversation, sa mémoire et son ordinateur.")));
+      remove.append(words);
+      remove.onclick = async () => {
+        const sure = say("Remove {name} and everything it kept? This cannot be undone.", "Supprimer {name} et tout ce qu'il a gardé ? C'est définitif.").replace("{name}", agentName());
+        if (!window.confirm(sure)) return;
+        remove.disabled = true;
+        const done = await place.plain("/api/agents/" + place.chosen, { method: "DELETE", headers: { "x-orbite": "1" } }).catch(() => null);
+        if (done && done.ok) return go("");
+        remove.disabled = false;
+      };
+      gone.append(remove);
+      panel.append(gone);
+    }
   }
 
   // The Agent's screen as it is this moment, and the Owner's hand on it.
@@ -573,6 +652,7 @@
     }
     if (!me) await who();
     column();
+    meet();
     latest();
   }
   // The Conversation is read from its end: taken there when the column

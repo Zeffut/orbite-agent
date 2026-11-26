@@ -17,7 +17,8 @@ This replaces ADR 0004 and ADR 0019, and the "one Agent" of ADR 0007: the Owner 
 ## Consequences
 
 - A container engine is required on the Host, and installing Orbite installs or asks for one. Small machines pay for it: each Agent is a desktop and a browser of its own.
-- An Agent's image is built and published with each version, for each kind of machine, beside the program.
+- An Agent's image is built on the Host itself, from the program that is installed there, the first time a version needs it: nothing is published beside the program, and nothing is fetched but the system the image starts from.
+- The account the server runs as asks Docker for the containers, which lets it do on the Host whatever Docker can. The server runs nothing a model asks for: every Agent, and every command of an Agent, is in a container.
 - An installation of before becomes the first Agent of its server: its folder is moved into that Agent's, and what was the server's is taken out of it.
 - A device is let in to a server. What it is given is always of one Agent, named in what it asks.
 - What one Agent may ask of another, and what an Agent spends of the shared limit, are the Owner's to bound.

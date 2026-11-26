@@ -301,3 +301,7 @@ body.desk .said { max-width: min(640px, 78%); }
 body:not(.desk) #panel:not([hidden]) { position: fixed; inset: 0; z-index: 20; background: var(--ground); overflow-y: auto; padding: max(18px, env(safe-area-inset-top)) 18px 40px; }
 #panel .shut { display: none; }
 body:not(.desk) #panel .shut { display: grid; place-items: center; position: absolute; top: max(12px, env(safe-area-inset-top)); right: 12px; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--agent); color: var(--ink); }
+#side .new { color: var(--quiet); }
+#side .new svg { flex: none; width: 34px; }
+#side input { margin: 4px 6px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--ground); width: calc(100% - 12px); }
+#panel .go.danger strong { color: var(--warn); }

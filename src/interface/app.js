@@ -1,6 +1,30 @@
 // The Conversation in a browser: what Orbite shows is listened to as it
 // comes, and what the Owner writes is sent as it is.
 (() => {
+  // On a server that holds several agents, what is asked of an agent is
+  // asked of the one chosen here; what is the server's is asked of it.
+  const plain = window.fetch.bind(window);
+  const place = { agents: null, chosen: "", plain };
+  window.orbite = place;
+  const at = (path) =>
+    place.chosen && typeof path === "string" && path.startsWith("/api/") && !/^\/api\/(pair|agents)\b/.test(path)
+      ? "/a/" + place.chosen + path
+      : path;
+  window.fetch = (path, options) => plain(at(path), options);
+  // Which agents this place holds, and which of them this device talks to:
+  // the one it last chose, while it is still there.
+  async function find() {
+    place.agents = null;
+    place.chosen = "";
+    const held = await plain("/api/agents").catch(() => null);
+    if (!held || !held.ok) return;
+    place.agents = (await held.json().catch(() => ({}))).agents || [];
+    let kept = "";
+    try { kept = localStorage.getItem("agent") || ""; } catch (_) { /* a browser that keeps nothing */ }
+    const chosen = place.agents.find((agent) => agent.id === kept) || place.agents[0];
+    place.chosen = chosen ? chosen.id : "";
+  }
+
   const WORDS = {
     en: {
       pairTitle: "Let this device in",
@@ -194,7 +218,7 @@
         if (event.files && event.files.length) {
           const files = make("div", "files");
           for (const file of event.files) {
-            const where = "/api/file?id=" + encodeURIComponent(file.file);
+            const where = at("/api/file?id=" + encodeURIComponent(file.file));
             if (file.image) {
               const picture = make("img");
               picture.src = where;
@@ -308,7 +332,7 @@
       }
       case "file": {
         const shown = make("div", "file");
-        const where = "/api/file?id=" + encodeURIComponent(event.file);
+        const where = at("/api/file?id=" + encodeURIComponent(event.file));
         if (event.image) {
           const picture = make("img");
           picture.src = where;
@@ -362,7 +386,7 @@
 
   let listening;
   function listen() {
-    listening = new EventSource("/api/events");
+    listening = new EventSource(at("/api/events"));
     listening.onopen = () => { $("link").hidden = true; };
     listening.onmessage = (sent) => {
       const event = JSON.parse(sent.data);
@@ -651,7 +675,25 @@
   }
 
   async function start() {
+    await find();
+    // A server with no agent yet: the first one is made here, by its name.
+    if (place.agents && !place.agents.length) {
+      const called = (window.prompt(words.firstAgent || "What is your first agent called?") || "").trim();
+      if (called) {
+        await plain("/api/agents", { method: "POST", headers: { "content-type": "application/json", "x-orbite": "1" }, body: JSON.stringify({ name: called }) }).catch(() => null);
+        await find();
+      }
+    }
     const me = await fetch("/api/me");
+    // An agent that is starting, or made anew for a new version, answers
+    // in a moment: asked again rather than taken for a stranger's page.
+    if (place.chosen && me.status >= 500) {
+      $("link").hidden = false;
+      // Its place is shown meanwhile: another agent can be gone over to.
+      $("pairing").hidden = true;
+      $("talk").hidden = false;
+      return void setTimeout(start, 3000);
+    }
     const told = await me.json().catch(() => ({}));
     speak(told.language);
     if (me.ok) {

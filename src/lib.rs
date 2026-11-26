@@ -2,6 +2,7 @@
 //! Vocabulary follows `GLOSSARY.md`.
 
 mod actions;
+mod adopting;
 mod agent;
 mod anthropic;
 mod attachments;
@@ -49,6 +50,7 @@ mod updater;
 mod web;
 mod welcome;
 
+pub use adopting::{adopt, as_the_agent, as_the_server, keep as keep_agents};
 pub use agent::Agent;
 pub use anthropic::Anthropic;
 pub use attachments::attached;
@@ -87,7 +89,7 @@ pub use reach::{close_on_tailscale, open_on_tailscale, tailscale};
 pub use routed::Routed;
 pub use secrets::{Secrets, SecretsError};
 pub use served::{Asked, Served};
-pub use server::{Docker, Engine, Server, Thinks};
+pub use server::{Docker, Engine, Held, Server, Thinks, held_in};
 pub use settings::{SETTINGS, Settings, TAKES_A_RESTART};
 pub use setup::{PROVIDER_KEY, Setup, SetupError, Step as SetupStep, TELEGRAM_TOKEN};
 pub use steps::Step;

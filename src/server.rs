@@ -43,13 +43,21 @@ pub struct Held {
 
 impl Held {
     /// One more Agent, called `name`, known by nothing another is.
-    pub(crate) fn new(name: &str, others: &[Held]) -> io::Result<Self> {
+    pub fn new(name: &str, others: &[Held]) -> io::Result<Self> {
         let mut id = random(6)?;
         while others.iter().any(|other| other.id == id) {
             id = random(6)?;
         }
         Ok(Self { id, name: name.to_owned(), token: random(32)? })
     }
+}
+
+/// The Agents of the server kept in `home`: none when it is not one.
+pub fn held_in(home: &Path) -> Vec<Held> {
+    std::fs::read_to_string(home.join("agents.json"))
+        .ok()
+        .and_then(|kept| serde_json::from_str(&kept).ok())
+        .unwrap_or_default()
 }
 
 /// What runs the Agents' containers. Docker, on a Host; something that
@@ -134,6 +142,26 @@ impl Docker {
         }
     }
 
+    /// Removes the container of the Agent `id`, and with `all` everything
+    /// it kept as well.
+    pub fn stop(&self, id: &str, all: bool) -> Result<(), String> {
+        if all {
+            return Engine::remove(self, id);
+        }
+        match self.ask(&["rm", "-f", &format!("orbite-agent-{id}")]) {
+            Err(why) if !why.to_lowercase().contains("no such") => Err(why),
+            _ => Ok(()),
+        }
+    }
+
+    /// True when the Agent `id` reaches the server from its container: the
+    /// server answers it there, whatever it answers.
+    pub fn reaches_the_server(&self, id: &str) -> bool {
+        let asked = "curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST \"$ORBITE_SERVER_AT/internal/think\"";
+        self.ask(&["exec", &format!("orbite-agent-{id}"), "sh", "-c", asked])
+            .is_ok_and(|status| status.trim() != "000" && !status.trim().is_empty())
+    }
+
     /// Fills the volume of the Agent `id` with what is in `folder`, as the
     /// account the Agent runs as in its container.
     pub fn fill(&self, id: &str, folder: &Path) -> Result<(), String> {
@@ -161,7 +189,9 @@ impl Docker {
     }
 
     fn ask(&self, asked: &[&str]) -> Result<String, String> {
-        let answered = std::process::Command::new("docker")
+        // Where the system keeps it, when asked as root: never one that
+        // whoever ran this put ahead of it.
+        let answered = std::process::Command::new(crate::system_program("docker"))
             .args(asked)
             .output()
             .map_err(|error| format!("docker could not be run: {error}"))?;
@@ -194,7 +224,22 @@ impl Engine for Docker {
             let same = said.next() == Some(self.image.as_str()) && said.next() == Some("true");
             let told: Vec<String> =
                 serde_json::from_str(said.next().unwrap_or("[]")).unwrap_or_default();
-            if same && given.iter().all(|(key, value)| told.contains(&format!("{key}={value}"))) {
+            // Told the same, no more and no less, of what a server tells.
+            let said_of = |key: &str| {
+                told.iter().find_map(|one| one.strip_prefix(&format!("{key}=")).map(str::to_owned))
+            };
+            let unchanged = [
+                "ORBITE_SERVER_TOKEN",
+                "ORBITE_AGENT_NAME",
+                "ORBITE_SERVER_AT",
+                "ORBITE_REACHED_AT",
+            ]
+            .iter()
+            .all(|key| {
+                said_of(key)
+                    == given.iter().find(|(given, _)| given == key).map(|(_, value)| value.clone())
+            });
+            if same && unchanged {
                 return Ok(());
             }
             self.ask(&["rm", "-f", &named])?;
@@ -232,7 +277,7 @@ impl Engine for Docker {
         .to_vec();
         // Given in the container's own surroundings, never on a command
         // line another account of the machine could read.
-        let mut running = std::process::Command::new("docker");
+        let mut running = std::process::Command::new(crate::system_program("docker"));
         for (key, value) in given {
             asked.push("-e".into());
             asked.push(key.clone());
@@ -692,9 +737,34 @@ async fn carry(
     let Ok(body) = axum::body::to_bytes(request.into_body(), 64 * 1024 * 1024).await else {
         return refused(StatusCode::PAYLOAD_TOO_LARGE, "too much at once");
     };
+    // Who the Agents think with is the server's: the model is set here,
+    // for all of them, from the settings of any of them.
+    let of_settings = rest == "api/settings";
+    if of_settings
+        && method == axum::http::Method::POST
+        && let Ok(sent) = serde_json::from_slice::<Value>(&body)
+        && let (Some(key @ ("model" | "light")), Some(value)) =
+            (sent["key"].as_str(), sent["value"].as_str())
+    {
+        let (home, key, value) = (shared.home.clone(), key.to_owned(), value.trim().to_owned());
+        if value.is_empty() || value.contains(char::is_whitespace) || value.chars().count() > 200 {
+            return refused(StatusCode::BAD_REQUEST, "not a value for it");
+        }
+        let set = tokio::task::spawn_blocking(move || {
+            let store =
+                crate::Store::open(home.join("orbite.db")).map_err(|error| error.to_string())?;
+            crate::Settings::of(&store, Some(&home)).set(&key, &value)
+        })
+        .await;
+        return match set {
+            Ok(Ok(())) => Json(json!({ "set": true })).into_response(),
+            Ok(Err(why)) => refused(StatusCode::BAD_REQUEST, &why),
+            Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "it could not be kept"),
+        };
+    }
     let mut carrying = shared
         .http
-        .request(method, format!("{at}/{rest}{asked}"))
+        .request(method.clone(), format!("{at}/{rest}{asked}"))
         .header("x-orbite-server", &agent.token)
         .header(
             "x-orbite-device",
@@ -717,6 +787,34 @@ async fn carry(
     let Ok(answer) = carrying.send().await else {
         return refused(StatusCode::BAD_GATEWAY, "this agent does not answer");
     };
+    // An Agent's settings are shown with what is the server's among them:
+    // the models there are to choose from, and the ones in force.
+    if of_settings && method == axum::http::Method::GET && answer.status().is_success() {
+        let Ok(mut told) = answer.json::<Value>().await else {
+            return refused(StatusCode::BAD_GATEWAY, "its settings could not be read");
+        };
+        let (models, usual) = crate::interface::models_to_choose(&shared.home).await;
+        told["models"] = json!(models);
+        told["usual"] = json!(usual);
+        let home = shared.home.clone();
+        let in_force = tokio::task::spawn_blocking(move || {
+            let store = crate::Store::open(home.join("orbite.db")).ok()?;
+            let settings = crate::Settings::of(&store, Some(&home));
+            Some((settings.get("model").ok()?, settings.get("light").ok()?))
+        })
+        .await
+        .ok()
+        .flatten();
+        if let (Some((model, light)), Some(all)) = (in_force, told["settings"].as_array_mut()) {
+            for (key, value) in [("model", model), ("light", light)] {
+                match all.iter_mut().find(|one| one["key"] == key) {
+                    Some(one) => one["value"] = json!(value),
+                    None => all.push(json!({ "key": key, "value": value, "choices": [] })),
+                }
+            }
+        }
+        return Json(told).into_response();
+    }
     // What an Agent answers is shown under the server's own name, where a
     // device is let in to every Agent. So it is never a page: only what an
     // Agent's interface is known to answer, and nothing a browser would run.

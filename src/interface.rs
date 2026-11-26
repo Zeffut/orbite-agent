@@ -496,7 +496,7 @@ fn page(kind: &'static str, body: &'static str) -> Response {
             (header::REFERRER_POLICY, "no-referrer"),
             (
                 header::CONTENT_SECURITY_POLICY,
-                "default-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'",
+                "default-src 'self'; img-src 'self' data: blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
             ),
         ],
         body,
@@ -1157,7 +1157,7 @@ async fn settings(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Resp
 /// set and what to show, and the one Orbite takes unasked: those a plan
 /// says it comes with, or those the Provider is known to serve an Agent
 /// well with. The one in force is always among them.
-async fn models_to_choose(home: &Path) -> (Vec<Value>, Option<String>) {
+pub(crate) async fn models_to_choose(home: &Path) -> (Vec<Value>, Option<String>) {
     let Some(chosen) = crate::Config::load(home).ok().and_then(|config| config.provider) else {
         return (Vec::new(), None);
     };
