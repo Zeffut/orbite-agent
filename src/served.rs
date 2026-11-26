@@ -105,6 +105,9 @@ impl Asked {
     }
 }
 
+/// How an Agent is told it used up what its Owner allows it for the day.
+pub(crate) const SPENT_FOR_TODAY: &str = "used up what its Owner allows it for today";
+
 /// An answer, or why there is none, as it travels back.
 pub fn written(answered: &Result<Reply, ProviderError>) -> Value {
     match answered {

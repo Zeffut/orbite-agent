@@ -58,5 +58,8 @@ async fn a_turn_with_everything_on_offer_stays_light() {
     // A hundred and forty more tell it to finish what it is given and how
     // to get past what stops it: read back from a real conversation, it
     // reported a job blocked five times over without once trying another way.
-    assert!(total <= 3_650, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
+    // Seventy more tell it what to do when a page asks for what only its
+    // Owner can give: say so and let them take over its screen, rather than
+    // work around a captcha or give the job up.
+    assert!(total <= 3_720, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
 }

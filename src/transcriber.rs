@@ -34,6 +34,8 @@ enum Engine {
     Command(String),
     /// What was chosen cannot work, for this reason.
     Unable(String),
+    /// The server that holds this Agent, which has the Owner's keys.
+    TheServer,
 }
 
 /// The media type of `file` when it is a recording, by its extension.
@@ -142,6 +144,18 @@ impl Transcriber {
         Self { engine: Engine::Command(command.into()) }
     }
 
+    /// The server that holds this Agent writes speech down: it has the
+    /// keys of the Owner's Providers, and an Agent has none.
+    pub fn through_the_server() -> Self {
+        Self { engine: Engine::TheServer }
+    }
+
+    /// True when a recording is sent to a service to be written down, and
+    /// nothing on this machine reads it.
+    pub fn sends_it_away(&self) -> bool {
+        matches!(self.engine, Engine::Endpoint { .. })
+    }
+
     /// What was chosen to write speech down cannot work: every recording
     /// is answered with `why`, for the Owner to be told.
     pub fn unable(why: impl Into<String>) -> Self {
@@ -159,6 +173,27 @@ impl Transcriber {
                 Self::heard_by_whisper(program, model, converter.as_deref(), language, file).await?
             }
             Engine::Unable(why) => return Err(why.clone()),
+            Engine::TheServer => {
+                use base64::Engine as _;
+                let server = crate::held::Holder::of_this_agent()
+                    .ok_or("no server holds this agent to write it down")?;
+                sound_type(file).ok_or("it is not a recording of a kind I can send")?;
+                let size = std::fs::metadata(file).map_err(|error| error.to_string())?.len();
+                // What travels to the server is a third longer than the recording.
+                if size > 20_000_000 {
+                    return Err(format!(
+                        "it is too long to be written down ({} MB)",
+                        size / 1_000_000
+                    ));
+                }
+                let bytes = std::fs::read(file).map_err(|error| error.to_string())?;
+                let name = file.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                let content = base64::engine::general_purpose::STANDARD.encode(bytes);
+                let told = server
+                    .asked("hear", serde_json::json!({ "name": name, "content": content }))
+                    .await?;
+                told["text"].as_str().unwrap_or_default().to_owned()
+            }
             Engine::Command(command) => {
                 let filled = command.replace("{file}", &quoted(&file.to_string_lossy()));
                 let mut shell = tokio::process::Command::new("sh");

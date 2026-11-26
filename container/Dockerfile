@@ -30,7 +30,8 @@ RUN apt-get update -qq \
     && rm -rf /var/lib/apt/lists/*
 
 # The Agent is not root in its own container either.
-RUN useradd --system --create-home --home-dir /var/lib/orbite --shell /usr/sbin/nologin orbite \
+RUN useradd --system --no-create-home --home-dir /var/lib/orbite --shell /usr/sbin/nologin orbite \
+    && install -d -o orbite -g orbite -m 700 /var/lib/orbite \
     && mkdir -p /usr/local/share/orbite \
     # Its computer is its own: there is no desktop of the machine's here.
     && echo own > /usr/local/share/orbite/computer

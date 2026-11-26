@@ -2,6 +2,20 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.10.1
+
+Released on 2026-11-26.
+
+For a server that holds several agents.
+
+- **Agents pass words to one another.** Ask one to ask another, by its name: it passes the word, the other answers when it has, and both show what was passed in their conversations. A word from another agent is a colleague's and never yours: an agent answers from what it knows, and asks you before it changes anything or sends anything of yours out because of it. Twelve words an hour at the most, so that two agents do not answer each other without end.
+- **Devices are in settings.** The devices let in are listed there, one is removed there, and *Add a device* shows a code, a link and a picture a phone's camera reads. Asked in words, your agent tells you where that is: an agent is never given a code, which something it read could have it hand to a stranger.
+- **A daily limit for each agent**, in its settings, with what it used today.
+- **Voice messages are written down by the server**, with your provider's key, for every agent.
+- **When a page asks for what only you can give**, a captcha, a code sent to you, a password it does not hold, your agent says so and tells you that you can take over its screen, instead of working around it or giving up. When you give its screen back, it looks at it and carries on.
+- **`orbite export` and `orbite restore` carry every agent** of a server: each one's conversation, memory, secrets and computer.
+- An agent is renamed for the others too, and two agents cannot have the same name. What an agent is known to its server by cannot be read by the commands it runs.
+
 ## 0.10.0
 
 Released on 2026-11-26.

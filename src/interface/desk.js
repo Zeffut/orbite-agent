@@ -182,6 +182,8 @@
     en: ["English", "English"], fr: ["Français", "Français"],
     60: ["Every hour", "Chaque heure"], 240: ["Every 4 hours", "Toutes les 4 heures"], 720: ["Every 12 hours", "Toutes les 12 heures"],
     provider: ["By the AI provider", "Par le fournisseur d'IA"],
+    500000: ["Small (500 k tokens)", "Petite (500 k jetons)"], 2000000: ["Medium (2 M tokens)", "Moyenne (2 M jetons)"],
+    10000000: ["Large (10 M tokens)", "Grande (10 M jetons)"],
   };
   const worded = (written) => (WORDS[written] ? say(WORDS[written][0], WORDS[written][1]) : written);
 
@@ -243,6 +245,14 @@
     } else {
       thinks.append(row(say("Model", "Modèle"), "", make("span", "quiet", value("model"))));
     }
+    // On a server, what this one agent may use in a day, and what it has.
+    if (kept.settings.some((one) => one.key === "daily_limit")) {
+      const used = Number(kept.spent_today) || 0;
+      const sofar = used >= 1e6 ? (used / 1e6).toFixed(1) + " M" : Math.round(used / 1e3) + " k";
+      const labels = { off: say("No limit", "Sans limite") };
+      thinks.append(row(say("Daily limit for this agent", "Limite par jour pour cet agent"),
+        say("Used today: {n} tokens.", "Utilisé aujourd'hui : {n} jetons.").replace("{n}", sofar), chosen("daily_limit", of("daily_limit"), labels)));
+    }
     const does = make("section");
     does.append(make("h2", "", say("How it works", "Sa façon de travailler")));
     does.append(row(say("Permission", "Autorisation"), say("How much your agent does without asking.", "Ce que ton agent fait sans demander."), chosen("permission", of("permission"))));
@@ -255,6 +265,66 @@
     rest.append(row(say("Voice messages", "Messages vocaux"), say("What writes down what you say.", "Ce qui transcrit ce que tu dis."), chosen("voice", of("voice"))));
     rest.append(row(say("Automatic updates", "Mises à jour automatiques"), "", chosen("updates", of("updates"))));
     panel.append(linked, thinks, does, rest);
+    devices();
+  }
+
+  // The devices let in to this server: listed, turned away, and one more
+  // let in with a code this device shows. Asked of the server itself.
+  async function devices() {
+    const place = window.orbite || {};
+    if (!place.agents) return;
+    const told = await place.plain("/api/devices").catch(() => null);
+    const all = told && told.ok ? (await told.json()).devices : null;
+    if (!all || showing !== "settings") return;
+    const old = panel.querySelector("section.devices");
+    const list = make("section", "devices");
+    list.append(make("h2", "", say("Devices", "Appareils")));
+    for (const device of all) {
+      const seen = new Date(device.seen * 1000).toLocaleDateString([], { day: "numeric", month: "short" });
+      let control;
+      if (device.this) {
+        control = make("span", "quiet", say("This device", "Cet appareil"));
+      } else {
+        control = make("button", "plain", say("Remove", "Retirer"));
+        control.type = "button";
+        control.onclick = async () => {
+          const sure = say("Remove {name}? It will no longer open your agents.", "Retirer {name} ? Il ne pourra plus ouvrir tes agents.").replace("{name}", device.name);
+          if (!window.confirm(sure)) return;
+          control.disabled = true;
+          await place.plain("/api/devices/" + encodeURIComponent(device.name), { method: "DELETE", headers: { "x-orbite": "1" } }).catch(() => null);
+          devices();
+        };
+      }
+      list.append(row(device.name, say("Last seen {day}", "Vu le {day}").replace("{day}", seen), control));
+    }
+    const add = make("button", "plain", say("Add a device", "Ajouter un appareil"));
+    add.type = "button";
+    const more = row(say("One more device", "Un appareil de plus"), say("A phone, a computer: it will open every agent here.", "Un téléphone, un ordinateur : il ouvrira tous les agents d'ici."), add);
+    list.append(more);
+    add.onclick = async () => {
+      add.disabled = true;
+      const made = await place.plain("/api/devices", { method: "POST", headers: { "x-orbite": "1" } }).catch(() => null);
+      const given = made && made.ok ? await made.json() : null;
+      add.disabled = false;
+      if (!given) return;
+      const shown = make("div", "code");
+      if (given.picture) {
+        const drawn = make("img");
+        drawn.alt = "";
+        drawn.src = "data:image/svg+xml," + encodeURIComponent(given.picture);
+        shown.append(drawn);
+      }
+      const words = make("div");
+      words.append(make("strong", "", given.code));
+      if (given.link) words.append(make("small", "", say("On the new device, open: ", "Sur le nouvel appareil, ouvre : ") + given.link));
+      words.append(make("small", "", say("It works once, for ten minutes.", "Il sert une fois, pendant dix minutes.")));
+      shown.append(words);
+      const before = list.querySelector(".code");
+      if (before) before.remove();
+      list.append(shown);
+    };
+    if (old) old.replaceWith(list);
+    else panel.append(list);
   }
 
   async function services() {

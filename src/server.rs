@@ -39,6 +39,10 @@ pub struct Held {
     pub name: String,
     /// What the server shows the Agent to be known by it.
     pub(crate) token: String,
+    /// How many tokens of the Owner's Providers it may use in a day, when
+    /// its Owner set a limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) daily_tokens: Option<u64>,
 }
 
 impl Held {
@@ -48,16 +52,25 @@ impl Held {
         while others.iter().any(|other| other.id == id) {
             id = random(6)?;
         }
-        Ok(Self { id, name: name.to_owned(), token: random(32)? })
+        Ok(Self { id, name: name.to_owned(), token: random(32)?, daily_tokens: None })
     }
 }
 
 /// The Agents of the server kept in `home`: none when it is not one.
 pub fn held_in(home: &Path) -> Vec<Held> {
-    std::fs::read_to_string(home.join("agents.json"))
+    let held: Vec<Held> = std::fs::read_to_string(home.join("agents.json"))
         .ok()
         .and_then(|kept| serde_json::from_str(&kept).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // What an Agent is known by names its container, its volume and its
+    // files: a few letters and digits, or it is none of this server's.
+    held.into_iter().filter(|agent| is_an_id(&agent.id) && agent.token.len() >= 32).collect()
+}
+
+/// True for what a server calls an Agent by: a few lowercase letters and digits.
+fn is_an_id(id: &str) -> bool {
+    (1..=16).contains(&id.len())
+        && id.bytes().all(|letter| letter.is_ascii_lowercase() || letter.is_ascii_digit())
 }
 
 /// What runs the Agents' containers. Docker, on a Host; something that
@@ -154,12 +167,94 @@ impl Docker {
         }
     }
 
+    /// Writes everything the Agent `id` keeps to a file of its own in
+    /// `folder`, as an installation's export is written: whole even while
+    /// the Agent works. The file is named after the Agent.
+    pub fn export_of(&self, id: &str, folder: &Path) -> Result<PathBuf, String> {
+        self.built()?;
+        let (kept, out) =
+            (format!("orbite-agent-{id}:/var/lib/orbite"), format!("{}:/out", folder.display()));
+        let written = format!("/out/{id}.orbite");
+        self.ask(&[
+            "run",
+            "--rm",
+            "--user",
+            "0",
+            "--network",
+            "none",
+            "--cap-drop=ALL",
+            "--cap-add=CHOWN",
+            "--cap-add=DAC_OVERRIDE",
+            "--cap-add=FOWNER",
+            "--security-opt=no-new-privileges",
+            "-e",
+            "ORBITE_SERVER_TOKEN=held-by-a-server-and-being-moved-now",
+            "-v",
+            &kept,
+            "-v",
+            &out,
+            &self.image,
+            "orbite",
+            "export",
+            &written,
+        ])?;
+        Ok(folder.join(format!("{id}.orbite")))
+    }
+
+    /// Puts what `file` holds, an Agent's own export, into the volume of
+    /// the Agent `id`, which must not hold an Agent yet.
+    pub fn restore_of(&self, id: &str, file: &Path) -> Result<(), String> {
+        self.built()?;
+        let named = format!("orbite-agent-{id}");
+        self.ask(&["volume", "create", &named])?;
+        let (kept, from) =
+            (format!("{named}:/var/lib/orbite"), format!("{}:/in.orbite:ro", file.display()));
+        self.ask(&[
+            "run",
+            "--rm",
+            "--user",
+            "0",
+            "--network",
+            "none",
+            "--cap-drop=ALL",
+            "--cap-add=CHOWN",
+            "--cap-add=DAC_OVERRIDE",
+            "--cap-add=FOWNER",
+            "--security-opt=no-new-privileges",
+            "-e",
+            "ORBITE_SERVER_TOKEN=held-by-a-server-and-being-moved-now",
+            "-v",
+            &kept,
+            "-v",
+            &from,
+            &self.image,
+            "sh",
+            "-c",
+            // Put back beside the volume first, then copied into it: never
+            // over an Agent that is there already.
+            "[ ! -e /var/lib/orbite/config.json ] && [ ! -e /var/lib/orbite/orbite.db ] \
+             && ORBITE_HOME=/tmp/agent orbite restore /in.orbite \
+             && cp -a /tmp/agent/. /var/lib/orbite/ && chown -R orbite:orbite /var/lib/orbite",
+        ])
+        .map(|_| ())
+    }
+
     /// True when the Agent `id` reaches the server from its container: the
     /// server answers it there, whatever it answers.
     pub fn reaches_the_server(&self, id: &str) -> bool {
         let asked = "curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST \"$ORBITE_SERVER_AT/internal/think\"";
-        self.ask(&["exec", &format!("orbite-agent-{id}"), "sh", "-c", asked])
-            .is_ok_and(|status| status.trim() != "000" && !status.trim().is_empty())
+        // Without what the Agent is known by: what is run there beside it
+        // is not given that to hold.
+        self.ask(&[
+            "exec",
+            "-e",
+            "ORBITE_SERVER_TOKEN=",
+            &format!("orbite-agent-{id}"),
+            "sh",
+            "-c",
+            asked,
+        ])
+        .is_ok_and(|status| status.trim() != "000" && !status.trim().is_empty())
     }
 
     /// Fills the volume of the Agent `id` with what is in `folder`, as the
@@ -176,6 +271,13 @@ impl Docker {
             "0",
             "--network",
             "none",
+            "--cap-drop=ALL",
+            "--cap-add=CHOWN",
+            "--cap-add=DAC_OVERRIDE",
+            "--cap-add=FOWNER",
+            "--security-opt=no-new-privileges",
+            "-e",
+            "ORBITE_SERVER_TOKEN=held-by-a-server-and-being-moved-now",
             "-v",
             &to,
             "-v",
@@ -344,7 +446,27 @@ struct Shared {
     changing: tokio::sync::Mutex<()>,
     /// How many things each Agent has the server thinking about at once.
     thinking: Mutex<std::collections::HashMap<String, usize>>,
+    /// When each Agent last passed a word to another: only so many an hour.
+    told: Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>,
+    /// When each Agent last had a recording written down.
+    heard: Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>,
+    address: Mutex<Option<SocketAddr>>,
+    /// What writes down what the Owner says aloud, when a Provider does.
+    hears: Mutex<Option<Hears>>,
+    /// What each Agent used of the Owner's Providers today: the day, then
+    /// tokens by Agent. Kept in `spent.json`, to outlast a restart.
+    spent: Mutex<(String, std::collections::HashMap<String, u64>)>,
 }
+
+/// Writes down what is said in a recording, with the keys the server holds.
+pub type Hears = Arc<
+    dyn Fn(PathBuf) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// The limits an Owner can put on what one Agent uses in a day, in tokens.
+pub(crate) const DAILY_LIMITS: &[&str] = &["off", "500000", "2000000", "10000000"];
 
 /// Asks the Owner's Providers what an Agent asks, with the keys the server
 /// holds, and answers.
@@ -358,6 +480,26 @@ pub type Thinks = Arc<
 >;
 
 impl Shared {
+    /// What the Agent `id` used of the Owner's Providers today, in tokens.
+    fn spent_today(&self, id: &str) -> u64 {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let spent = self.spent.lock().expect("not poisoned");
+        if spent.0 == today { spent.1.get(id).copied().unwrap_or(0) } else { 0 }
+    }
+
+    /// Counts `tokens` more for the Agent `id` today.
+    fn count(&self, id: &str, tokens: u64) {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let mut spent = self.spent.lock().expect("not poisoned");
+        if spent.0 != today {
+            *spent = (today, std::collections::HashMap::new());
+        }
+        *spent.1.entry(id.to_owned()).or_insert(0) += tokens;
+        if let Ok(written) = serde_json::to_string(&*spent) {
+            let _ = std::fs::write(self.home.join("spent.json"), written);
+        }
+    }
+
     /// What an Agent is told when its container is made: what to trust the
     /// server by, what it is first called, where the server is, and where
     /// its Owner's devices reach it.
@@ -380,7 +522,13 @@ impl Shared {
     /// those that are there.
     fn agents(&self) -> io::Result<Vec<Held>> {
         match std::fs::read_to_string(self.home.join("agents.json")) {
-            Ok(kept) => serde_json::from_str(&kept).map_err(io::Error::other),
+            Ok(kept) => {
+                let held: Vec<Held> = serde_json::from_str(&kept).map_err(io::Error::other)?;
+                if held.iter().any(|agent| !is_an_id(&agent.id) || agent.token.len() < 32) {
+                    return Err(io::Error::other("an agent is written down under no name of one"));
+                }
+                Ok(held)
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
             Err(error) => Err(error),
         }
@@ -407,6 +555,7 @@ impl Shared {
 
 /// The server, serving.
 pub struct Server {
+    shared: Arc<Shared>,
     address: SocketAddr,
     serving: tokio::task::JoinHandle<()>,
     for_agents: Option<tokio::task::JoinHandle<()>>,
@@ -449,6 +598,16 @@ impl Server {
                 .unwrap_or_else(|| "en".into()),
             changing: tokio::sync::Mutex::new(()),
             thinking: Mutex::new(std::collections::HashMap::new()),
+            told: Mutex::new(std::collections::HashMap::new()),
+            heard: Mutex::new(std::collections::HashMap::new()),
+            address: Mutex::new(None),
+            hears: Mutex::new(None),
+            spent: Mutex::new(
+                std::fs::read_to_string(home.join("spent.json"))
+                    .ok()
+                    .and_then(|kept| serde_json::from_str(&kept).ok())
+                    .unwrap_or_default(),
+            ),
         });
         // A door of its own for the Agents, on the side of the machine
         // their containers see and nowhere else: what is asked there is
@@ -469,7 +628,9 @@ impl Server {
                 Some(format!("http://{named}:{port}"));
             let asked = Router::new()
                 .route("/internal/think", post(think))
+                .route("/internal/ask/{what}", post(asked_by_an_agent))
                 .layer(axum::extract::DefaultBodyLimit::max(THOUGHT_AT_MOST))
+                .layer(axum::middleware::from_fn_with_state(shared.clone(), by_an_agent_only))
                 .with_state(shared.clone());
             for_agents = Some(tokio::spawn(async move {
                 let _ = axum::serve(listening, asked).await;
@@ -478,6 +639,7 @@ impl Server {
         // The Agents there already are started again as this version runs
         // them: made anew from its image when they were of another, which
         // takes the time to build it once. They answer as they were meanwhile.
+        let told_where = shared.clone();
         let again = shared.clone();
         tokio::task::spawn_blocking(move || {
             for agent in again.agents().unwrap_or_default() {
@@ -494,20 +656,29 @@ impl Server {
             .route("/api/me", get(me))
             .route("/api/agents", get(agents).post(create))
             .route("/api/agents/{id}", axum::routing::delete(remove))
+            .route("/api/devices", get(devices).post(one_more_device))
+            .route("/api/devices/{name}", axum::routing::delete(turn_away))
             .route("/a/{id}/signed-in", get(signed_in))
             .route("/a/{id}/{*rest}", any(carry))
             .layer(axum::middleware::from_fn_with_state(shared.clone(), asked_by_its_name))
             .with_state(shared);
         let listening = tokio::net::TcpListener::bind(address).await?;
         let address = listening.local_addr()?;
+        *told_where.address.lock().expect("not poisoned") = Some(address);
         let serving = tokio::spawn(async move {
             let _ = axum::serve(listening, routes).await;
         });
-        Ok(Self { address, serving, for_agents })
+        Ok(Self { shared: told_where, address, serving, for_agents })
     }
 
     pub fn address(&self) -> SocketAddr {
         self.address
+    }
+
+    /// Writes down what the Owner says aloud to any Agent with `hears`.
+    pub fn hearing_with(self, hears: Option<Hears>) -> Self {
+        *self.shared.hears.lock().expect("not poisoned") = hears;
+        self
     }
 }
 
@@ -601,6 +772,67 @@ async fn signed_in(
     crate::interface::sign_in_page(french, well, &said)
 }
 
+/// The devices let in to this server, for one of them.
+async fn devices(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    let Some(asking) = device_in(&shared.database, &headers) else {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    };
+    match crate::interface_devices(&shared.home) {
+        Ok(all) => {
+            let all: Vec<Value> = all
+                .iter()
+                .map(|device| {
+                    json!({ "name": device.name, "seen": device.seen, "this": device.name == asking })
+                })
+                .collect();
+            Json(json!({ "devices": all })).into_response()
+        }
+        Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "the devices could not be read"),
+    }
+}
+
+/// A code that lets one more device in, with where it is typed and the
+/// picture a phone's camera reads: given to a device already let in, which
+/// shows it to the Owner. Never to an Agent.
+async fn one_more_device(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
+    if !from_the_page(&headers, &shared.names) || device_in(&shared.database, &headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let Ok(code) = crate::pairing_code(&shared.home) else {
+        return refused(StatusCode::INTERNAL_SERVER_ERROR, "no code could be made");
+    };
+    let at = shared
+        .reached_at
+        .clone()
+        // Where it listens is where it is reached only when that is one place.
+        .or_else(|| {
+            shared
+                .address
+                .lock()
+                .expect("not poisoned")
+                .filter(|at| !at.ip().is_unspecified())
+                .map(|at| format!("http://{at}"))
+        });
+    let link = at.as_ref().map(|at| format!("{at}/#{code}"));
+    let picture = link.as_deref().and_then(crate::code_picture);
+    Json(json!({ "code": code, "at": at, "link": link, "picture": picture })).into_response()
+}
+
+/// Turns a device away, asked by another that is let in.
+async fn turn_away(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Named(name): Named<String>,
+) -> Response {
+    if !from_the_page(&headers, &shared.names) || device_in(&shared.database, &headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    match crate::turn_away(&shared.home, &name) {
+        Ok(gone) => Json(json!({ "gone": gone })).into_response(),
+        Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "it could not be turned away"),
+    }
+}
+
 /// The Agents of this server, for a device let in.
 async fn agents(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
     if device_in(&shared.database, &headers).is_none() {
@@ -641,6 +873,10 @@ async fn create(
     };
     if held.len() >= shared.at_most {
         return refused(StatusCode::CONFLICT, "this server holds no more agents");
+    }
+    // Agents are told apart, and written to, by their names.
+    if held.iter().any(|other| other.name.to_lowercase() == name.to_lowercase()) {
+        return refused(StatusCode::CONFLICT, "another agent is called that already");
     }
     // Its own for good: never known by what another Agent already is.
     let Ok(agent) = Held::new(&name, &held) else {
@@ -733,20 +969,57 @@ async fn carry(
     else {
         return refused(StatusCode::BAD_GATEWAY, "this agent is not running");
     };
+    // A path is a path: nothing in it passes for what is asked with it.
+    if rest.contains(['?', '#']) {
+        return refused(StatusCode::BAD_REQUEST, "not a path");
+    }
     let asked = request.uri().query().map(|asked| format!("?{asked}")).unwrap_or_default();
     let Ok(body) = axum::body::to_bytes(request.into_body(), 64 * 1024 * 1024).await else {
         return refused(StatusCode::PAYLOAD_TOO_LARGE, "too much at once");
     };
+    // A name another Agent has is not given to this one.
+    let renamed = serde_json::from_slice::<Value>(&body)
+        .ok()
+        .filter(|_| rest == "api/settings" && method == axum::http::Method::POST)
+        .filter(|sent| sent["key"] == "name")
+        .and_then(|sent| sent["value"].as_str().map(|name| name.trim().to_owned()))
+        .filter(|name| !name.is_empty());
+    if let Some(named) = &renamed
+        && shared
+            .agents()
+            .unwrap_or_default()
+            .iter()
+            .any(|other| other.id != agent.id && other.name.to_lowercase() == named.to_lowercase())
+    {
+        return refused(StatusCode::CONFLICT, "another agent is called that already");
+    }
     // Who the Agents think with is the server's: the model is set here,
     // for all of them, from the settings of any of them.
     let of_settings = rest == "api/settings";
     if of_settings
         && method == axum::http::Method::POST
         && let Ok(sent) = serde_json::from_slice::<Value>(&body)
-        && let (Some(key @ ("model" | "light")), Some(value)) =
+        && let (Some(key @ ("model" | "light" | "daily_limit")), Some(value)) =
             (sent["key"].as_str(), sent["value"].as_str())
     {
         let (home, key, value) = (shared.home.clone(), key.to_owned(), value.trim().to_owned());
+        // How much this one Agent may use in a day is written with it.
+        if key == "daily_limit" {
+            if !DAILY_LIMITS.contains(&value.as_str()) {
+                return refused(StatusCode::BAD_REQUEST, "not a limit there is");
+            }
+            let _changing = shared.changing.lock().await;
+            let Ok(mut held) = shared.agents() else {
+                return refused(StatusCode::INTERNAL_SERVER_ERROR, "the agents could not be read");
+            };
+            if let Some(one) = held.iter_mut().find(|one| one.id == agent.id) {
+                one.daily_tokens = value.parse().ok();
+            }
+            return match shared.keep(&held) {
+                Ok(()) => Json(json!({ "set": true })).into_response(),
+                Err(_) => refused(StatusCode::INTERNAL_SERVER_ERROR, "it could not be kept"),
+            };
+        }
         if value.is_empty() || value.contains(char::is_whitespace) || value.chars().count() > 200 {
             return refused(StatusCode::BAD_REQUEST, "not a value for it");
         }
@@ -787,6 +1060,21 @@ async fn carry(
     let Ok(answer) = carrying.send().await else {
         return refused(StatusCode::BAD_GATEWAY, "this agent does not answer");
     };
+    // Renamed by its Owner, an Agent is known to the server by its new
+    // name: the others write to it by that one.
+    if of_settings
+        && method == axum::http::Method::POST
+        && answer.status().is_success()
+        && let Some(named) = renamed
+    {
+        let _changing = shared.changing.lock().await;
+        if let Ok(mut held) = shared.agents() {
+            if let Some(one) = held.iter_mut().find(|one| one.id == agent.id) {
+                one.name = named;
+            }
+            let _ = shared.keep(&held);
+        }
+    }
     // An Agent's settings are shown with what is the server's among them:
     // the models there are to choose from, and the ones in force.
     if of_settings && method == axum::http::Method::GET && answer.status().is_success() {
@@ -813,6 +1101,13 @@ async fn carry(
                 }
             }
         }
+        // And what this Agent may use in a day, with what it used today.
+        if let Some(all) = told["settings"].as_array_mut() {
+            let limit = agent.daily_tokens.map_or("off".to_owned(), |limit| limit.to_string());
+            all.retain(|one| one["key"] != "daily_limit");
+            all.push(json!({ "key": "daily_limit", "value": limit, "choices": DAILY_LIMITS }));
+        }
+        told["spent_today"] = json!(shared.spent_today(&agent.id));
         return Json(told).into_response();
     }
     // What an Agent answers is shown under the server's own name, where a
@@ -866,6 +1161,178 @@ async fn carry(
         .unwrap_or_else(|_| refused(StatusCode::BAD_GATEWAY, "its answer could not be carried"))
 }
 
+/// The Agent that asks, known by what it shows: one of the server's own.
+fn agent_asking(shared: &Shared, headers: &HeaderMap) -> Option<Held> {
+    let shown = headers.get("x-orbite-agent").and_then(|shown| shown.to_str().ok())?;
+    // Compared as what they hash to: how long it takes says nothing.
+    let shown = crate::interface::hashed(shown);
+    shared.agents().ok()?.into_iter().find(|agent| crate::interface::hashed(&agent.token) == shown)
+}
+
+/// How many words one Agent passes to others in an hour, at the most: two
+/// Agents answering each other without end stop here.
+const WORDS_AN_HOUR: usize = 12;
+
+/// How many recordings one Agent has written down in an hour, at the most.
+const RECORDINGS_AN_HOUR: usize = 40;
+
+/// The longest word one Agent passes to another.
+const WORD_AT_MOST: usize = 4000;
+
+/// Where the Agent `id` is reached, asked of the engine without holding
+/// anything else up.
+async fn reached(shared: &Arc<Shared>, id: &str) -> Result<String, String> {
+    let (engine, id) = (shared.clone(), id.to_owned());
+    tokio::task::spawn_blocking(move || engine.engine.reached_at(&id))
+        .await
+        .unwrap_or_else(|_| Err("the engine could not be asked".into()))
+}
+
+/// Lets through to the Agents' door only what one of the server's own
+/// Agents asks: whoever else knocks is turned away before it is listened to.
+async fn by_an_agent_only(
+    State(shared): State<Arc<Shared>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if agent_asking(&shared, request.headers()).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not an agent of this server");
+    }
+    next.run(request).await
+}
+
+/// What an Agent asks of the server beside thinking: who the other Agents
+/// are, to pass one of them a word, to have a recording written down.
+/// Nothing here lets a device in or turns one away: that is asked by a
+/// device already let in, of the server itself, and never by an Agent,
+/// which something it read may have misled.
+async fn asked_by_an_agent(
+    State(shared): State<Arc<Shared>>,
+    Named(what): Named<String>,
+    headers: HeaderMap,
+    Json(sent): Json<Value>,
+) -> Response {
+    let Some(asking) = agent_asking(&shared, &headers) else {
+        return refused(StatusCode::UNAUTHORIZED, "not an agent of this server");
+    };
+    match what.as_str() {
+        // By the names the server knows them by, which only their Owner
+        // changes: an Agent does not pass for another by calling itself so.
+        "agents" => {
+            let names: Vec<String> = shared
+                .agents()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|other| other.id != asking.id)
+                .map(|other| other.name)
+                .collect();
+            Json(json!({ "agents": names })).into_response()
+        }
+        "tell" => {
+            let (to, text) = (
+                sent["to"].as_str().unwrap_or_default().trim().to_lowercase(),
+                sent["text"].as_str().unwrap_or_default().trim(),
+            );
+            if text.is_empty() || text.chars().count() > WORD_AT_MOST {
+                return refused(StatusCode::BAD_REQUEST, "a word of a few lines, no more");
+            }
+            let found = shared
+                .agents()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|other| other.id != asking.id && other.name.to_lowercase() == to);
+            let Some(other) = found else {
+                return refused(StatusCode::NOT_FOUND, "no other agent is called that");
+            };
+            {
+                let mut told = shared.told.lock().expect("not poisoned");
+                let lately = told.entry(asking.id.clone()).or_default();
+                lately.retain(|when| when.elapsed() < std::time::Duration::from_secs(3600));
+                if lately.len() >= WORDS_AN_HOUR {
+                    return refused(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "too many words passed to other agents this hour: wait, or tell your Owner",
+                    );
+                }
+                lately.push(std::time::Instant::now());
+            }
+            let Ok(at) = reached(&shared, &other.id).await else {
+                return refused(StatusCode::BAD_GATEWAY, "that agent is not running");
+            };
+            let passed = shared
+                .http
+                .post(format!("{at}/api/from-agent"))
+                .header("x-orbite-server", &other.token)
+                .json(&json!({ "from": asking.name, "text": text }))
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await;
+            match passed {
+                Ok(taken) if taken.status().is_success() => {
+                    Json(json!({ "passed": true })).into_response()
+                }
+                _ => refused(StatusCode::BAD_GATEWAY, "that agent did not take it"),
+            }
+        }
+        // What the Owner said aloud to this Agent, written down with the
+        // keys the server holds.
+        "hear" => {
+            use base64::Engine as _;
+            // Not without end, and not once the day's limit is used up:
+            // writing down is paid for with the Owner's key too.
+            {
+                let mut heard = shared.heard.lock().expect("not poisoned");
+                let lately = heard.entry(asking.id.clone()).or_default();
+                lately.retain(|when| when.elapsed() < std::time::Duration::from_secs(3600));
+                let spent = asking
+                    .daily_tokens
+                    .is_some_and(|limit| shared.spent_today(&asking.id) >= limit);
+                if lately.len() >= RECORDINGS_AN_HOUR || spent {
+                    return refused(StatusCode::TOO_MANY_REQUESTS, "too many recordings for now");
+                }
+                lately.push(std::time::Instant::now());
+            }
+            let Some(hears) = shared.hears.lock().expect("not poisoned").clone() else {
+                return refused(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "none of your Owner's AI providers writes recordings down",
+                );
+            };
+            let ending: String = sent["name"]
+                .as_str()
+                .unwrap_or_default()
+                .rsplit('.')
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .filter(char::is_ascii_alphanumeric)
+                .take(5)
+                .collect();
+            let content = sent["content"]
+                .as_str()
+                .and_then(|content| base64::engine::general_purpose::STANDARD.decode(content).ok());
+            let (Some(content), Ok(folder)) = (content, tempfile::tempdir()) else {
+                return refused(StatusCode::BAD_REQUEST, "not a recording");
+            };
+            // Under a name of the server's own: nothing an Agent says is a path here.
+            let recording = folder.path().join(format!("recording.{ending}"));
+            if std::fs::write(&recording, content).is_err() {
+                return refused(StatusCode::INTERNAL_SERVER_ERROR, "it could not be put down");
+            }
+            match hears(recording).await {
+                Ok(text) => Json(json!({ "text": text })).into_response(),
+                // Why not is the server's to know: what a Provider says of
+                // a key may say the key.
+                Err(why) => {
+                    eprintln!("A recording could not be written down for {}: {why}", asking.name);
+                    refused(StatusCode::UNPROCESSABLE_ENTITY, "it could not be written down")
+                }
+            }
+        }
+        _ => refused(StatusCode::NOT_FOUND, "nothing an agent asks"),
+    }
+}
+
 /// Thinks for an Agent: asked by one of the server's own Agents, which
 /// shows what it was given, the Owner's Providers are asked with the keys
 /// the server holds, and what it cost is counted for all of them.
@@ -874,22 +1341,22 @@ async fn think(
     headers: HeaderMap,
     Json(sent): Json<Value>,
 ) -> Response {
-    let shown = headers.get("x-orbite-agent").and_then(|shown| shown.to_str().ok());
-    let asking = shown.and_then(|shown| {
-        // Compared as what they hash to: how long it takes says nothing.
-        let shown = crate::interface::hashed(shown);
-        shared
-            .agents()
-            .ok()?
-            .into_iter()
-            .find(|agent| crate::interface::hashed(&agent.token) == shown)
-    });
-    let Some(asking) = asking else {
+    let Some(asking) = agent_asking(&shared, &headers) else {
         return refused(StatusCode::UNAUTHORIZED, "not an agent of this server");
     };
     let (Some(thinks), Some(asked)) = (&shared.thinks, crate::Asked::read(&sent)) else {
         return refused(StatusCode::BAD_REQUEST, "not what an agent asks");
     };
+    // Nor more in a day than its Owner allows it.
+    if let Some(limit) = asking.daily_tokens
+        && shared.spent_today(&asking.id) >= limit
+    {
+        return Json(crate::served::written(&Err(crate::ProviderError::Busy {
+            reason: format!("this agent {}", crate::served::SPENT_FOR_TODAY),
+            retry_after: Some(std::time::Duration::from_secs(3600)),
+        })))
+        .into_response();
+    }
     // One Agent does not take all of the server's thinking for itself.
     {
         let mut thinking = shared.thinking.lock().expect("not poisoned");
@@ -903,9 +1370,22 @@ async fn think(
         }
         *under_way += 1;
     }
+    // Counted down however this ends: an Agent that stopped waiting for a
+    // thought is not left with it forever under way.
+    struct UnderWay(Arc<Shared>, String);
+    impl Drop for UnderWay {
+        fn drop(&mut self) {
+            if let Some(under_way) = self.0.thinking.lock().expect("not poisoned").get_mut(&self.1)
+            {
+                *under_way = under_way.saturating_sub(1);
+            }
+        }
+    }
+    let counted = UnderWay(shared.clone(), asking.id.clone());
     let answered = thinks(asked).await;
-    if let Some(under_way) = shared.thinking.lock().expect("not poisoned").get_mut(&asking.id) {
-        *under_way = under_way.saturating_sub(1);
+    drop(counted);
+    if let Ok(crate::Reply { usage: Some(usage), .. }) = &answered {
+        shared.count(&asking.id, usage.input + usage.output);
     }
     if let Ok(crate::Reply { usage: Some(usage), .. }) = &answered
         && let Ok(store) = crate::Store::open(shared.home.join("orbite.db"))

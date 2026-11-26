@@ -50,6 +50,9 @@ Read from the environment:
 type Failure = Box<dyn std::error::Error>;
 
 fn main() -> ExitCode {
+    // What a server gave this Agent to be known by is taken out of the
+    // surroundings before anything is started that would inherit it.
+    orbite::keep_what_the_server_gave();
     // The service is let listen on the ports the Internet expects, and
     // nothing it starts is: the right is kept from passing on, before any
     // other thread exists to pass it.
@@ -185,7 +188,7 @@ async fn adopt(home: &std::path::Path) -> Result<(), Failure> {
                     which a server does not serve yet: it is left as it is."
             .into());
     }
-    let docker = orbite::Docker::of_this_version();
+    let docker = docker();
     docker.answers().map_err(|why| {
         format!(
             "Each agent runs in a container of its own, which takes Docker, and Docker does not \
@@ -416,7 +419,7 @@ fn settle(home: &std::path::Path) -> Result<(), Failure> {
     // Never for an Agent in its container, and clearing only where the
     // Agents are written down: what is cleared is in their containers.
     let held = home.join("agents.json").exists();
-    if setting("ORBITE_SERVER_TOKEN").is_some() {
+    if orbite::server_token().is_some() {
         return Err("This is an agent's own folder: there is nothing to settle here.".into());
     }
     match env::args().nth(3).as_deref() {
@@ -432,6 +435,15 @@ fn settle(home: &std::path::Path) -> Result<(), Failure> {
         }
         Some("clear") => Ok(orbite::as_the_server(home)?),
         _ => Err("Usage: orbite server run | pair | adopt".into()),
+    }
+}
+
+/// Docker, running Agents from the image built on this machine from this
+/// very program, unless another one is named.
+fn docker() -> orbite::Docker {
+    match setting("ORBITE_AGENT_IMAGE") {
+        Some(image) => orbite::Docker { image, built_here: false },
+        None => orbite::Docker::of_this_version(),
     }
 }
 
@@ -472,12 +484,7 @@ async fn serve(home: &std::path::Path) -> Result<(), Failure> {
             thinking.reply(asked.as_request()).await
         })
     });
-    // The Agents' image is built on this machine from this very
-    // program, unless another one is named.
-    let engine = match setting("ORBITE_AGENT_IMAGE") {
-        Some(image) => orbite::Docker { image, built_here: false },
-        None => orbite::Docker::of_this_version(),
-    };
+    let engine = docker();
     let names = Config::load(&home)
         .ok()
         .and_then(|config| config.interface_reached_at)
@@ -485,6 +492,20 @@ async fn serve(home: &std::path::Path) -> Result<(), Failure> {
             Some(vec![reached.split("://").nth(1)?.split(['/', ':']).next()?.to_owned()])
         })
         .unwrap_or_default();
+    // What the Owner says aloud to any Agent is written down here too,
+    // with the keys the server holds.
+    // Only by a service a recording is sent to: what an Agent sends is not
+    // given to a program of this machine to read.
+    let hearing =
+        hearing_in(&home, &Config::load(&home)?)?.filter(orbite::Transcriber::sends_it_away);
+    let hears: Option<orbite::Hears> = hearing.map(|hearing| {
+        let hearing = std::sync::Arc::new(hearing);
+        let hears: orbite::Hears = std::sync::Arc::new(move |recording: PathBuf| {
+            let hearing = hearing.clone();
+            Box::pin(async move { hearing.written(&recording).await })
+        });
+        hears
+    });
     let serving = orbite::Server::serving(
         &home,
         address,
@@ -494,7 +515,8 @@ async fn serve(home: &std::path::Path) -> Result<(), Failure> {
         // Where the Agents find the server, from their containers.
         setting("ORBITE_SERVER_FOR_AGENTS").and_then(|port| port.parse().ok()).unwrap_or(8378),
     )
-    .await?;
+    .await?
+    .hearing_with(hears);
     println!("Serving at http://{}", serving.address());
     until_asked_to_stop(std::future::pending()).await;
     Ok(())
@@ -504,7 +526,7 @@ async fn run() -> Result<(), Failure> {
     let home = home()?;
     // An installation that became a server serves its Agents: each of
     // them runs in a container of its own, where it is told who holds it.
-    if home.join("agents.json").exists() && setting("ORBITE_SERVER_TOKEN").is_none() {
+    if home.join("agents.json").exists() && orbite::server_token().is_none() {
         return serve(&home).await;
     }
     // An Agent made by a server is called what its Owner said there.
@@ -810,28 +832,15 @@ fn thinking_with(
     Ok((provider, store))
 }
 
-fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
-    // What setup kept, unless the environment says otherwise.
-    let home = home()?;
-    let config = Config::load(&home)?;
-    // An Agent held by a server thinks through it: the server holds the
-    // keys, and counts what every Agent spends.
-    let (provider, store) = match (setting("ORBITE_SERVER_AT"), setting("ORBITE_SERVER_TOKEN")) {
-        (Some(at), Some(token)) => {
-            fs::create_dir_all(&home)
-                .map_err(|error| format!("Could not create {}: {error}", home.display()))?;
-            let store = Store::open(home.join("orbite.db"))
-                .map_err(|error| format!("Could not open the Agent's data: {error}"))?;
-            let served = Connected::Served(orbite::Served::at(at, token));
-            (Routed::through("server", served), store)
-        }
-        _ => thinking_with(&home, &config)?,
-    };
-    let secrets = Secrets::kept_in(&home);
+/// What writes down what the Owner says aloud in the installation kept in
+/// `home`: what they chose, or the first of their Providers that offers it
+/// and has a key. None when nothing there can.
+fn hearing_in(
+    home: &std::path::Path,
+    config: &Config,
+) -> Result<Option<orbite::Transcriber>, Failure> {
+    let secrets = Secrets::kept_in(home);
     let chosen = config.provider.clone();
-    let name = setting("ORBITE_PROVIDER")
-        .or(chosen.as_ref().map(|chosen| chosen.name.clone()))
-        .unwrap_or_else(|| "server".to_owned());
     let key_of = |choice: Option<&orbite::ProviderChoice>| -> Result<Option<String>, Failure> {
         let named = choice.and_then(|choice| choice.key.as_deref()).unwrap_or(PROVIDER_KEY);
         Ok(secrets.get(named)?)
@@ -840,35 +849,19 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         Some(key) => Some(key),
         None => secrets.get(PROVIDER_KEY)?,
     };
-    let address =
-        setting("ORBITE_BASE_URL").or(chosen.as_ref().and_then(|chosen| chosen.address.clone()));
-
-    let wake_ups: u32 = match setting("ORBITE_WAKE_UP_MINUTES") {
-        Some(minutes) => minutes.parse().map_err(|_| "ORBITE_WAKE_UP_MINUTES must be a number.")?,
-        None => 240,
-    };
-    let context: usize = match setting("ORBITE_CONTEXT_TOKENS") {
-        Some(tokens) => tokens.parse().map_err(|_| "ORBITE_CONTEXT_TOKENS must be a number.")?,
-        None => 60_000,
-    };
-    let mut agent = Agent::new(provider, store);
-    // What the Owner says aloud is written down by the first of their
-    // Providers that offers it and has a key.
     // Unless the Owner chose otherwise: the machine itself, or nothing.
     let own_way = config.transcription.clone().filter(|chosen| chosen.engine != "provider");
     if let Some(chosen) = &own_way {
-        match orbite::chosen_transcriber(&home, chosen) {
-            Ok(Some(transcriber)) => agent = agent.transcribing_with(transcriber),
-            Ok(None) => {}
+        return Ok(match orbite::chosen_transcriber(home, chosen) {
+            Ok(transcriber) => transcriber,
             // The Agent starts all the same, and says why it cannot hear.
             Err(why) => {
                 eprintln!("{why}");
-                agent = agent.transcribing_with(orbite::Transcriber::unable(why));
+                Some(orbite::Transcriber::unable(why))
             }
-        }
+        });
     }
-    let mut hears = own_way.is_some();
-    for listening in config.providers().into_iter().filter(|_| own_way.is_none()) {
+    for listening in config.providers() {
         let Some(model) = orbite::transcription_model(&listening.name) else { continue };
         // The first one's key may have been given in the environment.
         let is_first = chosen.as_ref().is_some_and(|first| first.name == listening.name);
@@ -880,15 +873,18 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         });
         if let Some(root) = root {
             let model = setting("ORBITE_TRANSCRIPTION_MODEL").unwrap_or_else(|| model.to_owned());
-            agent = agent.transcribing_with(orbite::Transcriber::new(root, key, model));
-            hears = true;
-            break;
+            return Ok(Some(orbite::Transcriber::new(root, key, model)));
         }
     }
     // Failing those, the Providers named in the environment: the usual one,
     // then the one to fall back on.
     let named_there = [
-        (Some(name.clone()), key.clone(), address.clone()),
+        (
+            setting("ORBITE_PROVIDER").or(chosen.as_ref().map(|chosen| chosen.name.clone())),
+            key.clone(),
+            setting("ORBITE_BASE_URL")
+                .or(chosen.as_ref().and_then(|chosen| chosen.address.clone())),
+        ),
         (
             setting("ORBITE_FALLBACK_PROVIDER"),
             setting("ORBITE_FALLBACK_API_KEY"),
@@ -896,9 +892,6 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         ),
     ];
     for (listening, key, address) in named_there {
-        if hears {
-            break;
-        }
         let (Some(listening), Some(key)) = (listening, key) else { continue };
         let Some(model) = orbite::transcription_model(&listening) else { continue };
         let root = address.or_else(|| {
@@ -907,9 +900,47 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         });
         if let Some(root) = root {
             let model = setting("ORBITE_TRANSCRIPTION_MODEL").unwrap_or_else(|| model.to_owned());
-            agent = agent.transcribing_with(orbite::Transcriber::new(root, key, model));
-            hears = true;
+            return Ok(Some(orbite::Transcriber::new(root, key, model)));
         }
+    }
+    Ok(None)
+}
+
+fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
+    // What setup kept, unless the environment says otherwise.
+    let home = home()?;
+    let config = Config::load(&home)?;
+    // An Agent held by a server thinks through it: the server holds the
+    // keys, and counts what every Agent spends.
+    let (provider, store) = match (orbite::server_at(), orbite::server_token()) {
+        (Some(at), Some(token)) => {
+            fs::create_dir_all(&home)
+                .map_err(|error| format!("Could not create {}: {error}", home.display()))?;
+            let store = Store::open(home.join("orbite.db"))
+                .map_err(|error| format!("Could not open the Agent's data: {error}"))?;
+            let served = Connected::Served(orbite::Served::at(at, token));
+            (Routed::through("server", served), store)
+        }
+        _ => thinking_with(&home, &config)?,
+    };
+    let wake_ups: u32 = match setting("ORBITE_WAKE_UP_MINUTES") {
+        Some(minutes) => minutes.parse().map_err(|_| "ORBITE_WAKE_UP_MINUTES must be a number.")?,
+        None => 240,
+    };
+    let context: usize = match setting("ORBITE_CONTEXT_TOKENS") {
+        Some(tokens) => tokens.parse().map_err(|_| "ORBITE_CONTEXT_TOKENS must be a number.")?,
+        None => 60_000,
+    };
+    let mut agent = Agent::new(provider, store);
+    // What the Owner says aloud is written down by what they chose, by
+    // the first of their Providers that offers it, or by the server that
+    // holds this Agent, which has the keys.
+    match hearing_in(&home, &config)? {
+        Some(transcriber) => agent = agent.transcribing_with(transcriber),
+        None if orbite::server_at().is_some() => {
+            agent = agent.transcribing_with(orbite::Transcriber::through_the_server());
+        }
+        None => {}
     }
     // The Agent has a Computer where the machine has what one is made of.
     if orbite::Computer::can_start() {
@@ -1322,8 +1353,33 @@ fn moving(out: bool) -> Result<(), Failure> {
     let Some(file) = env::args().nth(2).map(PathBuf::from) else {
         return Err("Usage: orbite export FILE | orbite restore FILE".into());
     };
+    // A server's Agents keep everything of their own in their containers:
+    // each is written to a file of its own, carried in the server's.
+    let beside = home.join("agents");
+    // An Agent's own folder is never a server's, whatever is written in it.
+    let held_in = |home: &std::path::Path| {
+        if orbite::server_token().is_some() { Vec::new() } else { orbite::held_in(home) }
+    };
     if out {
-        orbite::export(&home, &file)?;
+        let agents = held_in(&home);
+        let docker = docker();
+        if !agents.is_empty() {
+            docker.answers().map_err(|why| {
+                format!("Docker does not answer ({why}): the agents could not be saved.")
+            })?;
+            // Made, never taken over: what is already there is not ours.
+            fs::create_dir(&beside)?;
+        }
+        let saved = (|| -> Result<(), Failure> {
+            for agent in &agents {
+                docker.export_of(&agent.id, &beside)?;
+            }
+            Ok(orbite::export(&home, &file)?)
+        })();
+        if !agents.is_empty() {
+            let _ = fs::remove_dir_all(&beside);
+        }
+        saved?;
         println!(
             "Everything of the Agent is in {}. Keep that file to yourself: it holds its secrets and the \
              key that opens them.",
@@ -1331,10 +1387,81 @@ fn moving(out: bool) -> Result<(), Failure> {
         );
     } else {
         orbite::restore(&file, &home)?;
+        let agents = held_in(&home);
+        if !agents.is_empty() {
+            let docker = docker();
+            docker.answers().map_err(|why| {
+                format!(
+                    "This is a server that holds several agents, each in a container, and Docker \
+                     does not answer on this machine ({why}). Install it, then run this again on a \
+                     folder that is empty."
+                )
+            })?;
+            for agent in &agents {
+                let kept = beside.join(format!("{}.orbite", agent.id));
+                if !kept.is_file() {
+                    return Err(format!(
+                        "This file holds nothing of the agent {}: the server's own is back in {}, \
+                         its agents are not.",
+                        agent.name,
+                        home.display()
+                    )
+                    .into());
+                }
+                docker.restore_of(&agent.id, &kept)?;
+            }
+            let _ = fs::remove_dir_all(&beside);
+            println!(
+                "This is a server that holds {} agent(s), each in a container: the account Orbite \
+                 runs as is let to use Docker, which lets it do anything on this machine.",
+                agents.len()
+            );
+            ready_to_serve(&home)?;
+        }
         println!(
             "The Agent is back, in {}. Start it with: systemctl restart orbite",
             home.display()
         );
+    }
+    Ok(())
+}
+
+/// Lets the account that owns `home` ask Docker for its Agents'
+/// containers, and has the service wait for Docker at every start: what a
+/// server needs of the machine, when run as root.
+fn ready_to_serve(home: &std::path::Path) -> Result<(), Failure> {
+    use std::os::unix::fs::MetadataExt;
+    let owner = fs::metadata(home)?.uid();
+    // SAFETY: a plain system call.
+    if owner == 0 || unsafe { libc::geteuid() } != 0 {
+        return Ok(());
+    }
+    let run = |program: &str, asked: &[&str]| {
+        std::process::Command::new(orbite::system_program(program))
+            .args(asked)
+            .output()
+            .is_ok_and(|done| done.status.success())
+    };
+    let named = std::process::Command::new(orbite::system_program("id"))
+        .args(["-nu", &owner.to_string()])
+        .output()
+        .ok()
+        .map(|told| String::from_utf8_lossy(&told.stdout).trim().to_owned())
+        .unwrap_or_default();
+    if named.is_empty() || !run("usermod", &["-aG", "docker", &named]) {
+        return Err("The account Orbite runs as could not be let to use Docker.".into());
+    }
+    let waits = PathBuf::from("/etc/systemd/system/orbite.service.d/docker.conf");
+    if let Some(folder) = waits.parent()
+        && fs::create_dir_all(folder).is_ok()
+        && fs::write(
+            &waits,
+            "[Unit]\nAfter=docker.service\nWants=docker.service\n\n[Service]\n\
+             Environment=DOCKER_CONFIG=/nonexistent\n",
+        )
+        .is_ok()
+    {
+        run("systemctl", &["daemon-reload"]);
     }
     Ok(())
 }
@@ -1384,7 +1511,7 @@ fn uninstall() -> Result<(), Failure> {
     systemctl(&["disable", "--now", "orbite-update.timer"]);
     // The Agents a server held go with it: their containers, which would
     // otherwise run on, and what they kept unless it is asked to be kept.
-    let docker = orbite::Docker::of_this_version();
+    let docker = docker();
     for agent in orbite::held_in(&data) {
         if let Err(why) = docker.stop(&agent.id, !keep) {
             eprintln!("The container of {} could not be removed: {why}", agent.name);

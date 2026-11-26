@@ -452,3 +452,211 @@ async fn the_model_is_the_servers_and_is_chosen_from_the_settings_of_any_agent()
     assert_eq!(elsewhere.status(), 403);
     assert_eq!(orbite::Config::load(home.path()).unwrap().provider.unwrap().model, "another-model");
 }
+
+#[tokio::test]
+async fn an_agent_asks_its_server_for_what_is_the_servers_and_passes_a_word_to_another() {
+    // Two Agents stand behind one stand-in, which says who it is and takes
+    // what is passed to it.
+    let agent = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "agent": "Lune" })))
+        .mount(&agent)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/from-agent"))
+        .and(header_exists("x-orbite-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "taken": true })))
+        .mount(&agent)
+        .await;
+    let home = tempfile::tempdir().unwrap();
+    let asker = orbite::Held::new("Nova", &[]).unwrap();
+    let other = orbite::Held::new("Lune", std::slice::from_ref(&asker)).unwrap();
+    orbite::keep_agents(home.path(), &[asker.clone(), other.clone()]).unwrap();
+    let thinks: orbite::Thinks = Arc::new(|_| {
+        Box::pin(async {
+            Ok(orbite::Reply {
+                text: "thought".into(),
+                actions: Vec::new(),
+                kept: None,
+                usage: Some(orbite::Usage {
+                    by: "anthropic".into(),
+                    model: "a-model".into(),
+                    input: 400_000,
+                    cached: 0,
+                    output: 200_000,
+                }),
+            })
+        })
+    });
+    let hears: orbite::Hears = Arc::new(|recording: std::path::PathBuf| {
+        Box::pin(async move {
+            Ok(format!(
+                "heard {} bytes",
+                std::fs::read(recording).map_err(|e| e.to_string())?.len()
+            ))
+        })
+    });
+    let engine = pretending(agent.uri());
+    let server = orbite::Server::serving(
+        home.path(),
+        "127.0.0.1:0".parse().unwrap(),
+        engine.clone(),
+        Vec::new(),
+        Some(thinks),
+        0,
+    )
+    .await
+    .unwrap()
+    .hearing_with(Some(hears));
+    let mut door = String::new();
+    for _ in 0..100 {
+        door = engine.server_at.lock().unwrap().clone();
+        if !door.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let http = reqwest::Client::new();
+    let ask = |what: &'static str, token: String, given: Value| {
+        let (http, door) = (http.clone(), door.clone());
+        async move {
+            http.post(format!("{door}/internal/ask/{what}"))
+                .header("x-orbite-agent", token)
+                .json(&given)
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+
+    // Whoever is not one of the server's Agents is told nothing.
+    assert_eq!(ask("agents", "x".repeat(32), json!(null)).await.status(), 401);
+    // No Agent is given a code that lets a device in, nor the devices, nor
+    // turns one away: something it read could have it hand them over.
+    for never in ["pair", "devices", "turn-away"] {
+        assert_eq!(ask(never, asker.token().into(), json!(null)).await.status(), 404, "{never}");
+    }
+    // A device that is let in asks the server itself, and shows the code.
+    let first = orbite::pairing_code(home.path()).unwrap();
+    let pair = |code: String, name: &'static str| {
+        let (http, at) = (http.clone(), format!("http://{}/api/pair", server.address()));
+        async move {
+            http.post(at)
+                .header("x-orbite", "1")
+                .json(&json!({ "code": code, "name": name }))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    let paired = pair(first, "phone").await;
+    let kept =
+        paired.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+    let devices_at = format!("http://{}/api/devices", server.address());
+    assert_eq!(http.post(&devices_at).header("x-orbite", "1").send().await.unwrap().status(), 401);
+    // Not for another site's page either, which has the browser send what it keeps.
+    assert_eq!(http.post(&devices_at).header("cookie", &kept).send().await.unwrap().status(), 401);
+    let given: Value = http
+        .post(&devices_at)
+        .header("cookie", &kept)
+        .header("x-orbite", "1")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let code = given["code"].as_str().unwrap().to_owned();
+    assert_eq!(given["link"], format!("http://{}/#{code}", server.address()));
+    assert!(given["picture"].as_str().unwrap().contains("<svg"));
+    assert_eq!(pair(code, "laptop").await.status(), 200);
+    let listed: Value =
+        http.get(&devices_at).header("cookie", &kept).send().await.unwrap().json().await.unwrap();
+    let names: Vec<(&str, bool)> = listed["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|device| (device["name"].as_str().unwrap(), device["this"].as_bool().unwrap()))
+        .collect();
+    assert!(names.contains(&("phone", true)) && names.contains(&("laptop", false)), "{names:?}");
+    let gone = http
+        .delete(format!("{devices_at}/laptop"))
+        .header("cookie", &kept)
+        .header("x-orbite", "1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.json::<Value>().await.unwrap()["gone"], true);
+
+    // Who else is there, by the names the server knows them by; and a word passed to one.
+    let others: Value =
+        ask("agents", asker.token().into(), json!(null)).await.json().await.unwrap();
+    assert_eq!(others["agents"], json!(["Lune"]));
+    let word = json!({ "to": "lune", "text": "When does the bakery close?" });
+    assert_eq!(ask("tell", asker.token().into(), word).await.status(), 200);
+    let passed: Vec<_> = agent
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path() == "/api/from-agent")
+        .collect();
+    assert_eq!(passed.len(), 1);
+    assert_eq!(passed[0].headers["x-orbite-server"].to_str().unwrap(), other.token());
+    // Not as a device: it comes from the server itself.
+    assert!(passed[0].headers.get("x-orbite-device").is_none());
+    let carried: Value = serde_json::from_slice(&passed[0].body).unwrap();
+    assert_eq!(carried["text"], "When does the bakery close?");
+    // Said to come from who the server knows it is, whatever it calls itself.
+    assert_eq!(carried["from"], "Nova");
+    // To nobody, or nothing, it is not passed.
+    let nobody = json!({ "to": "Nobody", "text": "hello" });
+    assert_eq!(ask("tell", asker.token().into(), nobody).await.status(), 404);
+    let nothing = json!({ "to": "Lune", "text": " " });
+    assert_eq!(ask("tell", asker.token().into(), nothing).await.status(), 400);
+
+    // What is said aloud is written down by the server.
+    let heard: Value = ask(
+        "hear",
+        asker.token().into(),
+        json!({ "name": "../../voice.ogg", "content": "aGVsbG8=" }),
+    )
+    .await
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(heard["text"], "heard 5 bytes");
+
+    // A limit for one Agent's day, set from its settings, holds for it alone.
+    let settings = format!("http://{}/a/{}/api/settings", server.address(), asker.id);
+    let limited = http
+        .post(&settings)
+        .header("cookie", &kept)
+        .header("x-orbite", "1")
+        .json(&json!({ "key": "daily_limit", "value": "500000" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(limited.status(), 200);
+    let thinking = |token: String| {
+        let door = door.clone();
+        async move {
+            use orbite::Provider;
+            let conversation = [orbite::Message::from_owner("Hello")];
+            let request = orbite::Request {
+                instructions: "be brief",
+                conversation: &conversation,
+                actions: &[],
+                images: &[],
+                light: false,
+            };
+            orbite::Served::at(door, token).reply(request).await
+        }
+    };
+    // Its first thought takes it past the limit; the next is refused.
+    assert_eq!(thinking(asker.token().into()).await.unwrap().text, "thought");
+    let refused = thinking(asker.token().into()).await.unwrap_err();
+    assert!(format!("{refused:?}").contains("allows it for today"), "{refused:?}");
+    assert_eq!(thinking(other.token().into()).await.unwrap().text, "thought");
+}

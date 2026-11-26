@@ -305,3 +305,9 @@ body:not(.desk) #panel .shut { display: grid; place-items: center; position: abs
 #side .new svg { flex: none; width: 34px; }
 #side input { margin: 4px 6px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--ground); width: calc(100% - 12px); }
 #panel .go.danger strong { color: var(--warn); }
+#panel button.plain { padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--ground); font-size: 13px; font-weight: 600; }
+#panel .code { display: flex; align-items: center; gap: 18px; padding: 14px 0 18px; border-top: 1px solid var(--line); }
+#panel .code img { width: 150px; height: 150px; border-radius: 12px; background: #fff; padding: 6px; }
+#panel .code > div { display: grid; gap: 6px; min-width: 0; }
+#panel .code strong { font-size: 26px; letter-spacing: 0.08em; font-variant-numeric: tabular-nums; }
+#panel .code small { overflow-wrap: anywhere; }
