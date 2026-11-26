@@ -163,7 +163,7 @@ fn wrong(error: rusqlite::Error) -> io::Error {
 
 /// What the interface keeps in `home`: the devices let in, the codes that
 /// let one in, and what was shown, so that a device finds it again.
-fn kept_in(home: &Path) -> io::Result<rusqlite::Connection> {
+pub(crate) fn kept_in(home: &Path) -> io::Result<rusqlite::Connection> {
     std::fs::create_dir_all(home)?;
     let file = home.join("interface.db");
     let database = rusqlite::Connection::open(&file).map_err(wrong)?;
@@ -423,28 +423,57 @@ impl Shared {
         kept
     }
 
-    /// The name of the device that sent `headers`, when it was let in.
+    /// The name of the device that sent `headers`, when it was let in:
+    /// by this interface itself, or by the server in front of it.
     fn device(&self, headers: &HeaderMap) -> Option<String> {
-        let cookies = headers.get(header::COOKIE)?.to_str().ok()?;
-        let token = cookies
-            .split(';')
-            .filter_map(|cookie| cookie.trim().strip_prefix("orbite_device="))
-            .next()?;
-        let database = self.database.lock().expect("not poisoned");
-        let name: String = database
-            .query_row("SELECT name FROM devices WHERE token = ?1", [hashed(token)], |row| {
-                row.get(0)
-            })
-            .ok()?;
-        let _ = database
-            .execute("UPDATE devices SET seen = ?1 WHERE token = ?2", (now(), hashed(token)));
-        Some(name)
+        sent_by_the_server(headers).or_else(|| device_in(&self.database, headers))
     }
+}
+
+/// The device a request comes from, when the server in front of this Agent
+/// carried it: the server lets devices in, and says which one this is. It
+/// is known by what it was given when this Agent's container was made.
+pub(crate) fn sent_by_the_server(headers: &HeaderMap) -> Option<String> {
+    static GIVEN: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let given = GIVEN
+        .get_or_init(|| std::env::var("ORBITE_SERVER_TOKEN").ok().filter(|token| token.len() >= 32))
+        .as_ref()?;
+    let shown = headers.get("x-orbite-server")?.to_str().ok()?;
+    // Compared as what they hash to: how long it takes says nothing of either.
+    if hashed(shown) != hashed(given) {
+        return None;
+    }
+    let named = headers.get("x-orbite-device").and_then(|name| name.to_str().ok());
+    Some(named.filter(|name| !name.is_empty()).unwrap_or("device").chars().take(60).collect())
+}
+
+/// The name of the device that sent `headers`, when `database` knows it.
+pub(crate) fn device_in(
+    database: &Mutex<rusqlite::Connection>,
+    headers: &HeaderMap,
+) -> Option<String> {
+    let cookies = headers.get(header::COOKIE)?.to_str().ok()?;
+    let token = cookies
+        .split(';')
+        .filter_map(|cookie| cookie.trim().strip_prefix("orbite_device="))
+        .next()?;
+    let database = database.lock().expect("not poisoned");
+    let name: String = database
+        .query_row("SELECT name FROM devices WHERE token = ?1", [hashed(token)], |row| row.get(0))
+        .ok()?;
+    let _ =
+        database.execute("UPDATE devices SET seen = ?1 WHERE token = ?2", (now(), hashed(token)));
+    Some(name)
 }
 
 impl Shared {
     /// True while the device that sent `headers` is let in.
     fn is_let_in(&self, headers: &HeaderMap) -> bool {
+        // The server answers for the devices it carries: it stops carrying
+        // one it turned away.
+        if sent_by_the_server(headers).is_some() {
+            return true;
+        }
         let token = headers.get(header::COOKIE).and_then(|cookies| cookies.to_str().ok()).and_then(
             |cookies| {
                 cookies
@@ -513,7 +542,7 @@ async fn asked_by_its_name(
 
 /// True when a request that changes something comes from the interface's
 /// own page: another site a browser has open cannot send it.
-fn from_the_page(headers: &HeaderMap, names: &[String]) -> bool {
+pub(crate) fn from_the_page(headers: &HeaderMap, names: &[String]) -> bool {
     let own = headers.get("x-orbite").is_some();
     // The place the browser asked for: as it reached Orbite, or one of the
     // names Orbite is served under encrypted, which no request can make up.
@@ -532,7 +561,7 @@ fn from_the_page(headers: &HeaderMap, names: &[String]) -> bool {
     own && same_place
 }
 
-fn refused(status: StatusCode, why: &str) -> Response {
+pub(crate) fn refused(status: StatusCode, why: &str) -> Response {
     (status, Json(json!({ "error": why }))).into_response()
 }
 
@@ -544,6 +573,26 @@ async fn pair(
     if !from_the_page(&headers, &shared.names) {
         return refused(StatusCode::FORBIDDEN, "not from the interface");
     }
+    let secure = shared.encrypted || came_encrypted(&headers);
+    let_in(&shared.database, &sent, secure).await
+}
+
+/// True when what carried a request to Orbite says it came encrypted.
+pub(crate) fn came_encrypted(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|proto| proto.to_str().ok())
+        .is_some_and(|proto| proto == "https")
+}
+
+/// Lets a device in with the code it sends, and gives it what it will be
+/// known by from then on. Shared by an Agent's own interface and by the
+/// server that stands in front of several.
+pub(crate) async fn let_in(
+    database: &Mutex<rusqlite::Connection>,
+    sent: &Value,
+    secure: bool,
+) -> Response {
     let code: String = sent["code"]
         .as_str()
         .unwrap_or_default()
@@ -571,7 +620,7 @@ async fn pair(
         return refused(StatusCode::INTERNAL_SERVER_ERROR, "no token could be made");
     };
     let let_in = {
-        let database = shared.database.lock().expect("not poisoned");
+        let database = database.lock().expect("not poisoned");
         // The right code is let in whatever was tried before it: a
         // stranger who guesses at random must not be able to keep the
         // Owner out. What stops guessing is how many codes there are.
@@ -606,11 +655,6 @@ async fn pair(
         return refused(StatusCode::UNAUTHORIZED, "wrong code");
     }
     // Sent back by the browser to this place only, and never read by a page.
-    let secure = shared.encrypted
-        || headers
-            .get("x-forwarded-proto")
-            .and_then(|proto| proto.to_str().ok())
-            .is_some_and(|proto| proto == "https");
     let cookie = format!(
         "orbite_device={token}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict{}",
         if secure { "; Secure" } else { "" }

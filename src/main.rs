@@ -115,6 +115,7 @@ async fn asked() -> ExitCode {
         Some("connections") => connections(),
         Some("interface") => interface(reach),
         Some("pair") => pair(),
+        Some("server") => server().await,
         Some("devices") => devices(),
         Some("desk") => desk(),
         Some("transcription") => {
@@ -147,8 +148,55 @@ async fn asked() -> ExitCode {
     std::process::exit(code)
 }
 
+/// The server that holds several Agents (ADR 0022): `orbite server run`
+/// serves it, `orbite server pair` shows a code that lets a device in.
+async fn server() -> Result<(), Failure> {
+    let home = home()?;
+    match env::args().nth(2).as_deref() {
+        Some("pair") => {
+            println!("{}", orbite::pairing_code(&home)?);
+            Ok(())
+        }
+        Some("run") => {
+            let address = setting("ORBITE_SERVER").unwrap_or_else(|| DEFAULT_INTERFACE.to_owned());
+            let address = address.parse().map_err(|_| format!("{address} is not an address."))?;
+            // Who every Agent thinks with is the server's to say, and passed on to each.
+            let passed_on =
+                ["ORBITE_PROVIDER", "ORBITE_MODEL", "ORBITE_API_KEY", "ORBITE_BASE_URL"]
+                    .into_iter()
+                    .filter_map(|name| Some((name.to_owned(), setting(name)?)))
+                    .collect();
+            let image = setting("ORBITE_AGENT_IMAGE").unwrap_or_else(|| {
+                format!("ghcr.io/zeffut/orbite-agent:{}", env!("CARGO_PKG_VERSION"))
+            });
+            let names = Config::load(&home)
+                .ok()
+                .and_then(|config| config.interface_reached_at)
+                .and_then(|reached| {
+                    Some(vec![reached.split("://").nth(1)?.split(['/', ':']).next()?.to_owned()])
+                })
+                .unwrap_or_default();
+            let serving =
+                orbite::Server::serving(&home, address, orbite::Docker { image, passed_on }, names)
+                    .await?;
+            println!("Serving at http://{}", serving.address());
+            until_asked_to_stop(std::future::pending()).await;
+            Ok(())
+        }
+        _ => Err("Usage: orbite server run | pair".into()),
+    }
+}
+
 async fn run() -> Result<(), Failure> {
     let home = home()?;
+    // An Agent made by a server is called what its Owner said there.
+    if let Some(named) = setting("ORBITE_AGENT_NAME")
+        && let Ok(mut config) = Config::load(&home)
+        && config.agent_name.is_none()
+    {
+        config.agent_name = Some(named);
+        let _ = config.save(&home);
+    }
     let config = Config::load(&home)?;
     let language = Language::of(config.language.as_deref());
     // Telegram, when a bot was set up and an account linked.
