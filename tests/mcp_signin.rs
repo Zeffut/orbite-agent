@@ -885,3 +885,99 @@ async fn a_service_is_connected_with_a_touch_and_the_sign_in_ends_on_the_agents_
     // And it is among the services the Agent knows from its next start.
     assert!(std::fs::read_to_string(home.path().join("mcp.json")).unwrap().contains("notes"));
 }
+
+#[tokio::test]
+async fn asked_for_in_the_conversation_a_sign_in_opens_on_the_owners_device_with_nothing_to_copy() {
+    use orbite::Channel;
+    let challenge = Arc::new(Mutex::new(String::new()));
+    let server = service(challenge.clone()).await;
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({ "interface": "127.0.0.1:8377", "interface_reached_at": "https://agent.example.ts.net:8377" })
+            .to_string(),
+    )
+    .unwrap();
+    let address: &'static str = Box::leak(format!("{}/mcp", server.uri()).into_boxed_str());
+    let offered = [orbite::Connector {
+        name: "notes",
+        label: "Notes",
+        address,
+        english: "Find your notes",
+        french: "Retrouver tes notes",
+    }];
+    let mut interface = orbite::Interface::serving_with(
+        home.path(),
+        "127.0.0.1:0".parse().unwrap(),
+        "en",
+        &offered,
+    )
+    .await
+    .unwrap();
+    let at = format!("http://{}", interface.address());
+    let http = reqwest::Client::new();
+    let code = orbite::pairing_code(home.path()).unwrap();
+    let paired = http
+        .post(format!("{at}/api/pair"))
+        .header("x-orbite", "1")
+        .json(&json!({ "code": code, "name": "phone" }))
+        .send()
+        .await
+        .unwrap();
+    let kept =
+        paired.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+    // The device is listening, as an app left open is.
+    let mut listening =
+        http.get(format!("{at}/api/events")).header("cookie", &kept).send().await.unwrap();
+
+    // What the Agent does when its Owner says: connect yourself to my notes.
+    assert_eq!(interface.sign_in("notes").await, Some(Ok("Notes".to_owned())));
+    // A service nobody named is not begun.
+    assert!(matches!(interface.sign_in("unheard-of").await, Some(Err(_))));
+
+    // The device is told where to sign in, and opens it.
+    let mut told = String::new();
+    while !told.contains("\"sign-in\"") {
+        let more = tokio::time::timeout(std::time::Duration::from_secs(5), listening.chunk())
+            .await
+            .expect("the device was told nothing")
+            .unwrap()
+            .expect("the stream ended");
+        told.push_str(&String::from_utf8_lossy(&more));
+    }
+    let event: Value = told
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .filter_map(|body| serde_json::from_str::<Value>(body.trim()).ok())
+        .find(|event| event["kind"] == "sign-in")
+        .unwrap();
+    assert_eq!(event["label"], "Notes");
+    let link: std::collections::HashMap<String, String> =
+        url::Url::parse(event["link"].as_str().unwrap())
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+    // It ends on the Agent's own page: nothing is copied back by hand.
+    assert_eq!(link["redirect_uri"], "https://agent.example.ts.net:8377/signed-in");
+    *challenge.lock().unwrap() = link["code_challenge"].clone();
+
+    let back = http
+        .get(format!("{at}/signed-in?code=the-code&state={}&iss={}", link["state"], server.uri()))
+        .send()
+        .await
+        .unwrap();
+    assert!(back.text().await.unwrap().contains("Notes is connected."));
+    // The Agent is told, for when it is back: it says so and carries on.
+    let noticed: Vec<String> = std::fs::read_dir(home.path().join("notices"))
+        .unwrap()
+        .flatten()
+        .filter_map(|file| std::fs::read_to_string(file.path()).ok())
+        .collect();
+    assert!(
+        noticed
+            .iter()
+            .any(|notice| notice.contains("signed in to Notes") && notice.contains("carry on")),
+        "{noticed:?}"
+    );
+}

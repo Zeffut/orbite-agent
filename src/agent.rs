@@ -483,7 +483,7 @@ impl<P: Provider + 'static> Agent<P> {
         // with: connected, or the link to sign in to it.
         if let Ok(Some(name)) = self.store.setting("connect_after_restart") {
             let _ = self.store.set_setting("connect_after_restart", None);
-            let said = self.sign_in_to_connector(&name).await;
+            let said = self.sign_in_on(channel, &name).await;
             if channel.send(&said).await.is_err() {
                 return;
             }
@@ -1030,7 +1030,7 @@ impl<P: Provider + 'static> Agent<P> {
                 continue;
             }
             if let Some(name) = text.trim().strip_prefix("/mcp connect ") {
-                let said = self.sign_in_to_connector(name.trim()).await;
+                let said = self.sign_in_on(channel, name.trim()).await;
                 if channel.send(&said).await.is_err() {
                     return;
                 }
@@ -2002,8 +2002,12 @@ fn permission_specs() -> Vec<ActionSpec> {
         spec(
             "command",
             "Does what your Owner asks in plain words about connectors, secrets or settings, as \
-             one of Orbite's commands. Orbite then answers them itself: add nothing. /connect NAME ADDRESS adds a connector (notion: \
-             https://mcp.notion.com/mcp); /mcp connect NAME signs in to one; /connections [off|on|\
+             one of Orbite's commands. Orbite then answers them itself: add nothing. \
+             /mcp connect NAME connects a service by opening its sign-in on your Owner's device: \
+             never have them copy an address or run a command (notion, calendly, trello, linear, \
+             atlassian, clickup, airtable, stripe, paypal, sentry, supabase, cloudflare). \
+             /connect NAME ADDRESS adds another connector; \
+             /connections [off|on|\
              disconnect|remove NAME]; /secret NAME [VALUE]; \
              /settings [NAME VALUE] (secrets strict: none reach the AI); \
              /providers [add NAME MODEL|first NAME|remove NAME|limit NAME TOKENS|connect chatgpt] \
@@ -2532,6 +2536,36 @@ impl<P: Provider + 'static> Agent<P> {
 
     /// Connects the connector called `name`: the link to sign in to it when
     /// it wants that, or how it stands when it does not.
+    /// Has the Owner sign in to the connector called `name`: on their
+    /// device, where that can be opened, with nothing to copy; by a link
+    /// to follow otherwise. The text is what to tell them.
+    async fn sign_in_on(&self, channel: &mut impl Channel, name: &str) -> String {
+        // One that answers without being signed in to is simply connected.
+        if let Some(mcp) = self.host.mcp.clone() {
+            mcp.connect(false).await;
+            if let Some((_, Ok(tools))) =
+                mcp.status().0.into_iter().find(|(known, _)| known == name)
+            {
+                return format!(
+                    "🟢 **{name}**: {} ({tools} {})",
+                    self.language.say("connected", "connecté"),
+                    self.language.say("tools", "outils")
+                );
+            }
+        }
+        match channel.sign_in(name).await {
+            Some(Ok(label)) => format!(
+                "**{label}** : {}",
+                self.language.say(
+                    "sign in on your device, where it just opened. I take it from there.",
+                    "connecte-toi sur ton appareil, la page vient de s'ouvrir. Je m'occupe du reste."
+                )
+            ),
+            Some(Err(problem)) => format!("🔴 **{name}**: {problem}."),
+            None => self.sign_in_to_connector(name).await,
+        }
+    }
+
     async fn sign_in_to_connector(&self, name: &str) -> String {
         let Some(mcp) = self.host.mcp.clone() else {
             return self

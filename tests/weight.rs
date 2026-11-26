@@ -53,5 +53,7 @@ async fn a_turn_with_everything_on_offer_stays_light() {
     // It was 4,009 with each Action offered on its own, then 3,200; some 220
     // more let the Agent do in plain words what took a command to write, and
     // fifteen tell it which Computer it is on: left to guess, it guessed wrong.
-    assert!(total <= 3_470, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
+    // Forty more name the services it connects by opening their sign-in on
+    // its Owner's device: unnamed, it asked for an address to be copied back.
+    assert!(total <= 3_510, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
 }

@@ -87,6 +87,17 @@ pub trait Channel: Send {
 
     /// What the Owner wrote that was not received yet, where a Channel
     /// keeps such: typed ahead of a question, it must not answer it.
+    /// Opens, on the Owner's devices, the sign-in to the service called
+    /// `name`: they sign in there and come back, with nothing to copy.
+    /// What the service is called for the Owner, or why it could not be
+    /// begun; None where a place cannot do that.
+    fn sign_in(
+        &mut self,
+        _name: &str,
+    ) -> impl Future<Output = Option<Result<String, String>>> + Send {
+        async { None }
+    }
+
     fn written_before(&mut self) -> impl Future<Output = Vec<String>> + Send {
         async { Vec::new() }
     }

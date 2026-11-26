@@ -172,6 +172,19 @@ impl<A: Channel, B: Channel> Channel for Both<A, B> {
         }
     }
 
+    async fn sign_in(&mut self, name: &str) -> Option<Result<String, String>> {
+        // Wherever it can be opened, the first that can.
+        if self.first_open
+            && let Some(begun) = self.first.sign_in(name).await
+        {
+            return Some(begun);
+        }
+        if self.second_open {
+            return self.second.sign_in(name).await;
+        }
+        None
+    }
+
     async fn echo(&mut self, text: &str) {
         if self.first_open {
             self.first.echo(text).await;

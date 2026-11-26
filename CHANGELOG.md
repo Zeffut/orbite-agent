@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.4
+
+Released on 2026-11-26.
+
+- **"Connect yourself to my Supabase" is enough.** Asked in plain words, your agent opens the sign-in to the service on your device: you sign in, it closes, and your agent tells you it is connected and goes on with what you wanted of it. Nothing is copied back by hand any more when your agent's page is reached encrypted; where it is not, the link to follow is sent as before. The iPhone app opens the page by itself; the web page shows a button.
+- An Agent can now run in a container of its own, with its computer inside (ADR 0022, the first step towards several agents on one server). Nothing changes for an installation as it is.
+
 ## 0.9.3
 
 Released on 2026-11-26.

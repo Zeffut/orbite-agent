@@ -871,42 +871,54 @@ async fn connect(
     if !from_the_page(&headers, &shared.names) || shared.device(&headers).is_none() {
         return refused(StatusCode::UNAUTHORIZED, "not paired");
     }
-    let Some(connector) =
-        shared.connectors.iter().find(|connector| Some(connector.name) == sent["name"].as_str())
-    else {
-        return refused(StatusCode::BAD_REQUEST, "not a service known here");
-    };
+    match begin_sign_in(&shared, sent["name"].as_str().unwrap_or_default()).await {
+        Ok((_, link)) => Json(json!({ "link": link })).into_response(),
+        Err((status, problem)) => refused(status, &problem),
+    }
+}
+
+/// Begins the sign-in to the service called `name`, one known here or a
+/// connector the Owner added: what it is called for them, and the link to
+/// follow. It ends on the interface's own page, so nothing is copied.
+async fn begin_sign_in(
+    shared: &Shared,
+    name: &str,
+) -> Result<(String, String), (StatusCode, String)> {
+    let known = shared.connectors.iter().find(|connector| connector.name == name);
+    let added = crate::mcp::address_of(&shared.home, name);
+    if known.is_none() && added.is_none() {
+        return Err((StatusCode::BAD_REQUEST, "not a service known here".into()));
+    }
     let Some(reached_at) = &shared.reached_at else {
-        return refused(
+        return Err((
             StatusCode::CONFLICT,
-            "the agent's page is not reached encrypted: ask the agent to connect it instead",
-        );
+            "the agent's page is not reached encrypted: ask the agent to connect it instead".into(),
+        ));
     };
-    match crate::mcp::address_of(&shared.home, connector.name) {
+    match (known, added) {
         // Another server was given that name by hand: it is not this one.
-        Some(other) if other.trim_end_matches('/') != connector.address.trim_end_matches('/') => {
-            return refused(
+        (Some(connector), Some(other))
+            if other.trim_end_matches('/') != connector.address.trim_end_matches('/') =>
+        {
+            return Err((
                 StatusCode::CONFLICT,
-                "another connector already has that name: remove it first",
-            );
+                "another connector already has that name: remove it first".into(),
+            ));
         }
-        Some(_) => {}
-        None => {
-            if let Err(problem) =
-                crate::mcp::add_server(&shared.home, connector.name, connector.address)
-            {
-                return refused(StatusCode::INTERNAL_SERVER_ERROR, &problem);
-            }
+        (Some(connector), None) => {
+            crate::mcp::add_server(&shared.home, connector.name, connector.address)
+                .map_err(|problem| (StatusCode::INTERNAL_SERVER_ERROR, problem))?;
         }
+        _ => {}
     }
     let signing = crate::mcp::Mcp::configured_in(&shared.home)
         .ending_sign_ins_at(format!("{reached_at}/signed-in"));
-    match signing.sign_in(connector.name).await {
+    match signing.sign_in(name).await {
         Ok(link) => {
             *shared.signing_in.lock().await = Some(signing);
-            Json(json!({ "link": link })).into_response()
+            Ok((known.map_or(name, |connector| connector.label).to_owned(), link))
         }
-        Err(problem) => refused(StatusCode::BAD_GATEWAY, &problem),
+        Err(problem) => Err((StatusCode::BAD_GATEWAY, problem)),
     }
 }
 
@@ -951,6 +963,24 @@ async fn signed_in(
     };
     match signing.signed_in_at(&ended_on).await {
         Ok((name, _)) => {
+            let label = shared
+                .connectors
+                .iter()
+                .find(|connector| connector.name == name)
+                .map_or(name.as_str(), |connector| connector.label)
+                .to_owned();
+            // The Agent is told, for when it is back: it says so to its
+            // Owner and goes on with what they wanted of the service.
+            let notices = shared.home.join("notices");
+            let _ = std::fs::create_dir_all(&notices);
+            let _ = std::fs::write(
+                notices.join(format!("{}-signed-in.txt", now())),
+                format!(
+                    "your Owner just signed in to {label}: it is connected, and its actions are \
+                     yours to use. Then carry on with what they had asked you to do with it, if \
+                     anything."
+                ),
+            );
             // The Agent starts again to take the service it now has.
             // (Once this page is on its way: the Agent ends at once.)
             let to_agent = shared.to_agent.clone();
@@ -958,12 +988,6 @@ async fn signed_in(
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 let _ = to_agent.send(Incoming::Quietly("/reload".into()));
             });
-            let label = shared
-                .connectors
-                .iter()
-                .find(|connector| connector.name == name)
-                .map_or(name.as_str(), |connector| connector.label)
-                .to_owned();
             page(
                 true,
                 &format!("{label} {}", if french { "est connecté." } else { "is connected." }),
@@ -1283,6 +1307,21 @@ impl Channel for Interface {
         let code = link.and_then(crate::code_picture);
         self.tell(json!({ "kind": "agent", "text": text, "code": code }));
         Ok(())
+    }
+
+    async fn sign_in(&mut self, name: &str) -> Option<Result<String, String>> {
+        // Only where the Owner's devices reach the interface encrypted: a
+        // sign-in ends on its page, which a service will not send to otherwise.
+        self.shared.reached_at.as_ref()?;
+        Some(match begin_sign_in(&self.shared, name).await {
+            Ok((label, link)) => {
+                // Told to the devices open now, which open it at once; kept
+                // nowhere: a link to sign in is used once.
+                self.tell(json!({ "kind": "sign-in", "name": name, "label": label, "link": link }));
+                Ok(label)
+            }
+            Err((_, problem)) => Err(problem),
+        })
     }
 
     async fn offer(&mut self, text: &str, choices: &[(String, String)]) -> io::Result<()> {

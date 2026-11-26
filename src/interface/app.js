@@ -217,6 +217,20 @@
         add(bubble, event);
         break;
       }
+      case "sign-in": {
+        // A service to sign in to: one touch, in a tab of its own, and
+        // back here once it is done.
+        const card = make("div", "choices");
+        const asked = make("div", "asked", event.label);
+        const go = make("a", "", document.documentElement.lang === "fr" ? "Se connecter" : "Sign in");
+        go.href = event.link;
+        go.target = "_blank";
+        go.rel = "noopener";
+        go.style.cssText = "display:block;text-align:center;padding:10px 14px;border-radius:12px;background:#f2f2f0;color:#0d0d0d;font-weight:600;text-decoration:none;margin-top:8px";
+        card.append(asked, go);
+        add(card, event);
+        break;
+      }
       case "agent": {
         if (event.choices && event.choices.length) {
           // A question and what can be answered, as one card.
