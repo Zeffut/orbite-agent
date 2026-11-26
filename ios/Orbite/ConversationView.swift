@@ -536,8 +536,9 @@ struct ConversationView: View {
             }
             let waiting = Attached(name: name)
             attached.append(waiting)
+            let copied = Pasted.Copied(provider: provider)
             Task {
-                if let content = await Pasted.content(of: provider, as: kind) {
+                if let content = await Pasted.content(of: copied, as: kind) {
                     await uploaded(waiting, content)
                 } else {
                     attached.removeAll { $0.id == waiting.id }

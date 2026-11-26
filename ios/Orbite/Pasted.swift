@@ -18,10 +18,15 @@ enum Pasted {
         }
     }
 
+    /// A copied thing, carried from the screen's thread to where it is read.
+    struct Copied: @unchecked Sendable {
+        let provider: NSItemProvider
+    }
+
     /// The content of a copied thing, as `kind`.
-    nonisolated static func content(of provider: NSItemProvider, as kind: UTType) async -> Data? {
+    nonisolated static func content(of copied: Copied, as kind: UTType) async -> Data? {
         await withCheckedContinuation { (read: CheckedContinuation<Data?, Never>) in
-            _ = provider.loadDataRepresentation(forTypeIdentifier: kind.identifier) { @Sendable content, _ in
+            _ = copied.provider.loadDataRepresentation(forTypeIdentifier: kind.identifier) { @Sendable content, _ in
                 read.resume(returning: content)
             }
         }
