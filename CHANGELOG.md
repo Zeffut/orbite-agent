@@ -2,6 +2,18 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.6
+
+Released on 2026-11-26.
+
+Read back from a real conversation, where an agent given a long job reported it blocked five times over.
+
+- **YouTube is read.** A channel gives its latest videos with their dates and exact views, a video its date, views and length, without opening the computer. Reading it failed before, on an error of the connection that is now got past: a site that cuts off the newer way of speaking is asked again the older way.
+- **Those your agent sends to work beside it see the screen.** A sub-agent using the computer was never shown what was on it, so it could read nothing there and said so. It is shown it now, has more than twice the steps, and is told to try another way before giving a thing up. The agent and its sub-agents take turns at the one screen rather than fight over it, and a sub-agent is held to your permission level from its first step, not from a minute later.
+- **Your agent is told to finish what it is given**: to try another way itself when one fails, to do itself what a sub-agent left, and to say a thing is done only once it is. It answers shorter, the result first: you read it on a phone.
+- A search that finds nothing for exact words is asked again plainly before saying so.
+- What your agent can connect is said when you ask, and nothing sends you to a command any more: neither the list of connections nor a voice setting that is not set up.
+
 ## 0.9.5
 
 Released on 2026-11-26.

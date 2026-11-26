@@ -56,7 +56,17 @@ A password or key your Owner writes, put away at once with `command`: \
 /secret NAME. Never tell your Owner to type a command or go to the machine: \
 do it yourself.
 
-Answer in the language your Owner writes in; in French, say tu. Be direct and brief.";
+A job your Owner gives you is yours to finish, not to report as blocked. \
+When one way fails, try another yourself first: a page read_page cannot \
+read is opened on the Computer; read_page gives a YouTube channel's or \
+video's views and dates; a search that finds nothing is asked in other \
+words. Delegate only what is long, and finish yourself what a sub-agent \
+left. Say a thing is done only once it is. What changed in a version of \
+Orbite, `orbite news` says.
+
+Answer in the language your Owner writes in; in French, say tu. Be direct \
+and brief: they read you on a phone, so the result first, in a few lines; \
+the detail only when they ask for it.";
 
 const MEMORY_INSTRUCTIONS: &str = "\
 ## Your memory
@@ -1623,6 +1633,8 @@ impl<P: Provider + 'static> Agent<P> {
                 let named = |field: &str| action.input[field].as_str().unwrap_or_default();
                 let own = match action.name.as_str() {
                     "delegate" => Some({
+                        // Held to what the Agent is held to now, from its first step.
+                        self.subagents.allow(self.allowance());
                         self.subagents.allow(self.allowance());
                         self.subagents.start(
                             named("name"),
@@ -1696,6 +1708,17 @@ impl<P: Provider + 'static> Agent<P> {
                     Err(why_not) => why_not,
                     Ok(()) if self.review_routine(action).is_some() => {
                         self.carry_out_routine(action)
+                    }
+                    // One screen: while one working beside the Agent has it,
+                    // the Agent waits its turn rather than fight over it.
+                    Ok(())
+                        if action.name.starts_with("computer")
+                            && !crate::subagents::take_the_computer("the agent itself") =>
+                    {
+                        "A sub-agent of yours is using the Computer right now: two cannot share \
+                         one screen. Wait for its report, or stop it first if you need the \
+                         Computer yourself."
+                            .into()
                     }
                     Ok(()) => {
                         let acting = self.host.carry_out(action);
@@ -2835,8 +2858,8 @@ impl<P: Provider + 'static> Agent<P> {
         shown.push_str(&format!(
             "\n{}",
             say(
-                "To add a connector, sign in to one or turn one off, just ask me.\nTo add an AI, on the machine: orbite providers add.",
-                "Pour ajouter un connecteur, t'y connecter ou en désactiver un, demande-le-moi simplement.\nPour ajouter une IA, sur la machine : orbite providers add.",
+                "I can connect, just ask: Notion, Calendly, Trello, Linear, Jira and Confluence, ClickUp, Airtable, Stripe, PayPal, Sentry, Supabase, Cloudflare. For anything else (a mailbox, a tool of yours), I write myself a connector.",
+                "Je peux connecter, demande-le simplement : Notion, Calendly, Trello, Linear, Jira et Confluence, ClickUp, Airtable, Stripe, PayPal, Sentry, Supabase, Cloudflare. Pour le reste (une boîte mail, un outil à toi), je m'écris un connecteur.",
             )
         ));
         (shown, choices, false)

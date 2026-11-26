@@ -221,7 +221,8 @@ async fn what_writes_voice_messages_down_is_seen_and_switched_from_the_conversat
     // What was never set up on the machine is not switched to from here.
     owner.says("/settings voice server");
     let refused = owner.hears().await;
-    assert!(refused.contains("orbite transcription"), "{refused}");
+    // Said without sending the Owner to a command: their agent sees to it.
+    assert!(refused.contains("ask your agent to set it up"), "{refused}");
     assert_eq!(Config::load(home.path()).unwrap().transcription.unwrap().engine, "whisper.cpp");
 }
 

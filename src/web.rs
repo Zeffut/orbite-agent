@@ -22,32 +22,40 @@ const NOISE: &[&str] = &[
 
 pub(crate) struct Web {
     http: reqwest::Client,
+    /// The same, speaking the older way of the web: a few sites cut off
+    /// the newer one when it is not a browser that speaks it.
+    older: reqwest::Client,
     /// Address of the search engine's results page.
     pub(crate) search_at: String,
 }
 
 impl Web {
     pub(crate) fn new() -> Self {
-        let http = reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0")
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(10))
-            // A public page must not be able to send the Agent to an address
-            // on the Owner's own network behind their back.
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                let came_from_outside =
-                    attempt.previous().first().is_some_and(|first| !is_local(first));
-                if attempt.previous().len() >= 10 {
-                    attempt.error("too many redirects")
-                } else if came_from_outside && is_local(attempt.url()) {
-                    attempt.error("the page redirects to an address on the local network")
-                } else {
-                    attempt.follow()
-                }
-            }))
-            .build()
-            .expect("the HTTP client can be built");
-        Self { http, search_at: "https://lite.duckduckgo.com/lite/".into() }
+        let client = |the_older_way: bool| {
+            let building = reqwest::Client::builder()
+                .user_agent(
+                    "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
+                )
+                .timeout(Duration::from_secs(30))
+                .connect_timeout(Duration::from_secs(10))
+                // A public page must not be able to send the Agent to an address
+                // on the Owner's own network behind their back.
+                .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                    let came_from_outside =
+                        attempt.previous().first().is_some_and(|first| !is_local(first));
+                    if attempt.previous().len() >= 10 {
+                        attempt.error("too many redirects")
+                    } else if came_from_outside && is_local(attempt.url()) {
+                        attempt.error("the page redirects to an address on the local network")
+                    } else {
+                        attempt.follow()
+                    }
+                }));
+            let building = if the_older_way { building.http1_only() } else { building };
+            building.build().expect("the HTTP client can be built")
+        };
+        let (http, older) = (client(false), client(true));
+        Self { http, older, search_at: "https://lite.duckduckgo.com/lite/".into() }
     }
 
     /// The readable content of the page at `url`.
@@ -57,7 +65,16 @@ impl Web {
             Err(problem) => return format!("Could not read {url}: {problem}."),
         };
         if kind.contains("html") {
-            return readable(url, &String::from_utf8_lossy(&body));
+            let page = String::from_utf8_lossy(&body);
+            // A page of YouTube is a program, not a text: what it is about
+            // is taken from what it carries, and a channel's latest videos
+            // from the feed YouTube publishes of them.
+            if is_youtube(url)
+                && let Some(told) = self.youtube(url, &page).await
+            {
+                return told;
+            }
+            return readable(url, &page);
         }
         let textual = kind.starts_with("text/")
             || ["json", "xml", "javascript", "yaml", "csv"].iter().any(|mark| kind.contains(mark));
@@ -67,8 +84,86 @@ impl Web {
         }
     }
 
+    /// What a page of YouTube is about: a video, with when it came out and
+    /// how often it was watched; or a channel, with its latest videos.
+    async fn youtube(&self, url: &Url, page: &str) -> Option<String> {
+        let between = |text: &str, before: &str, after: char| -> Option<String> {
+            let from = text.find(before)? + before.len();
+            let rest = &text[from..];
+            Some(rest[..rest.find(after)?].to_owned())
+        };
+        // A video.
+        if url.path().starts_with("/watch") || url.path().starts_with("/shorts/") {
+            let details = &page[page.find("\"videoDetails\":")?..];
+            let title = between(details, "\"title\":\"", '"')?;
+            let views = between(details, "\"viewCount\":\"", '"').unwrap_or_default();
+            let channel = between(details, "\"author\":\"", '"').unwrap_or_default();
+            let seconds = between(details, "\"lengthSeconds\":\"", '"').unwrap_or_default();
+            let published = between(page, "\"publishDate\":\"", '"').unwrap_or_default();
+            return Some(format!(
+                "# {title}\n{url}\n\nA video of YouTube, by {channel}. Published: {published}. \
+                 Views: {views}. Length: {seconds} seconds."
+            ));
+        }
+        // A channel: its number, then the feed of its latest videos.
+        let id = between(page, "channel_id=UC", '"')
+            .map(|rest| format!("UC{}", rest.chars().take(22).collect::<String>()))
+            .filter(|id| {
+                id.len() == 24 && id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
+            })?;
+        let name = between(page, "<meta property=\"og:title\" content=\"", '"').unwrap_or_default();
+        let followed = between(page, "\"subscriberCountText\"", '}')
+            .and_then(|text| between(&text, "\"simpleText\":\"", '"'))
+            .or_else(|| {
+                let at = page.find(" subscribers")?;
+                Some(page[..at].rsplit(['"', '>', ' ']).next()?.to_owned() + " subscribers")
+            })
+            .unwrap_or_default();
+        let feed = Url::parse(&format!("https://www.youtube.com/feeds/videos.xml?channel_id={id}"))
+            .ok()?;
+        let (_, body) = self.download(&feed).await.ok()?;
+        let feed = String::from_utf8_lossy(&body);
+        let mut told = format!(
+            "# {name}\nhttps://www.youtube.com/channel/{id}\n\nA channel of YouTube. {followed}\n\n\
+             Its latest videos, the newest first (date published, views, title, address). Shorts \
+             are among them: a video's own page says how long it is. Older videos are only on \
+             the channel's page, which the Computer can open.\n"
+        );
+        for entry in feed.split("<entry>").skip(1).take(15) {
+            let title = between(entry, "<title>", '<').unwrap_or_default();
+            let published = between(entry, "<published>", '<').unwrap_or_default();
+            let views = between(entry, "views=\"", '"').unwrap_or_default();
+            let video = between(entry, "<yt:videoId>", '<').unwrap_or_default();
+            told.push_str(&format!(
+                "- {} · {views} views · {title} · https://www.youtube.com/watch?v={video}\n",
+                published.get(..10).unwrap_or(&published)
+            ));
+        }
+        Some(told)
+    }
+
     /// What the search engine finds for `query`.
     pub(crate) async fn search(&self, query: &str) -> String {
+        let found = self.search_once(query).await;
+        // Asked for words exactly as written, a search often finds nothing
+        // that asked plainly it finds: asked again that way before giving up.
+        if found.starts_with("No result") && query.contains('"') {
+            let plainly = query.replace('"', " ");
+            let again = self.search_once(plainly.trim()).await;
+            if !again.starts_with("No result") {
+                return format!("Nothing for the exact words; asked plainly:\n{again}");
+            }
+        }
+        if found.starts_with("No result") {
+            return format!(
+                "{found} Ask again in other words (fewer of them, or in the language of what you \
+                 look for), or read a page you already know of."
+            );
+        }
+        found
+    }
+
+    async fn search_once(&self, query: &str) -> String {
         let Ok(mut address) = Url::parse(&self.search_at) else {
             return "The search engine's address is not valid.".into();
         };
@@ -99,8 +194,30 @@ impl Web {
 
     /// The content type and the first bytes of what is at `url`.
     async fn download(&self, url: &Url) -> Result<(String, Vec<u8>), String> {
-        let mut response =
-            self.http.get(url.clone()).send().await.map_err(|error| root_cause(&error))?;
+        match self.fetch(&self.http, url).await {
+            // Cut off in the newer way of speaking, at the start or in the
+            // middle: asked again in the older.
+            Err(problem) if problem.contains("protocol error") => {
+                self.fetch(&self.older, url).await
+            }
+            fetched => fetched,
+        }
+    }
+
+    async fn fetch(
+        &self,
+        through: &reqwest::Client,
+        url: &Url,
+    ) -> Result<(String, Vec<u8>), String> {
+        let mut asking = through.get(url.clone());
+        // YouTube shows nothing in Europe before it is told cookies are
+        // agreed to, which nobody is there to click: it is told so.
+        if is_youtube(url) {
+            asking = asking
+                .header(reqwest::header::COOKIE, "SOCS=CAI; CONSENT=YES+cb")
+                .header(reqwest::header::ACCEPT_LANGUAGE, "en");
+        }
+        let mut response = asking.send().await.map_err(|error| root_cause(&error))?;
         if !response.status().is_success() {
             return Err(format!("the site answered HTTP {}", response.status().as_u16()));
         }
@@ -118,6 +235,14 @@ impl Web {
         }
         Ok((kind, body))
     }
+}
+
+/// True when `url` is of YouTube.
+fn is_youtube(url: &Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        let host = host.trim_start_matches("www.").trim_start_matches("m.");
+        host == "youtube.com" || host == "youtu.be"
+    })
 }
 
 /// True when `url` points at the Host itself or the network around it,

@@ -17,6 +17,9 @@ use crate::{ActionSpec, Message, Provider, Request};
 const AT_ONCE: usize = 4;
 /// A Sub-agent still working after this long is stopped.
 const TIME_LIMIT: Duration = Duration::from_secs(15 * 60);
+/// How many of the latest entries of its work a Sub-agent is shown the
+/// pictures of.
+const SHOWING_PICTURES: usize = 6;
 /// How much of an Outcome a Sub-agent is given.
 const OUTCOME_KEPT: usize = 20_000;
 
@@ -36,11 +39,17 @@ const NOT_FOR_SUBAGENTS: &[&str] = &[
 const INSTRUCTIONS: &str = "\
 You are a sub-agent of a personal AI agent, started for one task. You cannot \
 talk to anyone: your only output is the report you end with, which the agent \
-that started you will read. Work on the task with the actions you are given. \
+that started you will read. Work on the task with the actions you are given, \
+to its end: you have many steps, use them. When one way does not work, try \
+another before giving up on it: a page that cannot be read is opened on the \
+Computer and read from its screen; a search that finds nothing is asked \
+again in other words; a file you may not write here is written elsewhere in \
+your workspace. Report as not done only what you really tried several ways. \
 You cannot ask the Owner for anything: an action that would need their \
 approval is not carried out, so say in your report what would need doing. \
-When you are done, reply with the report alone: what you found or did, what \
-you could not do and why. Be precise and brief.";
+When you are done, reply with the report alone: what you found or did, with \
+the facts and figures themselves, then what you could not do and exactly why \
+(what you tried, and what answered). Be precise and brief.";
 
 /// What a Sub-agent, or the run of a Routine, ended with.
 pub(crate) struct Report {
@@ -109,7 +118,7 @@ impl Subagents {
             Self {
                 running: HashMap::new(),
                 reports,
-                steps: 25,
+                steps: 60,
                 allowed: Arc::new(std::sync::RwLock::new(Allowance::default())),
             },
             arriving,
@@ -264,6 +273,26 @@ impl Drop for Subagents {
     }
 }
 
+/// Who is using the Computer, and when they last did. There is one screen:
+/// the Agent and those working beside it take turns at it, and it is free
+/// again a little after whoever had it stops.
+static AT_THE_COMPUTER: std::sync::Mutex<Option<(String, Instant)>> = std::sync::Mutex::new(None);
+
+/// How long after its last use the Computer is still its user's.
+const KEPT_FOR: Duration = Duration::from_secs(40);
+
+/// True when `who` has the Computer now: it was free, or already theirs.
+pub(crate) fn take_the_computer(who: &str) -> bool {
+    let mut at = AT_THE_COMPUTER.lock().expect("not poisoned");
+    match &*at {
+        Some((other, since)) if other != who && since.elapsed() < KEPT_FOR => false,
+        _ => {
+            *at = Some((who.to_owned(), Instant::now()));
+            true
+        }
+    }
+}
+
 /// Works on `task` to its end; the text says how it ended and carries the report.
 async fn work(
     provider: &impl Provider,
@@ -279,11 +308,29 @@ async fn work(
         .collect();
     let mut conversation = vec![Message::from_owner(task)];
     for _ in 0..steps {
+        // What the Computer's screen showed lately is shown to the model, as
+        // it is to the Agent itself: without it a Sub-agent uses a Computer
+        // it cannot see.
+        let recent = conversation.len().saturating_sub(SHOWING_PICTURES);
+        let images: Vec<(usize, std::path::PathBuf)> = conversation
+            .iter()
+            .enumerate()
+            .skip(recent)
+            .filter_map(|(place, message)| match message {
+                Message::Notice(text) => Some((place, text)),
+                _ => None,
+            })
+            .flat_map(|(place, text)| {
+                crate::attachments::attachments(text)
+                    .filter(|file| crate::attachments::is_showable_image(file))
+                    .map(move |file| (place, file))
+            })
+            .collect();
         let request = Request {
             instructions: INSTRUCTIONS,
             conversation: &conversation,
             actions: &actions,
-            images: &[],
+            images: &images,
             light: false,
         };
         let reply = match patiently(provider, request, host.busy_wait).await {
@@ -299,9 +346,16 @@ async fn work(
         if reply.actions.is_empty() {
             return format!("finished. Its report:\n{}", reply.text);
         }
+        let mut screen = None;
         for action in &reply.actions {
             let text = if NOT_FOR_SUBAGENTS.contains(&action.name.as_str()) {
                 format!("There is no Action called {}.", action.name)
+            } else if action.name.starts_with("computer") && !take_the_computer(task) {
+                // One screen, one pair of hands at a time.
+                "The Computer is being used by someone else working for the same Owner right \
+                 now: two cannot share one screen. Do what you can another way (read_page, \
+                 search_web), or try the Computer again in a minute."
+                    .into()
             } else {
                 match host.review(action) {
                     Review::Free => host.carry_out(action).await,
@@ -318,8 +372,26 @@ async fn work(
                         .into(),
                 }
             };
+            // What the Computer's screen now shows, as the smaller picture
+            // made beside it for a model to look at.
+            if action.name.starts_with("computer")
+                && let Some(picture) = crate::attachments::attachments(&text)
+                    .find(|file| crate::attachments::is_showable_image(file))
+            {
+                let shown = crate::computer::shown_to_the_model(&picture);
+                screen = Some(if shown.is_file() { shown } else { picture });
+            }
             let text = clip(&text, OUTCOME_KEPT).to_owned();
             conversation.push(Message::Outcome { action: action.id.clone(), text });
+        }
+        // Shown once, after everything done on this step.
+        if let Some(picture) = screen {
+            conversation.push(Message::Notice(format!(
+                "The Computer's screen now. Read what you need from it. If what it shows stops \
+                 you (a page asking to verify that a person is there, an error, a sign-in), say \
+                 in your report exactly what it shows:\n{}",
+                crate::attached(&picture)
+            )));
         }
     }
     conversation.push(Message::from_owner(

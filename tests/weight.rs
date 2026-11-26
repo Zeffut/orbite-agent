@@ -55,5 +55,8 @@ async fn a_turn_with_everything_on_offer_stays_light() {
     // fifteen tell it which Computer it is on: left to guess, it guessed wrong.
     // Forty more name the services it connects by opening their sign-in on
     // its Owner's device: unnamed, it asked for an address to be copied back.
-    assert!(total <= 3_510, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
+    // A hundred and forty more tell it to finish what it is given and how
+    // to get past what stops it: read back from a real conversation, it
+    // reported a job blocked five times over without once trying another way.
+    assert!(total <= 3_650, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
 }

@@ -201,7 +201,7 @@ impl<'a> Settings<'a> {
                 };
                 if !set_up {
                     return Err(format!(
-                        "{value} is not set up yet. Set it up on the machine first: orbite transcription"
+                        "{value} is not set up on this machine yet: ask your agent to set it up, then choose it"
                     ));
                 }
                 chosen.engine = value;

@@ -453,7 +453,9 @@ async fn the_owner_sees_every_connection_in_one_place_with_what_to_do_about_each
     // The connectors, and the one to sign in to.
     assert!(shown.contains("far") && shown.contains("/mcp connect far"), "{shown}");
     // And how to add one, with nothing to edit by hand.
-    assert!(shown.contains("To add a connector") && shown.contains("just ask me"), "{shown}");
+    assert!(shown.contains("I can connect, just ask") && shown.contains("Supabase"), "{shown}");
+    // The Owner is never sent to a command.
+    assert!(!shown.contains("orbite providers"), "{shown}");
     assert_eq!(provider.times_asked(), 0, "none of this is sent to a model");
 }
 
