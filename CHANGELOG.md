@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.8
+
+Released on 2026-11-26.
+
+- On a computer, a long conversation opened at its start and the whole page scrolled, the column with it. Only the conversation scrolls now, the column stays where it is, and the conversation opens at its end.
+
 ## 0.9.7
 
 Released on 2026-11-26.

@@ -65,6 +65,7 @@
     column();
     panel.hidden = place === "talk";
     talk.classList.toggle("aside", place !== "talk");
+    if (place === "talk") latest();
     if (place === "settings") settings();
     if (place === "services") services();
     if (place === "agent") agent();
@@ -283,6 +284,18 @@
       }
     }
     column();
+    latest();
+  }
+  // The Conversation is read from its end: taken there when the column
+  // comes, which changes how wide what was said is, and when it is come
+  // back to from another screen.
+  function latest() {
+    const said = $("said");
+    const go = () => { said.scrollTop = said.scrollHeight; };
+    go();
+    requestAnimationFrame(go);
+    setTimeout(go, 250);
+    setTimeout(go, 900);
   }
   wide.addEventListener("change", arrange);
   // The Conversation shows once the device is let in: the column comes with it.
