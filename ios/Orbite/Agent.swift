@@ -21,6 +21,14 @@ struct Entry: Identifiable, Equatable {
     var at: Date?
 }
 
+/// A sign-in the Agent opened: the service, what it is called, and where.
+struct SignIn: Identifiable, Equatable {
+    let name: String
+    let label: String
+    let link: URL
+    var id: String { link.absoluteString }
+}
+
 /// Something the Owner said that is on its way: its words, or none yet
 /// while a voice is being written down.
 struct Leaving: Identifiable, Equatable {
@@ -108,6 +116,9 @@ final class Agent {
     var name = "Orbite"
     var look: Look?
     var entries: [Entry] = []
+    /// A service the Agent asks its Owner to sign in to, now: opened at
+    /// once, over the Conversation.
+    var signing: SignIn?
     /// True once the Conversation as it was kept has been read.
     var loaded = false
     /// What is being read back of the Conversation, before it is shown:
@@ -371,6 +382,14 @@ final class Agent {
             return Sent(file: token, name: file["name"] as? String ?? "", image: file["image"] as? Bool ?? false)
         }
         switch event["kind"] as? String {
+        case "sign-in":
+            // Asked for in the Conversation: opened here and now, not kept.
+            if !reading, !quiet, let written = event["link"] as? String, let link = URL(string: written),
+               link.scheme == "https" {
+                let name = event["name"] as? String ?? ""
+                signing = SignIn(name: name, label: event["label"] as? String ?? name, link: link)
+                Haptic.asked()
+            }
         case "caught-up":
             // All that was kept has come: it is shown in one go, at its end.
             if reading {

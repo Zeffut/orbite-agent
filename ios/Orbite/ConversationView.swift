@@ -112,6 +112,26 @@ struct ConversationView: View {
         }
         .sheet(isPresented: $settings) { SettingsView() }
         .sheet(isPresented: $looking) { SettingsView(part: .look) }
+        // A service the Agent asked to be signed in to opens by itself, and
+        // closes by itself once it is connected: nothing to copy, nothing to find.
+        .sheet(item: Binding(get: { agent.signing }, set: { agent.signing = $0 })) { signing in
+            Browser(link: signing.link).ignoresSafeArea()
+        }
+        .task(id: agent.signing?.id) {
+            guard let signing = agent.signing else { return }
+            var away = false
+            while !Task.isCancelled, agent.signing == signing {
+                try? await Task.sleep(for: .seconds(1.5))
+                // Connected: it says so itself, or the Agent has gone to start
+                // again with it and come back.
+                let listed = await agent.connectors()?.0.first(where: { $0.name == signing.name })?.connected == true
+                if !agent.reached { away = true }
+                if listed || (away && agent.reached) {
+                    agent.signing = nil
+                    Haptic.done()
+                }
+            }
+        }
         .sheet(isPresented: $services) { NavigationStack { ConnectorsScreen() } }
         .overlay { Drawer(open: $menu) { settings = true } }
         // The keyboard goes when the menu comes.
