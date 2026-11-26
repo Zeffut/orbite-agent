@@ -452,50 +452,11 @@ else
     say "when you ask it to. Install sudo and run this installer again to let it."
 fi
 
-# This machine's own desktop is the agent's computer where there is one: a
-# helper offers it from the graphical session of whoever installed Orbite,
-# and of nobody else. Where no desktop is ever opened, it never runs.
-OWNER_ACCOUNT="${SUDO_USER:-}"
-# Which computer the agent uses is chosen once, here: this machine's own
-# desktop, or a computer of its own. It is written where only root writes,
-# and is not asked again when Orbite is installed over itself.
-COMPUTER_OF=/usr/local/share/orbite/computer
-CHOSEN=$(cat "$ROOT$COMPUTER_OF" 2>/dev/null || true)
-if [ -z "$CHOSEN" ]; then
-    CHOSEN=own
-    if [ -n "$OWNER_ACCOUNT" ] && [ "$OWNER_ACCOUNT" != root ] && [ -d "$ROOT/etc/xdg/autostart" ]; then
-        # A machine with a desktop: its Owner says. Where nobody can be
-        # asked, the desktop it is, as most give Orbite a machine of its own.
-        CHOSEN=this
-        if [ "${ORBITE_SKIP_SETUP:-}" != "1" ] && (: </dev/tty) 2>/dev/null; then
-            settle
-            "$PROGRAM" setup computer </dev/tty || true
-            CHOSEN=$(cat "$ROOT$COMPUTER_OF" 2>/dev/null || echo this)
-        fi
-    fi
-    if mkdir -p "$ROOT${COMPUTER_OF%/*}" && echo "$CHOSEN" >"$ROOT$COMPUTER_OF"; then
-        chmod 755 "$ROOT${COMPUTER_OF%/*}"
-        chmod 644 "$ROOT$COMPUTER_OF"
-    fi
-fi
-if [ "$CHOSEN" = this ] && [ -n "$OWNER_ACCOUNT" ] && [ "$OWNER_ACCOUNT" != root ] && [ -d "$ROOT/etc/xdg/autostart" ] &&
-    OWNER_NUMBER=$(id -u "$OWNER_ACCOUNT" 2>/dev/null); then
-    # Whose it is is written where only root writes: the agent's account
-    # cannot change it, and its own folder stays that of a machine not set
-    # up. Were it not to be written, Orbite is installed all the same.
-    if mkdir -p "$ROOT${DESK_OF%/*}" && echo "$OWNER_NUMBER" >"$ROOT$DESK_OF" &&
-        chmod 755 "$ROOT${DESK_OF%/*}" && chmod 644 "$ROOT$DESK_OF"; then
-        cat >"$ROOT/etc/xdg/autostart/orbite-desk.desktop" <<DESK
-[Desktop Entry]
-Type=Application
-Name=Orbite
-Comment=Lends this desktop to your agent
-Exec=$PROGRAM desk
-NoDisplay=true
-X-GNOME-Autostart-enabled=true
-DESK
-    fi
-fi
+# The agent's computer is its own, never this machine's desktop (ADR 0022).
+# What an earlier version wrote to lend that desktop is taken away, and
+# the helper it left running in a session is stopped.
+rm -f "$ROOT/etc/xdg/autostart/orbite-desk.desktop" "$ROOT$DESK_OF" "$ROOT/usr/local/share/orbite/computer"
+[ -n "$ROOT" ] || pkill -f "^$PROGRAM desk\$" 2>/dev/null || true
 
 # Orbite keeps itself up to date: once a day it installs the latest release
 # signed by its key, and goes back to the one before if that does not start.

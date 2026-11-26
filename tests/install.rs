@@ -849,44 +849,44 @@ fn a_system_whose_packages_are_unknown_still_gets_orbite_and_is_told_about_the_c
 }
 
 #[test]
-fn whose_desktop_may_be_lent_is_written_where_only_root_writes_and_the_agent_is_left_unset_up() {
+fn what_an_earlier_version_wrote_to_lend_the_machines_desktop_is_taken_away() {
     let machine = Machine::debian();
-    fs::create_dir_all(machine.path("etc/xdg/autostart")).unwrap();
-    machine.stand_in(
-        "id",
-        "[ \"$1\" = \"-u\" ] && [ -z \"$2\" ] && { echo 0; exit 0; }; \
-         [ \"$1\" = \"-u\" ] && [ \"$2\" = \"ana\" ] && { echo 1000; exit 0; }; exit 1",
-    );
+    // A machine where an earlier version lent the desktop of who installed it.
+    for (written, content) in [
+        (
+            "etc/xdg/autostart/orbite-desk.desktop",
+            "[Desktop Entry]\nExec=/usr/local/bin/orbite desk\n",
+        ),
+        ("usr/local/share/orbite/desk", "1000\n"),
+        ("usr/local/share/orbite/computer", "this\n"),
+    ] {
+        fs::create_dir_all(machine.path(written).parent().unwrap()).unwrap();
+        fs::write(machine.path(written), content).unwrap();
+    }
 
     let installed = machine.install_with(&[("SUDO_USER", "ana")]);
 
     assert!(installed.status.success(), "{}", shown(&installed));
-    let helper = fs::read_to_string(machine.path("etc/xdg/autostart/orbite-desk.desktop")).unwrap();
-    assert!(helper.contains("orbite desk"), "{helper}");
-    assert_eq!(
-        fs::read_to_string(machine.path("usr/local/share/orbite/desk")).unwrap().trim(),
-        "1000"
-    );
-    // An Agent restored there later finds a machine nobody set up.
-    assert!(!machine.path("var/lib/orbite/config.json").exists());
+    // An agent's computer is its own: nothing is left that lends the desktop.
+    for written in [
+        "etc/xdg/autostart/orbite-desk.desktop",
+        "usr/local/share/orbite/desk",
+        "usr/local/share/orbite/computer",
+    ] {
+        assert!(!machine.path(written).exists(), "{written} was left");
+    }
 }
 
 #[test]
-fn a_machine_without_a_desktop_gives_the_agent_a_computer_of_its_own_for_good() {
+fn a_machine_with_a_desktop_does_not_lend_it_to_the_agent_either() {
     let machine = Machine::debian();
+    // A desktop is there, opened by whoever installs: it is theirs alone.
+    fs::create_dir_all(machine.path("etc/xdg/autostart")).unwrap();
 
-    let installed = machine.install();
+    let installed = machine.install_with(&[("SUDO_USER", "ana")]);
 
     assert!(installed.status.success(), "{}", shown(&installed));
-    assert_eq!(
-        fs::read_to_string(machine.path("usr/local/share/orbite/computer")).unwrap().trim(),
-        "own"
-    );
     assert!(!machine.path("etc/xdg/autostart/orbite-desk.desktop").exists());
-    // Installed again, what was chosen is kept.
-    fs::write(machine.path("usr/local/share/orbite/computer"), "own\n").unwrap();
-    fs::create_dir_all(machine.path("etc/xdg/autostart")).unwrap();
-    let again = machine.install_with(&[("SUDO_USER", "ana")]);
-    assert!(again.status.success(), "{}", shown(&again));
-    assert!(!machine.path("etc/xdg/autostart/orbite-desk.desktop").exists());
+    assert!(!machine.path("usr/local/share/orbite/desk").exists());
+    assert!(!machine.path("usr/local/share/orbite/computer").exists());
 }

@@ -72,12 +72,8 @@ async fn asked() -> ExitCode {
     // (`update on` and `update off` only write the Agent's settings.)
     let changes_the_machine = match command.as_str() {
         "update" => env::args().nth(2).is_none(),
-        // Which computer the Agent uses is written as root, once.
-        "setup" => env::args().nth(2).as_deref() == Some("computer"),
         "uninstall" | "export" | "restore" | "version" | "providers" | "news" => true,
-        // Offered from the session of whoever opened the desktop, as them;
-        // and whose desktop it may be is written as root, out of the
-        // Agent's reach.
+        // What an earlier version left in a session: it says so and ends.
         "desk" => true,
         _ => false,
     };
@@ -109,7 +105,6 @@ async fn asked() -> ExitCode {
         Some("export") => moving(true),
         Some("restore") => moving(false),
         Some("uninstall") => uninstall(),
-        Some("setup") if env::args().nth(2).as_deref() == Some("computer") => choose_computer(),
         Some("setup") => setup().await,
         Some("providers") => providers().await,
         Some("connections") => connections(),
@@ -117,7 +112,12 @@ async fn asked() -> ExitCode {
         Some("pair") => pair(),
         Some("server") => server().await,
         Some("devices") => devices(),
-        Some("desk") => desk(),
+        // An Agent's computer is its own (ADR 0022): what an earlier
+        // version started in a session to lend the machine's desktop ends.
+        Some("desk") => {
+            Err("An agent no longer uses this machine's own desktop: its computer is its own."
+                .into())
+        }
         Some("transcription") => {
             let asked: Vec<String> = env::args().skip(2).collect();
             let asked: Vec<&str> = asked.iter().map(String::as_str).collect();
@@ -613,16 +613,6 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         .hearing_notices_in(home.join("notices"))
         .extending_in(home.join("extensions"))
         .switching_the_interface_with(switch_the_interface)
-        // Nobody's desktop is taken where the Owner chose a computer of
-        // the Agent's own, when Orbite was installed.
-        .lent_this_computer_by(
-            if computer_chosen().as_deref() == Some("own") {
-                u32::MAX
-            } else {
-                desk_account().unwrap_or(u32::MAX)
-            },
-            orbite::DESK_SOCKET,
-        )
         .connecting_servers_in(&home)
         .configured_in(&home)
         .keeping_secrets_in(&home)
@@ -786,209 +776,6 @@ fn pair() -> Result<(), Failure> {
         );
     }
     Ok(())
-}
-
-/// Offers this machine's desktop to the Agent, from the graphical session of
-/// whoever opened it; or, as root when Orbite is installed, writes down
-/// whose desktop may be offered (`desk allow ACCOUNT`).
-fn desk() -> Result<(), Failure> {
-    use std::os::unix::fs::MetadataExt;
-    let asked: Vec<String> = env::args().skip(2).collect();
-    if let ["allow", account] = asked.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-        let number = account_numbered(account)
-            .ok_or_else(|| format!("There is no account called {account} on this machine."))?;
-        let written =
-            PathBuf::from(format!("{}{DESK_OF}", setting("ORBITE_ROOT").unwrap_or_default()));
-        // Read by the Agent's service and by the helper of every session,
-        // whatever root's own habits for the files it makes.
-        let write = || {
-            use std::os::unix::fs::PermissionsExt;
-            if let Some(folder) = written.parent() {
-                fs::create_dir_all(folder)?;
-                fs::set_permissions(folder, fs::Permissions::from_mode(0o755))?;
-            }
-            fs::write(&written, format!("{number}\n"))?;
-            fs::set_permissions(&written, fs::Permissions::from_mode(0o644))
-        };
-        write().map_err(|error| {
-            format!("{} could not be written: {error}. Run this as root.", written.display())
-        })?;
-        println!(
-            "The desktop of {account} may be offered to the agent, once they run: orbite desk\n\
-             The agent takes this in when it next starts."
-        );
-        return Ok(());
-    }
-    if !asked.is_empty() {
-        return Err("Usage: orbite desk | sudo orbite desk allow ACCOUNT".into());
-    }
-    // The folder of the Orbite installed here, which its Owner cannot read
-    // but can see is there, and whose account the Agent's service runs as.
-    let installed = match setting("ORBITE_HOME") {
-        Some(home) => PathBuf::from(home),
-        None => {
-            PathBuf::from(format!("{}/var/lib/orbite", setting("ORBITE_ROOT").unwrap_or_default()))
-        }
-    };
-    let agent_of = |folder: &PathBuf| fs::metadata(folder).map(|folder| folder.uid());
-    let agent = agent_of(&installed).map_err(|_| "Orbite is not installed on this machine.")?;
-    let account = required("USER").or_else(|_| required("LOGNAME"))?;
-    // Only the account written down offers its desktop: the session of
-    // anyone else on this machine lends nothing, to whoever would ask.
-    let me = fs::metadata("/proc/self").map(|myself| myself.uid()).ok();
-    if me.is_none() || desk_account() != me {
-        return Err(not_the_account(&account).into());
-    }
-    let display = setting_of_the_session("DISPLAY");
-    let wayland = setting_of_the_session("WAYLAND_DISPLAY").is_some()
-        || setting_of_the_session("XDG_SESSION_TYPE").as_deref() == Some("wayland");
-    let session = match (&display, wayland) {
-        (_, true) => "wayland",
-        (Some(_), false) => "x11",
-        (None, false) => {
-            return Err(
-                "This is not a graphical session: there is no desktop here to offer.".into()
-            );
-        }
-    };
-    let screen = orbite::Screen::at(display.unwrap_or_default());
-    // The Agent's service may be starting, or starting again: it is waited
-    // for, as long as this session lasts and Orbite is installed.
-    loop {
-        if agent_of(&installed).ok() != Some(agent) {
-            // Orbite was removed, or is another's now: nothing to lend to.
-            return Ok(());
-        }
-        match orbite::offer_this_computer(orbite::DESK_SOCKET, agent, &account, session, &screen) {
-            Ok(()) | Err(orbite::NotOffered::NobodyListening) => {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-            }
-            // Something else holds the place the service listens at: it is
-            // told nothing, and the service is waited for.
-            Err(orbite::NotOffered::NotOrbite | orbite::NotOffered::Other(_)) => {
-                std::thread::sleep(std::time::Duration::from_secs(30));
-            }
-            Err(orbite::NotOffered::NotTheOwner) => {
-                return Err(not_the_account(&account).into());
-            }
-            Err(orbite::NotOffered::Wayland) => {
-                return Err(
-                    "This session is a Wayland one, whose desktop Orbite cannot be lent yet: \
-                            the agent keeps a computer of its own. Sessions on Xorg can be lent."
-                        .into(),
-                );
-            }
-        }
-    }
-}
-
-/// What `account` is told when theirs is not the desktop Orbite takes.
-fn not_the_account(account: &str) -> String {
-    format!(
-        "Orbite takes the desktop of the account it was installed by, which is not {account}. \
-         To have it take yours: sudo orbite desk allow {account}"
-    )
-}
-
-/// A setting of the graphical session this was started in.
-fn setting_of_the_session(name: &str) -> Option<String> {
-    env::var(name).ok().filter(|value| !value.trim().is_empty())
-}
-
-/// Where it is written which computer the Agent uses: chosen once, when
-/// Orbite is installed, and out of the Agent's reach.
-const COMPUTER_OF: &str = "/usr/local/share/orbite/computer";
-
-/// The computer chosen for the Agent: `this` machine's desktop, or one of
-/// its `own`. None where nobody chose.
-fn computer_chosen() -> Option<String> {
-    let written = format!("{}{COMPUTER_OF}", setting("ORBITE_ROOT").unwrap_or_default());
-    let chosen = fs::read_to_string(written).ok()?.trim().to_owned();
-    matches!(chosen.as_str(), "this" | "own").then_some(chosen)
-}
-
-/// Asks, once, which computer the Agent will use, and writes it down
-/// where only root writes. The installer asks this; it is not asked again.
-fn choose_computer() -> Result<(), Failure> {
-    use orbite::{Choice, Front, Picked};
-    if let Some(chosen) = computer_chosen() {
-        println!(
-            "Your agent uses {}: that was chosen when Orbite was installed, and stays. \
-             Install Orbite again to choose again.",
-            if chosen == "own" { "a computer of its own" } else { "this machine's own desktop" }
-        );
-        return Ok(());
-    }
-    let choices = [
-        Choice::of("This machine's own desktop")
-            .hinted("it works where you see it, with your programs")
-            .also(&["this"]),
-        Choice::of("A computer of its own")
-            .hinted("apart: nothing of yours is there")
-            .also(&["own"]),
-    ];
-    let question = "Which computer will your agent use? This is chosen once.";
-    let asked = |front: &mut dyn Front| front.choose(question, &choices, 0, None);
-    let picked = if orbite::Welcome::fits_here()
-        && let Ok(mut screen) = orbite::Welcome::open()
-    {
-        asked(&mut screen)
-    } else {
-        let typed = std::io::BufReader::new(std::io::stdin());
-        asked(&mut orbite::Lines::new(typed, std::io::stdout()))
-    };
-    let chosen = match picked {
-        Ok(Picked::Choice(1)) => "own",
-        Ok(_) => "this",
-        Err(_) => return Err("Nothing was chosen.".into()),
-    };
-    let written =
-        PathBuf::from(format!("{}{COMPUTER_OF}", setting("ORBITE_ROOT").unwrap_or_default()));
-    let write = || {
-        use std::os::unix::fs::PermissionsExt;
-        if let Some(folder) = written.parent() {
-            fs::create_dir_all(folder)?;
-            fs::set_permissions(folder, fs::Permissions::from_mode(0o755))?;
-        }
-        fs::write(&written, format!("{chosen}\n"))?;
-        fs::set_permissions(&written, fs::Permissions::from_mode(0o644))
-    };
-    write().map_err(|error| {
-        format!("{} could not be written: {error}. Run this as root.", written.display()).into()
-    })
-}
-
-/// Where the installer, or root after it, wrote whose desktop the Agent may
-/// be lent: a place the Agent's own account cannot write to.
-const DESK_OF: &str = "/usr/local/share/orbite/desk";
-
-/// The number of the account whose desktop the Agent may be lent, when one
-/// was written down.
-fn desk_account() -> Option<u32> {
-    let written = format!("{}{DESK_OF}", setting("ORBITE_ROOT").unwrap_or_default());
-    fs::read_to_string(written).ok()?.trim().parse().ok()
-}
-
-/// The number of the account called `name` on this machine.
-fn account_numbered(name: &str) -> Option<u32> {
-    let accounts = fs::read_to_string("/etc/passwd").unwrap_or_default();
-    let written = accounts.lines().find_map(|line| {
-        let mut parts = line.split(':');
-        (parts.next()? == name).then(|| parts.nth(1)?.parse().ok()).flatten()
-    });
-    // An account kept elsewhere than in this machine's own file (a
-    // directory of the network) is known to the system all the same.
-    written.or_else(|| {
-        if name.starts_with('-') {
-            return None;
-        }
-        let asked =
-            std::process::Command::new(orbite::system_program("id")).args(["-u", name]).output();
-        String::from_utf8_lossy(&asked.ok().filter(|said| said.status.success())?.stdout)
-            .trim()
-            .parse()
-            .ok()
-    })
 }
 
 /// Lists the devices let into the web interface, or turns one away.
@@ -1304,8 +1091,8 @@ fn uninstall() -> Result<(), Failure> {
         "/etc/systemd/system/orbite-update.timer",
         "/etc/sudoers.d/orbite",
         "/etc/xdg/autostart/orbite-desk.desktop",
-        DESK_OF,
-        COMPUTER_OF,
+        "/usr/local/share/orbite/desk",
+        "/usr/local/share/orbite/computer",
         "/usr/local/bin/orbite.previous",
         "/usr/local/bin/orbite.refused",
         "/usr/local/bin/orbite.updating",
@@ -1321,7 +1108,7 @@ fn uninstall() -> Result<(), Failure> {
         }
     }
     // The folder of what the installer wrote down, when nothing is left in it.
-    if let Some(folder) = PathBuf::from(format!("{root}{DESK_OF}")).parent() {
+    if let Some(folder) = PathBuf::from(format!("{root}/usr/local/share/orbite/desk")).parent() {
         let _ = fs::remove_dir(folder);
     }
     systemctl(&["daemon-reload"]);

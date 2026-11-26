@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.5
+
+Released on 2026-11-26.
+
+- **Your agent's computer is always its own.** It is no longer lent this machine's own desktop, with your programs and the accounts you are signed in to: the installer no longer offers it, takes away what an earlier version wrote to lend it, and an agent that had it now uses a screen and a browser of its own. What it needs of an account of yours, it asks you to sign in to there.
+- Under way, not for use yet: one server holding several agents, each in a container of its own (ADR 0022). The program has the commands for it; the installer and the apps do not offer it yet.
+
 ## 0.9.4
 
 Released on 2026-11-26.
