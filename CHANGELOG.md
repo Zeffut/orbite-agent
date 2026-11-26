@@ -2,6 +2,13 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.7
+
+Released on 2026-11-26.
+
+- **The page has a layout of its own on a computer.** Wide enough, it shows a column beside the conversation: your agent, the conversation, services and settings. Each is a screen of its own: the model and how your agent works, the services with a button to connect each, and your agent's name, shape and colour. On a phone, and in a narrow window, the page is as it was.
+- The desktop app opens wide, and has the menus a Mac expects: a link could not be pasted into it.
+
 ## 0.9.6
 
 Released on 2026-11-26.

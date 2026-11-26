@@ -1,0 +1,291 @@
+// The page on a computer: a column beside the Conversation, with the Agent,
+// what it is connected to and how it is set. A desk has room a phone has
+// not: nothing here is a phone's screen stretched.
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const make = (tag, className, text) => {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined) element.textContent = text;
+    return element;
+  };
+  const wide = matchMedia("(min-width: 900px)");
+  const side = $("side"), panel = $("panel"), talk = $("talk");
+  let french = (navigator.language || "").startsWith("fr");
+  const say = (english, inFrench) => (french ? inFrench : english);
+  const post = (path, body) =>
+    fetch(path, { method: "POST", headers: { "content-type": "application/json", "x-orbite": "1" }, body: JSON.stringify(body) });
+  let me = null, kept = null, showing = "talk";
+
+  // The Agent as it looks: its shape in its colour, and its two eyes.
+  function figure(outline, colour, eyes, size) {
+    const box = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    box.setAttribute("viewBox", "0 0 100 100");
+    box.setAttribute("width", size);
+    box.setAttribute("height", size);
+    const at = eyes === undefined ? 36 : eyes;
+    box.innerHTML = outline
+      ? `<path d="${outline}" fill="${colour}"/><g fill="#0d0d0d"><rect x="38" y="${at}" width="7" height="15" rx="3.5"/><rect x="55" y="${at}" width="7" height="15" rx="3.5"/></g>`
+      : `<g transform="rotate(-24 50 50)"><ellipse cx="50" cy="50" rx="44" ry="13" fill="none" stroke="currentColor" stroke-width="5"/></g><circle cx="50" cy="50" r="26" fill="currentColor"/><g fill="var(--ground)"><rect x="40" y="40" width="6" height="13" rx="3"/><rect x="54" y="40" width="6" height="13" rx="3"/></g>`;
+    return box;
+  }
+
+  function column() {
+    side.replaceChildren();
+    side.append(make("div", "mark", "Orbite"));
+    const who = make("button", "agent" + (showing === "agent" ? " here" : ""));
+    who.type = "button";
+    const look = me && me.look;
+    who.append(figure(look && look.outline, look && look.colour, look && look.eyes, 40));
+    const named = make("span");
+    named.append(make("strong", "", (me && me.agent) || "Orbite"), make("small", "", say("My agent", "Mon agent")));
+    who.append(named);
+    who.onclick = () => open("agent");
+    side.append(who);
+    const places = [
+      ["talk", say("Conversation", "Conversation"), "M4 5h16v11H9l-5 4z"],
+      ["services", say("Services", "Services"), "M7 7h4v4H7zM13 13h4v4h-4zM11 9h4a2 2 0 0 1 2 2v2"],
+      ["settings", say("Settings", "Réglages"), "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM4 12h2M18 12h2M12 4v2M12 18v2M6.5 6.5l1.4 1.4M16.1 16.1l1.4 1.4M6.5 17.5l1.4-1.4M16.1 7.9l1.4-1.4"],
+    ];
+    const list = make("div", "places");
+    for (const [place, label, drawn] of places) {
+      const go = make("button", showing === place ? "here" : "");
+      go.type = "button";
+      go.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="${drawn}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      go.append(make("span", "", label));
+      go.onclick = () => open(place);
+      list.append(go);
+    }
+    side.append(list);
+  }
+
+  function open(place) {
+    showing = place;
+    column();
+    panel.hidden = place === "talk";
+    talk.classList.toggle("aside", place !== "talk");
+    if (place === "settings") settings();
+    if (place === "services") services();
+    if (place === "agent") agent();
+  }
+
+  function head(title, about) {
+    panel.replaceChildren();
+    const top = make("header");
+    top.append(make("h1", "", title));
+    if (about) top.append(make("p", "", about));
+    panel.append(top);
+  }
+
+  async function read() {
+    const told = await fetch("/api/settings").catch(() => null);
+    kept = told && told.ok ? await told.json() : null;
+    return kept;
+  }
+  const value = (key) => ((kept && kept.settings.find((one) => one.key === key)) || {}).value || "";
+  async function set(key, to) {
+    const sent = await post("/api/settings", { key, value: to }).catch(() => null);
+    return !!(sent && sent.ok);
+  }
+
+  // The marks of the services, from Simple Icons (CC0): each belongs to its
+  // service, and is shown only to say which service is meant.
+  const MARKS = {"airtable":["M11.992 1.966c-.434 0-.87.086-1.28.257L1.779 5.917c-.503.208-.49.908.012 1.116l8.982 3.558a3.266 3.266 0 0 0 2.454 0l8.982-3.558c.503-.196.503-.908.012-1.116l-8.957-3.694a3.255 3.255 0 0 0-1.272-.257zM23.4 8.056a.589.589 0 0 0-.222.045l-10.012 3.877a.612.612 0 0 0-.38.564v8.896a.6.6 0 0 0 .821.552L23.62 18.1a.583.583 0 0 0 .38-.551V8.653a.6.6 0 0 0-.6-.596zM.676 8.095a.644.644 0 0 0-.48.19C.086 8.396 0 8.53 0 8.69v8.355c0 .442.515.737.908.54l6.27-3.006.307-.147 2.969-1.436c.466-.22.43-.908-.061-1.092L.883 8.138a.57.57 0 0 0-.207-.044z","#18bfff"],"atlassian":["M7.12 11.084a.683.683 0 00-1.16.126L.075 22.974a.703.703 0 00.63 1.018h8.19a.678.678 0 00.63-.39c1.767-3.65.696-9.203-2.406-12.52zM11.434.386a15.515 15.515 0 00-.906 15.317l3.95 7.9a.703.703 0 00.628.388h8.19a.703.703 0 00.63-1.017L12.63.38a.664.664 0 00-1.196.006z","#0052cc"],"calendly":["M19.655 14.262c.281 0 .557.023.828.064 0 .005-.005.01-.005.014-.105.267-.234.534-.381.786l-1.219 2.106c-1.112 1.936-3.177 3.127-5.411 3.127h-2.432c-2.23 0-4.294-1.191-5.412-3.127l-1.218-2.106a6.251 6.251 0 0 1 0-6.252l1.218-2.106C6.736 4.832 8.8 3.641 11.035 3.641h2.432c2.23 0 4.294 1.191 5.411 3.127l1.219 2.106c.147.252.271.519.381.786 0 .004.005.009.005.014-.267.041-.543.064-.828.064-1.816 0-2.501-.607-3.291-1.306-.764-.676-1.711-1.517-3.44-1.517h-1.029c-1.251 0-2.387.455-3.2 1.278-.796.805-1.233 1.904-1.233 3.099v1.411c0 1.196.437 2.295 1.233 3.099.813.823 1.949 1.278 3.2 1.278h1.034c1.729 0 2.676-.841 3.439-1.517.791-.703 1.471-1.306 3.287-1.301Zm.005-3.237c.399 0 .794-.036 1.179-.11-.002-.004-.002-.01-.002-.014-.073-.414-.193-.823-.349-1.218.731-.12 1.407-.396 1.986-.819 0-.004-.005-.013-.005-.018-.331-1.085-.832-2.101-1.489-3.03-.649-.915-1.435-1.719-2.331-2.395-1.867-1.398-4.088-2.138-6.428-2.138-1.448 0-2.855.28-4.175.841-1.273.543-2.423 1.315-3.407 2.299S2.878 6.552 2.341 7.83c-.557 1.324-.842 2.726-.842 4.175 0 1.448.281 2.855.842 4.174.542 1.274 1.314 2.423 2.298 3.407s2.129 1.761 3.407 2.299c1.324.556 2.727.841 4.175.841 2.34 0 4.561-.74 6.428-2.137a10.815 10.815 0 0 0 2.331-2.396c.652-.929 1.158-1.949 1.489-3.03 0-.004.005-.014.005-.018-.579-.423-1.255-.699-1.986-.819.161-.395.276-.804.349-1.218.005-.009.005-.014.005-.023.869.166 1.692.506 2.404 1.035.685.505.552 1.075.446 1.416C22.184 20.437 17.619 24 12.221 24c-6.625 0-12-5.375-12-12s5.37-12 12-12c5.398 0 9.963 3.563 11.471 8.464.106.341.239.915-.446 1.421-.717.529-1.535.873-2.404 1.034.128.716.128 1.45 0 2.166-.387-.074-.782-.11-1.182-.11-4.184 0-3.968 2.823-6.736 2.823h-1.029c-1.899 0-3.15-1.357-3.15-3.095v-1.411c0-1.738 1.251-3.094 3.15-3.094h1.034c2.768 0 2.552 2.823 6.731 2.827Z","#006bff"],"clickup":["M2 18.439l3.69-2.828c1.961 2.56 4.044 3.739 6.363 3.739 2.307 0 4.33-1.166 6.203-3.704L22 18.405C19.298 22.065 15.941 24 12.053 24 8.178 24 4.788 22.078 2 18.439zM12.04 6.15l-6.568 5.66-3.036-3.52L12.055 0l9.543 8.296-3.05 3.509z","#7b68ee"],"cloudflare":["M16.5088 16.8447c.1475-.5068.0908-.9707-.1553-1.3154-.2246-.3164-.6045-.499-1.0615-.5205l-8.6592-.1123a.1559.1559 0 0 1-.1333-.0713c-.0283-.042-.0351-.0986-.021-.1553.0278-.084.1123-.1484.2036-.1562l8.7359-.1123c1.0351-.0489 2.1601-.8868 2.5537-1.9136l.499-1.3013c.0215-.0561.0293-.1128.0147-.168-.5625-2.5463-2.835-4.4453-5.5499-4.4453-2.5039 0-4.6284 1.6177-5.3876 3.8614-.4927-.3658-1.1187-.5625-1.794-.499-1.2026.119-2.1665 1.083-2.2861 2.2856-.0283.31-.0069.6128.0635.894C1.5683 13.171 0 14.7754 0 16.752c0 .1748.0142.3515.0352.5273.0141.083.0844.1475.1689.1475h15.9814c.0909 0 .1758-.0645.2032-.1553l.12-.4268zm2.7568-5.5634c-.0771 0-.1611 0-.2383.0112-.0566 0-.1054.0415-.127.0976l-.3378 1.1744c-.1475.5068-.0918.9707.1543 1.3164.2256.3164.6055.498 1.0625.5195l1.8437.1133c.0557 0 .1055.0263.1329.0703.0283.043.0351.1074.0214.1562-.0283.084-.1132.1485-.204.1553l-1.921.1123c-1.041.0488-2.1582.8867-2.5527 1.914l-.1406.3585c-.0283.0713.0215.1416.0986.1416h6.5977c.0771 0 .1474-.0489.169-.126.1122-.4082.1757-.837.1757-1.2803 0-2.6025-2.125-4.727-4.7344-4.727","#f38020"],"linear":["M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z","#5e6ad2"],"notion":["M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z","#111111"],"paypal":["M7.016 19.198h-4.2a.562.562 0 0 1-.555-.65L5.093.584A.692.692 0 0 1 5.776 0h7.222c3.417 0 5.904 2.488 5.846 5.5-.006.25-.027.5-.066.747A6.794 6.794 0 0 1 12.071 12H8.743a.69.69 0 0 0-.682.583l-.325 2.056-.013.083-.692 4.39-.015.087zM19.79 6.142c-.01.087-.01.175-.023.261a7.76 7.76 0 0 1-7.695 6.598H9.007l-.283 1.795-.013.083-.692 4.39-.134.843-.014.088H6.86l-.497 3.15a.562.562 0 0 0 .555.65h3.612c.34 0 .63-.249.683-.585l.952-6.031a.692.692 0 0 1 .683-.584h2.126a6.793 6.793 0 0 0 6.707-5.752c.306-1.95-.466-3.744-1.89-4.906z","#003087"],"sentry":["M13.91 2.505c-.873-1.448-2.972-1.448-3.844 0L6.904 7.92a15.478 15.478 0 0 1 8.53 12.811h-2.221A13.301 13.301 0 0 0 5.784 9.814l-2.926 5.06a7.65 7.65 0 0 1 4.435 5.848H2.194a.365.365 0 0 1-.298-.534l1.413-2.402a5.16 5.16 0 0 0-1.614-.913L.296 19.275a2.182 2.182 0 0 0 .812 2.999 2.24 2.24 0 0 0 1.086.288h6.983a9.322 9.322 0 0 0-3.845-8.318l1.11-1.922a11.47 11.47 0 0 1 4.95 10.24h5.915a17.242 17.242 0 0 0-7.885-15.28l2.244-3.845a.37.37 0 0 1 .504-.13c.255.14 9.75 16.708 9.928 16.9a.365.365 0 0 1-.327.543h-2.287c.029.612.029 1.223 0 1.831h2.297a2.206 2.206 0 0 0 1.922-3.31z","#362d59"],"stripe":["M13.976 9.15c-2.172-.806-3.356-1.426-3.356-2.409 0-.831.683-1.305 1.901-1.305 2.227 0 4.515.858 6.09 1.631l.89-5.494C18.252.975 15.697 0 12.165 0 9.667 0 7.589.654 6.104 1.872 4.56 3.147 3.757 4.992 3.757 7.218c0 4.039 2.467 5.76 6.476 7.219 2.585.92 3.445 1.574 3.445 2.583 0 .98-.84 1.545-2.354 1.545-1.875 0-4.965-.921-6.99-2.109l-.9 5.555C5.175 22.99 8.385 24 11.714 24c2.641 0 4.843-.624 6.328-1.813 1.664-1.305 2.525-3.236 2.525-5.732 0-4.128-2.524-5.851-6.594-7.305h.003z","#635bff"],"supabase":["M11.9 1.036c-.015-.986-1.26-1.41-1.874-.637L.764 12.05C-.33 13.427.65 15.455 2.409 15.455h9.579l.113 7.51c.014.985 1.259 1.408 1.873.636l9.262-11.653c1.093-1.375.113-3.403-1.645-3.403h-9.642z","#2fae76"],"trello":["M21.147 0H2.853A2.86 2.86 0 000 2.853v18.294A2.86 2.86 0 002.853 24h18.294A2.86 2.86 0 0024 21.147V2.853A2.86 2.86 0 0021.147 0zM10.34 17.287a.953.953 0 01-.953.953h-4a.954.954 0 01-.954-.953V5.38a.953.953 0 01.954-.953h4a.954.954 0 01.953.953zm9.233-5.467a.944.944 0 01-.953.947h-4a.947.947 0 01-.953-.947V5.38a.953.953 0 01.953-.953h4a.954.954 0 01.953.953z","#0052cc"]};
+
+  // What a value is called for a person.
+  const WORDS = {
+    careful: ["Careful", "Prudent"], balanced: ["Balanced", "Équilibré"], free: ["Free", "Libre"],
+    off: ["Off", "Désactivé"], on: ["On", "Activé"], strict: ["Strict", "Strict"],
+    en: ["English", "English"], fr: ["Français", "Français"],
+    60: ["Every hour", "Chaque heure"], 240: ["Every 4 hours", "Toutes les 4 heures"], 720: ["Every 12 hours", "Toutes les 12 heures"],
+    provider: ["By the AI provider", "Par le fournisseur d'IA"],
+  };
+  const worded = (written) => (WORDS[written] ? say(WORDS[written][0], WORDS[written][1]) : written);
+
+  function row(label, about, control) {
+    const line = make("div", "row");
+    const words = make("div");
+    words.append(make("strong", "", label));
+    if (about) words.append(make("small", "", about));
+    line.append(words, control);
+    return line;
+  }
+
+  function chosen(key, choices, labels) {
+    const choose = make("select");
+    const now = value(key);
+    const all = choices.includes(now) ? choices : [now, ...choices];
+    for (const choice of all) {
+      const one = make("option", "", (labels && labels[choice]) || worded(choice));
+      one.value = choice;
+      choose.append(one);
+    }
+    choose.value = now;
+    choose.onchange = async () => {
+      choose.disabled = true;
+      // A change the Agent starts again for is taken a moment later.
+      let taken = false;
+      for (let tried = 0; tried < 20 && !taken; tried++) {
+        taken = await set(key, choose.value);
+        if (!taken) await new Promise((wait) => setTimeout(wait, 800));
+      }
+      if (!taken) choose.value = now;
+      choose.disabled = false;
+    };
+    return choose;
+  }
+
+  async function settings() {
+    head(say("Settings", "Réglages"));
+    if (!(await read())) return panel.append(make("p", "quiet", say("The settings could not be read.", "Les réglages n'ont pas pu être lus.")));
+    const of = (key) => (kept.settings.find((one) => one.key === key) || { choices: [] }).choices;
+    const models = kept.models || [];
+    const called = Object.fromEntries(models.map((model) => [model.value, model.label + (model.value === kept.usual ? say(" · Recommended", " · Recommandé") : "")]));
+    const thinks = make("section");
+    thinks.append(make("h2", "", say("Thinks with", "Réfléchit avec")));
+    if (models.length) {
+      thinks.append(row(say("Model", "Modèle"), say("The recommended one makes a plan last the month.", "Le modèle recommandé fait durer un abonnement tout le mois."), chosen("model", models.map((model) => model.value), called)));
+      thinks.append(row(say("Light model", "Modèle léger"), say("For summaries and wake-ups.", "Pour les résumés et les réveils."), chosen("light", ["off", ...models.map((model) => model.value)], called)));
+    } else {
+      thinks.append(row(say("Model", "Modèle"), "", make("span", "quiet", value("model"))));
+    }
+    const does = make("section");
+    does.append(make("h2", "", say("How it works", "Sa façon de travailler")));
+    does.append(row(say("Permission", "Autorisation"), say("How much your agent does without asking.", "Ce que ton agent fait sans demander."), chosen("permission", of("permission"))));
+    does.append(row(say("Wake-ups", "Réveils"), say("How often it looks at what it has to do.", "À quelle fréquence il regarde ce qu'il a à faire."), chosen("wakeups", of("wakeups"))));
+    does.append(row(say("Quiet hours", "Heures calmes"), say("When it does not write first.", "Quand il ne t'écrit pas de lui-même."), chosen("quiet", of("quiet"))));
+    does.append(row(say("Passwords in messages", "Mots de passe dans les messages"), say("Whether a message that holds one reaches the AI.", "Si un message qui en contient un parvient à l'IA."), chosen("secrets", of("secrets"))));
+    const rest = make("section");
+    rest.append(make("h2", "", "Orbite"));
+    rest.append(row(say("Language", "Langue"), say("Of Orbite's own words.", "Des textes d'Orbite."), chosen("language", of("language"))));
+    rest.append(row(say("Voice messages", "Messages vocaux"), say("What writes down what you say.", "Ce qui transcrit ce que tu dis."), chosen("voice", of("voice"))));
+    rest.append(row(say("Automatic updates", "Mises à jour automatiques"), "", chosen("updates", of("updates"))));
+    panel.append(thinks, does, rest);
+  }
+
+  async function services() {
+    head(say("Services", "Services"), say("What your agent can use for you, once you have signed in.", "Ce que ton agent peut utiliser pour toi, une fois que tu t'es connecté."));
+    const told = await fetch("/api/connectors").catch(() => null);
+    const all = told && told.ok ? await told.json() : null;
+    if (!all) return panel.append(make("p", "quiet", say("The services could not be read.", "Les services n'ont pas pu être lus.")));
+    if (!all.with_a_touch) panel.append(make("p", "quiet", say("Your agent's page is not reached encrypted yet: ask it in words to connect a service.", "La page de ton agent n'est pas encore joignable en chiffré : demande-lui avec tes mots de connecter un service.")));
+    const list = make("section", "grid");
+    for (const one of all.connectors) {
+      const card = make("div", "card");
+      const mark = make("span", "letter", MARKS[one.name] ? "" : one.label.slice(0, 1));
+      if (MARKS[one.name]) {
+        mark.classList.add("mark");
+        mark.innerHTML = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="${MARKS[one.name][0]}" fill="${MARKS[one.name][1]}"/></svg>`;
+      }
+      card.append(mark);
+      const words = make("div");
+      words.append(make("strong", "", one.label), make("small", "", one.does));
+      card.append(words);
+      if (one.connected) {
+        card.append(make("span", "done", say("Connected", "Connecté")));
+      } else {
+        const go = make("button", "", say("Connect", "Connecter"));
+        go.type = "button";
+        go.disabled = !all.with_a_touch;
+        go.onclick = async () => {
+          go.disabled = true;
+          const begun = await post("/api/connectors", { name: one.name }).catch(() => null);
+          const link = begun && begun.ok ? (await begun.json()).link : null;
+          if (!link) return (go.disabled = false);
+          window.open(link, "_blank", "noopener");
+          // Back from the service, it says so itself.
+          const until = Date.now() + 5 * 60 * 1000;
+          const looking = setInterval(async () => {
+            if (showing !== "services" || Date.now() > until) return clearInterval(looking);
+            const now = await fetch("/api/connectors").then((answer) => answer.json()).catch(() => null);
+            if (now && (now.connectors.find((other) => other.name === one.name) || {}).connected) {
+              clearInterval(looking);
+              services();
+            }
+          }, 2500);
+        };
+        card.append(go);
+      }
+      list.append(card);
+    }
+    panel.append(list);
+  }
+
+  async function agent() {
+    head(say("Your agent", "Ton agent"), say("Its name and its look, which are its own.", "Son nom et son apparence, qui lui sont propres."));
+    if (!(await read())) return;
+    const shapes = kept.shapes || {}, colours = kept.colours || {};
+    const colour = () => colours[value("colour")] || "#f2f2f0";
+    const shown = make("div", "shown");
+    const draw = () => {
+      const shape = shapes[value("shape")];
+      shown.replaceChildren(figure(shape && shape.outline, colour(), shape && shape.eyes, 132));
+    };
+    const change = async (key, to) => {
+      const one = kept.settings.find((setting) => setting.key === key);
+      if (one) one.value = to;
+      draw();
+      pick();
+      await set(key, to);
+      const again = await fetch("/api/me").catch(() => null);
+      if (again && again.ok) me = await again.json();
+      column();
+    };
+    const name = make("input");
+    name.value = value("name");
+    name.maxLength = 40;
+    name.onchange = () => name.value.trim() && change("name", name.value.trim());
+    const forms = make("div", "swatches"), tints = make("div", "swatches");
+    const pick = () => {
+      forms.replaceChildren();
+      for (const shape of Object.keys(shapes).sort()) {
+        const one = make("button", value("shape") === shape ? "here" : "");
+        one.type = "button";
+        one.append(figure(shapes[shape].outline, colour(), shapes[shape].eyes, 46));
+        one.onclick = () => change("shape", shape);
+        forms.append(one);
+      }
+      tints.replaceChildren();
+      for (const tint of Object.keys(colours).sort()) {
+        const one = make("button", "tint" + (value("colour") === tint ? " here" : ""));
+        one.type = "button";
+        one.style.setProperty("--tint", colours[tint]);
+        one.onclick = () => change("colour", tint);
+        tints.append(one);
+      }
+    };
+    draw();
+    pick();
+    const named = make("section");
+    named.append(row(say("Name", "Nom"), "", name));
+    const formed = make("section");
+    formed.append(make("h2", "", say("Shape", "Forme")), forms);
+    const tinted = make("section");
+    tinted.append(make("h2", "", say("Colour", "Couleur")), tints);
+    panel.append(shown, named, formed, tinted);
+  }
+
+  async function arrange() {
+    const here = wide.matches && !talk.hidden;
+    document.body.classList.toggle("desk", here);
+    side.hidden = !here;
+    if (!here) {
+      panel.hidden = true;
+      talk.classList.remove("aside");
+      return;
+    }
+    if (!me) {
+      const told = await fetch("/api/me").catch(() => null);
+      if (told && told.ok) {
+        me = await told.json();
+        french = me.language === "fr";
+      }
+    }
+    column();
+  }
+  wide.addEventListener("change", arrange);
+  // The Conversation shows once the device is let in: the column comes with it.
+  new MutationObserver(arrange).observe(talk, { attributes: true, attributeFilter: ["hidden"] });
+  arrange();
+})();

@@ -225,3 +225,59 @@ button { cursor: pointer; }
 
 /* On a phone everything is read at arm's length: larger, all of it. */
 @media (pointer: coarse) and (max-width: 700px) { #talk, #pairing { zoom: 1.14; } }
+
+/* On a computer: a column beside the Conversation, and room for what a
+   phone puts behind menus. Nothing here is a phone's screen stretched. */
+body.desk { display: grid; grid-template-columns: 264px minmax(0, 1fr); }
+body.desk #talk { grid-column: 2; min-width: 0; }
+body.desk #talk.aside { display: none; }
+body.desk #who { display: none; }
+body.desk #said { padding-left: max(28px, calc((100% - 820px) / 2)); padding-right: max(28px, calc((100% - 820px) / 2)); padding-top: 28px; }
+body.desk #foot { padding-left: max(28px, calc((100% - 820px) / 2)); padding-right: max(28px, calc((100% - 820px) / 2)); padding-bottom: 22px; }
+body.desk #talk header { background: none; min-height: 0; padding: 0; }
+body.desk .said { max-width: min(640px, 78%); }
+#side {
+  grid-column: 1; height: 100%; display: flex; flex-direction: column; gap: 6px; padding: 22px 12px 16px;
+  background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto;
+}
+#side .mark { font-size: 19px; font-weight: 700; padding: 0 10px 14px; letter-spacing: -0.01em; }
+#side button {
+  display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px; border: 0; border-radius: 12px;
+  background: none; text-align: left; color: var(--ink);
+}
+#side button:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+#side button.here { background: color-mix(in srgb, var(--ink) 10%, transparent); }
+#side .agent { padding: 10px; margin-bottom: 10px; }
+#side .agent span { display: grid; line-height: 1.25; min-width: 0; }
+#side .agent strong { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#side small, #panel small { color: var(--quiet); font-size: 12.5px; }
+#side .places { display: grid; gap: 2px; }
+#side .places svg { color: var(--quiet); flex: none; }
+#side .places .here svg { color: var(--ink); }
+#panel { grid-column: 2; height: 100%; overflow-y: auto; padding: 40px max(28px, calc((100% - 720px) / 2)) 60px; }
+#panel header h1 { margin: 0; font-size: 26px; letter-spacing: -0.01em; }
+#panel header p { margin: 6px 0 0; color: var(--quiet); }
+#panel section { margin-top: 26px; background: var(--agent); border: 1px solid var(--agent-line); border-radius: 18px; padding: 4px 18px; }
+#panel h2 { margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: var(--quiet); }
+#panel .row { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 13px 0; border-top: 1px solid var(--line); }
+#panel h2 + .row, #panel section > .row:first-child { border-top: 0; }
+#panel .row > div { display: grid; min-width: 0; }
+#panel .row strong { font-weight: 500; }
+#panel select, #panel input {
+  padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--ground); max-width: 300px;
+}
+#panel input { width: 260px; }
+#panel .quiet { color: var(--quiet); }
+#panel .shown { display: grid; place-items: center; padding: 26px 0 0; }
+#panel .swatches { display: flex; flex-wrap: wrap; gap: 10px; padding: 6px 0 16px; }
+#panel .swatches button { border: 2px solid transparent; border-radius: 16px; background: none; padding: 5px; line-height: 0; }
+#panel .swatches button.here { border-color: var(--ink); }
+#panel .swatches .tint { width: 40px; height: 40px; border-radius: 50%; background: var(--tint); padding: 0; outline: 3px solid var(--agent); outline-offset: -5px; }
+#panel .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; background: none; border: 0; padding: 0; }
+#panel .card { display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--agent); border: 1px solid var(--agent-line); border-radius: 16px; }
+#panel .card > div { display: grid; flex: 1; min-width: 0; }
+#panel .card .letter { width: 40px; height: 40px; border-radius: 11px; background: var(--ground); display: grid; place-items: center; font-weight: 700; flex: none; }
+#panel .card button { padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--bright); color: var(--on-bright); font-weight: 600; font-size: 13px; }
+#panel .card button:disabled { opacity: 0.4; }
+#panel .card .done { color: var(--ok); font-size: 13px; font-weight: 600; }
+#panel .card .letter.mark { background: #f2f2f0; }

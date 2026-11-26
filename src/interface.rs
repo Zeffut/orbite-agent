@@ -35,6 +35,8 @@ const SHOWN_AT_FIRST: i64 = 40;
 const PAGE: &str = include_str!("interface/index.html");
 const SCRIPT: &str = include_str!("interface/app.js");
 const STYLE: &str = include_str!("interface/app.css");
+/// The page on a computer: a column beside the Conversation.
+const DESK: &str = include_str!("interface/desk.js");
 const MANIFEST: &str = include_str!("interface/manifest.webmanifest");
 const ICON: &str = include_str!("interface/icon.svg");
 /// The same icon as pictures, for the phones that take nothing else when
@@ -347,6 +349,7 @@ impl Interface {
             .route("/", get(|| async { page("text/html; charset=utf-8", PAGE) }))
             .route("/app.js", get(|| async { page("text/javascript; charset=utf-8", SCRIPT) }))
             .route("/app.css", get(|| async { page("text/css; charset=utf-8", STYLE) }))
+            .route("/desk.js", get(|| async { page("text/javascript; charset=utf-8", DESK) }))
             .route("/icon.svg", get(|| async { page("image/svg+xml", ICON) }))
             .route(
                 "/manifest.webmanifest",
