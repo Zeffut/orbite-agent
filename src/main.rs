@@ -187,6 +187,10 @@ async fn server() -> Result<(), Failure> {
                 orbite::Docker { image },
                 names,
                 Some(thinks),
+                // Where the Agents find the server, from their containers.
+                setting("ORBITE_SERVER_FOR_AGENTS")
+                    .and_then(|port| port.parse().ok())
+                    .unwrap_or(8378),
             )
             .await?;
             println!("Serving at http://{}", serving.address());

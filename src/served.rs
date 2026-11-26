@@ -69,6 +69,14 @@ impl Asked {
         // Pictures are put down where a Provider reads them from, under
         // names of the server's own: nothing an Agent says is a path here.
         let sent_pictures = sent["images"].as_array().cloned().unwrap_or_default();
+        // No more of them than a Provider takes, none larger than one is.
+        if sent_pictures.len() > 20
+            || sent_pictures.iter().any(|picture| {
+                picture["content"].as_str().is_none_or(|content| content.len() > 12_000_000)
+            })
+        {
+            return None;
+        }
         let (mut images, mut kept_in) = (Vec::new(), None);
         for (nth, picture) in sent_pictures.iter().enumerate() {
             let folder = match &kept_in {
