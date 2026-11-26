@@ -984,3 +984,43 @@ async fn a_secret_cannot_be_felt_for_by_the_marks_a_script_reads_up_to() {
     assert!(told.contains(">[MAIL_PASSWORD]"), "{told}");
     assert!(!told.contains("found") && !told.contains("tok-mail"), "{told}");
 }
+
+#[tokio::test]
+async fn an_answer_too_long_to_be_read_whole_is_not_cut_inside_a_secret() {
+    let home = tempfile::tempdir().unwrap();
+    // A long key, said back so many times that the answer is cut off while
+    // one more of them is half read.
+    let value = ["weather", "key"].join("-").repeat(8);
+    orbite::Secrets::kept_in(home.path()).set("WEATHER_KEY", &value).unwrap();
+    install(
+        &home.path().join("extensions"),
+        "weather",
+        json!({ "description": "Weather.", "hosts": ["localhost"], "secrets": ["WEATHER_KEY"] }),
+        KEYED,
+    );
+    let server = MockServer::start().await;
+    let body = format!("ab{}", value.repeat(800_000 / value.len() + 50));
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .mount(&server)
+        .await;
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([(
+            "weather_ask",
+            json!({ "url": format!("http://localhost:{}/now", server.address().port()) }),
+        )])
+        .then(Ok("Done.".into()));
+    let mut owner = agent_with_secrets_in(home.path(), &provider);
+
+    owner.says("What is the weather?");
+    owner.hears().await;
+
+    let told = outcome(&provider);
+    assert!(told.contains("[WEATHER_KEY]"), "{}", &told[..told.len().min(200)]);
+    assert!(
+        !told.contains(&value[..12]),
+        "the start of a secret was left where the answer was cut: …{}",
+        &told[told.len().saturating_sub(120)..]
+    );
+}

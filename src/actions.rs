@@ -69,7 +69,7 @@ timeout }), startTls(), close() }: none of them is awaited. read returns the tex
 past `until` (for IMAP, the tag of your command at the start of a line), or what is there when no \
 `until` is given; timeout is in seconds; it throws once the service has closed the connection. Lines end \
 with \\r\\n. Close it before returning. With a secret, each read waits a moment for the answer to be \
-whole: ask for little at a time (a list, then one message), never more than 800 kB in one answer.\n\
+whole: ask for little at a time (a list, then one message).\n\
 - To send a secret, write {{NAME}} in an address, a header, a body or what you write to a connection: \
 Orbite fills it in on the way, and the script never holds its value. {{base64:NAME}} sends it in base64, \
 as SMTP's AUTH LOGIN asks for a password; sign in with what takes the password by itself (IMAP LOGIN, \

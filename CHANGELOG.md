@@ -2,6 +2,12 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.3
+
+Released on 2026-11-26.
+
+- The review that read 0.9.2 after its release found two more ways for a script to learn of a secret, both fixed. An answer from the web too long to be read whole was cut where it stopped, which could be inside a secret a service said back: its start was then left in clear. This was so before 0.9.2 as well. And a connection that said more than is held at once failed, which told how long a secret was. In both cases what was read is now handed over short of its end, with every secret in it found first.
+
 ## 0.9.2
 
 Released on 2026-11-26.

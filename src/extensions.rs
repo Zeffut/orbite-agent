@@ -953,16 +953,21 @@ async fn wire(
             // where a secret is already a name.
             let (text, taken) = loop {
                 let whole = !careful || settled || closed;
-                if !whole && read.len() >= BODY_LIMIT * 4 {
-                    // Never in parts: how much of it came would tell.
-                    return Err(format!(
-                        "{host} says more at once than an Extension that holds a secret can be \
-                         given ({} kB): ask it for less at a time",
-                        BODY_LIMIT * 4 / 1000
-                    ));
+                // More than is ever held at once, and still coming: what is
+                // there is handed over short of its end, where a secret may
+                // not all have come. The same is handed whatever a secret
+                // is, and however long.
+                let full = !whole && read.len() >= BODY_LIMIT * 4;
+                let (text, taken) = if whole {
+                    handed_over(&read, lent, 0)
+                } else if full {
+                    handed_over(&read, lent, longest_dress(lent).saturating_sub(1))
+                } else {
+                    (String::new(), 0)
+                };
+                if full {
+                    break (text, taken);
                 }
-                let (text, taken) =
-                    if whole { handed_over(&read, lent) } else { (String::new(), 0) };
                 let found = whole
                     && match &until {
                         Some(mark) => text.contains(mark.as_str()),
@@ -1133,16 +1138,16 @@ format!(
                 }
             }
         }
-        // Cut at the limit, a body is cut before what may be the start of a
-        // secret: half of one would not be known for what it is.
-        if read.len() >= BODY_LIMIT * 4 {
-            let longest = lent.iter().flat_map(|(_, value)| dresses(value)).map(|d| d.len()).max();
-            read.truncate((BODY_LIMIT * 4).saturating_sub(longest.unwrap_or(0)));
-        }
-        let text = String::from_utf8_lossy(&read).into_owned();
         // A service that sends a secret back does not hand it to the script:
-        // named before the text is cut, so that no part of one is left.
-        let text: String = named(&text, lent).chars().take(BODY_LIMIT).collect();
+        // named before the text is cut, so that no part of one is left. A
+        // body longer than is read stops short of where it was cut off,
+        // where a secret may not all have been read: found in the whole of
+        // what was read first, one that started before there is whole.
+        let text: String = if read.len() >= BODY_LIMIT * 4 {
+            handed_over(&read, lent, longest_dress(lent).saturating_sub(1)).0
+        } else {
+            named(&String::from_utf8_lossy(&read), lent).chars().take(BODY_LIMIT).collect()
+        };
         return Ok(json!({ "status": status.as_u16(), "body": text }));
     }
     Err(format!("{host} redirects again and again"))
@@ -1218,13 +1223,21 @@ fn named(text: &str, lent: &[(String, String)]) -> String {
     named
 }
 
+/// How long the longest form is that a secret lent may come back in.
+fn longest_dress(lent: &[(String, String)]) -> usize {
+    lent.iter().flat_map(|(_, value)| dresses(value)).map(|dress| dress.len()).max().unwrap_or(0)
+}
+
 /// What of `read` a script is handed, and how many of its bytes that
 /// takes. Every secret in the whole of it, in any dress, is found first
 /// and given as its name, however often it is there. It is then measured
 /// as the script will see it, a secret counting for its name, and cut at
 /// what a script may be given at once: never inside a secret, nor inside
-/// a letter, and nowhere that tells how long a secret is.
-fn handed_over(read: &[u8], lent: &[(String, String)]) -> (String, usize) {
+/// a letter, and nowhere that tells how long a secret is. When more is
+/// still to come, it stops `short_by` bytes before the end of what has:
+/// a secret that started before there is whole, and one that started
+/// after is not handed over at all.
+fn handed_over(read: &[u8], lent: &[(String, String)], short_by: usize) -> (String, usize) {
     // Whose secret each byte is part of, if any.
     let mut whose: Vec<Option<usize>> = vec![None; read.len()];
     for (index, (_, value)) in lent.iter().enumerate() {
@@ -1258,8 +1271,12 @@ fn handed_over(read: &[u8], lent: &[(String, String)]) -> (String, usize) {
         at = end;
     }
     let mut room = BODY_LIMIT;
+    let last = read.len() - short_by.min(read.len());
     let (mut text, mut taken) = (String::new(), 0);
     for (start, end, secret, weight) in runs {
+        if start >= last {
+            break;
+        }
         match secret {
             // A secret is given whole, as its name, or not yet.
             Some(index) if weight <= room => {
@@ -1269,7 +1286,7 @@ fn handed_over(read: &[u8], lent: &[(String, String)]) -> (String, usize) {
             }
             Some(_) => break,
             None => {
-                let mut upto = start + weight.min(room);
+                let mut upto = (start + weight.min(room)).min(last);
                 // Not inside a letter.
                 for _ in 0..3 {
                     if upto > start && upto < read.len() && (read[upto] & 0xC0) == 0x80 {
@@ -1281,7 +1298,7 @@ fn handed_over(read: &[u8], lent: &[(String, String)]) -> (String, usize) {
                 if upto < end {
                     break;
                 }
-                room -= weight;
+                room -= weight.min(room);
             }
         }
     }
