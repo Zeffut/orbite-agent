@@ -22,6 +22,9 @@ fi
 ORBITE_SIGNING_KEY="$(cat "$RELEASE/try.pub")"
 export ORBITE_SIGNING_KEY
 export ORBITE_SKIP_SETUP=1
+# One agent on the machine itself: what this trial checks. A server that
+# holds agents in containers is tried by try-server.sh.
+export ORBITE_WITHOUT_CONTAINERS=1
 
 # The machine as it is before Orbite: every path on it, what the system
 # keeps of its own packages and logs aside.
@@ -200,10 +203,14 @@ sleep 3
 [ "$(systemctl is-active orbite)" = "active" ]
 kill "$TELEGRAM"
 
-# What was tampered with is refused.
+# What was tampered with is refused. (The sound one is put back after:
+# other trials install from this folder.)
+cp "$RELEASE/$FILE" /root/orbite-sound
 echo tampered >> "$RELEASE/$FILE"
 if sh "$RELEASE/install.sh" 2>/dev/null; then
     echo "a tampered program was installed" >&2
     exit 1
 fi
+cp /root/orbite-sound "$RELEASE/$FILE"
+rm -f /root/orbite-sound
 echo "Installed, restarted after a crash, updated in place and by itself, undid a bad update, moved by export and restore, and refused a tampered program."

@@ -139,6 +139,18 @@ impl Docker {
         self.ask(&["build", "-q", "-t", &self.image, &folder]).map(|_| ())
     }
 
+    /// Removes every image built here for Agents: for when Orbite goes.
+    pub fn forget_images(&self) {
+        let Ok(kept) =
+            self.ask(&["image", "ls", "orbite-agent", "--format", "{{.Repository}}:{{.Tag}}"])
+        else {
+            return;
+        };
+        for image in kept.lines().filter(|image| image.starts_with("orbite-agent:")) {
+            let _ = self.ask(&["image", "rm", image]);
+        }
+    }
+
     /// Removes the images of other versions that no container runs from.
     pub fn forget_other_versions(&self) {
         if !self.built_here {
@@ -699,7 +711,9 @@ async fn pair(
     if !from_the_page(&headers, &shared.names) {
         return refused(StatusCode::FORBIDDEN, "not from the interface");
     }
-    let_in(&shared.database, &sent, came_encrypted(&headers)).await
+    // Reached encrypted: said by what carried the request, or known of
+    // where the server is reached, as behind its own door.
+    let_in(&shared.database, &sent, came_encrypted(&headers) || shared.reached_at.is_some()).await
 }
 
 /// Says whether this device is let in, and that this is a server: the page

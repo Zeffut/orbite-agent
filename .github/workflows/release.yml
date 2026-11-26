@@ -104,7 +104,7 @@ jobs:
           openssl genpkey -algorithm ed25519 -out ../try.key
           openssl pkey -in ../try.key -pubout -out try.pub
           openssl pkeyutl -sign -inkey ../try.key -rawin -in SHA256SUMS -out SHA256SUMS.sig
-          cp ../install.sh ../.github/try-install.sh ../.github/fake-telegram.py .
+          cp ../install.sh ../.github/try-install.sh ../.github/try-server.sh ../.github/fake-telegram.py .
           # Two later releases to update to: one that works, one that does not start.
           release() {
             (cd "$1" && echo "$2" > VERSION && sha256sum "$FILE" VERSION > SHA256SUMS &&
@@ -116,6 +116,11 @@ jobs:
       - name: Install and try the service (this machine)
         if: matrix.system == 'this machine'
         run: sudo sh release/try-install.sh "$PWD/release"
+      - name: Become a server that holds its agent in a container (this machine)
+        if: matrix.system == 'this machine'
+        run: |
+          sudo cp /var/lib/orbite/computer/check.png "$RUNNER_TEMP/computer-check.png" 2>/dev/null || true
+          sudo sh release/try-server.sh "$PWD/release"
       - name: Keep what the Computer saw
         if: always() && matrix.system == 'this machine'
         run: sudo cp /var/lib/orbite/computer/check.png "$RUNNER_TEMP/computer-check.png" 2>/dev/null || true
@@ -163,10 +168,12 @@ jobs:
       matrix:
         include:
           - system: Debian 13
+            server: "1"
             image: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2
           - system: Debian 12
             image: https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2
           - system: Ubuntu 24.04
+            server: "1"
             image: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
           - system: Ubuntu 26.04
             image: https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img
@@ -195,7 +202,7 @@ jobs:
           openssl genpkey -algorithm ed25519 -out ../try.key
           openssl pkey -in ../try.key -pubout -out try.pub
           openssl pkeyutl -sign -inkey ../try.key -rawin -in SHA256SUMS -out SHA256SUMS.sig
-          cp ../install.sh ../.github/try-install.sh ../.github/fake-telegram.py .
+          cp ../install.sh ../.github/try-install.sh ../.github/try-server.sh ../.github/fake-telegram.py .
           release() {
             (cd "$1" && echo "$2" > VERSION && sha256sum "$FILE" VERSION > SHA256SUMS &&
               openssl pkeyutl -sign -inkey ../../try.key -rawin -in SHA256SUMS -out SHA256SUMS.sig)
@@ -212,7 +219,7 @@ jobs:
             FOLDER='${{ matrix.folder }}'
             IMAGE="$FOLDER$(curl -fsSL "$FOLDER" | grep -o '${{ matrix.named }}' | sort -u | tail -1)"
           fi
-          sh .github/try-on-a-machine.sh "$IMAGE" "$PWD/release"
+          TRY_SERVER='${{ matrix.server }}' sh .github/try-on-a-machine.sh "$IMAGE" "$PWD/release"
 
   # Where Orbite cannot be installed, the installer says why and changes nothing.
   refuse:

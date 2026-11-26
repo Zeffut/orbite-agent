@@ -140,13 +140,6 @@ pub fn adopt(home: &Path, docker: &Docker, backup: &Path) -> Result<Held, String
     }
     let config =
         Config::load(home).map_err(said("the installation's settings could not be read"))?;
-    if config.interface_public.is_some() {
-        return Err(
-            "this installation is reached from the Internet under a name of its own, which \
-                    a server does not serve yet: it is left as it is"
-                .into(),
-        );
-    }
     if let Err(error) = crate::export(home, backup) {
         // What was written of it is no copy of anything.
         let _ = std::fs::remove_file(backup);

@@ -2,6 +2,15 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.11.0
+
+Released on 2026-11-26.
+
+- **An installation holds several agents from the start.** The installer brings Docker where the machine has none, and the agent you set up runs in a container of its own, with its computer in it: nothing more to ask for, and you make other agents from the app or the page. Nothing of an agent's computer is installed on the machine itself any more. Where Docker cannot be set up, or with `ORBITE_WITHOUT_CONTAINERS=1`, Orbite is one agent on the machine as before.
+- Run again on a machine where one agent ran on the machine itself and Docker is installed, the installer moves that agent into a container, with everything it kept: saved first, and left as it was if anything goes wrong. It does not install Docker on a machine that already has an agent. `sudo orbite setup`, run after an install that had no terminal to ask in, ends the same way.
+- A server reached from the Internet under its own address opens its door there, as one agent did.
+- Removing Orbite takes away the agents' images and what it wrote for the service, and leaves Docker.
+
 ## 0.10.1
 
 Released on 2026-11-26.

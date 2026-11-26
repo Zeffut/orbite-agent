@@ -574,7 +574,80 @@ for tool in $TOOLS; do
     brought tool "$tool"
 done
 
-if [ "${ORBITE_WITHOUT_COMPUTER:-}" = "1" ]; then
+# --- Containers: every agent runs in one of its own (ADR 0022) ---
+#
+# Docker is brought where the machine has none. With it the installation is
+# a server that holds as many agents as its Owner makes, each with its own
+# computer in its container, and nothing of that computer is installed on
+# the machine itself. ORBITE_WITHOUT_CONTAINERS=1 leaves it out: Orbite is
+# then one agent, on the machine itself. Orbite is installed whether or not
+# this part succeeds.
+CONTAINERS_MARK=/usr/local/share/orbite/containers
+containers() {
+    if ! command -v docker >/dev/null 2>&1; then
+        # Not on a machine that already has an agent: there Docker is the
+        # Owner's to install, and the agent moves once it is there.
+        [ "$UPDATING" != yes ] || return 1
+        # Written down as a tool, which is left when Orbite goes: by then
+        # other things of the Owner's may well run in it.
+        # (Where the program that asks Docker is a package of its own, it
+        # is brought with it.)
+        case "$PM" in
+            apt-get) install_packages docker.io docker-cli 2>/dev/null || install_packages docker.io || return 1 ;;
+            dnf) install_packages docker 2>/dev/null || install_packages moby-engine || return 1 ;;
+            pacman | zypper) install_packages docker || return 1 ;;
+            *) return 2 ;;
+        esac
+        brought tool docker
+    fi
+    systemctl enable --now docker >/dev/null 2>&1 || true
+    # Just started, it takes a moment to answer.
+    WAITED=0
+    while [ -z "$ROOT" ] && [ "$WAITED" -lt 30 ] && ! docker version -f '{{.Server.Version}}' >/dev/null 2>&1; do
+        sleep 1
+        WAITED=$((WAITED + 1))
+    done
+    # Docker itself, answering: not another program under its name.
+    docker version -f '{{.Server.Version}}' >/dev/null 2>&1
+}
+
+# The agent runs on the machine itself after all: it is given a computer
+# there, and started again to find it.
+on_the_machine_after_all() {
+    CONTAINERS=no
+    rm -f "$ROOT$CONTAINERS_MARK"
+    if [ "${ORBITE_WITHOUT_COMPUTER:-}" != "1" ]; then
+        doing "Setting up the agent's own computer (a screen, Firefox and fonts)"
+        if computer; then
+            did "The agent's own computer: a screen, Firefox and fonts"
+        else
+            say "Note: the agent's computer could not be set up. Run this installer again later to add it."
+        fi
+    fi
+}
+CONTAINERS=no
+if [ "${ORBITE_WITHOUT_CONTAINERS:-}" = "1" ]; then
+    rm -f "$ROOT$CONTAINERS_MARK"
+else
+    STEP="setting up Docker"
+    doing "Setting up what each agent runs in (Docker)"
+    if containers; then
+        CONTAINERS=yes
+        mkdir -p "$ROOT/usr/local/share/orbite"
+        : >"$ROOT$CONTAINERS_MARK"
+        did "Docker is there: each agent will run in a container of its own"
+    else
+        rm -f "$ROOT$CONTAINERS_MARK"
+        say "Note: Docker could not be set up on this machine, so Orbite is installed as one agent on the"
+        say "machine itself. Install Docker and run this installer again to hold several."
+    fi
+fi
+
+# With containers, an agent's computer is in its container: nothing of it
+# is put on the machine, unless the agent ends up running there after all.
+if [ "$CONTAINERS" = yes ]; then
+    :
+elif [ "${ORBITE_WITHOUT_COMPUTER:-}" = "1" ]; then
     say "Left out, as asked: the agent's own computer. Without it the agent cannot use sites that need"
     say "signing in or a person's gestures. Run this installer again without ORBITE_WITHOUT_COMPUTER to add it."
 else
@@ -596,6 +669,17 @@ STEP="starting Orbite"
 if [ "$UPDATING" = yes ]; then
     # An Orbite that was never set up has nothing to run yet.
     if [ -f "$ROOT$HOME_DIR/config.json" ]; then
+        # An agent that ran on the machine itself moves into a container of
+        # its own, with everything it kept: saved first, and left as it was
+        # if anything goes wrong.
+        if [ "$CONTAINERS" = yes ] && [ ! -e "$ROOT$HOME_DIR/agents.json" ]; then
+            if "$PROGRAM" server adopt; then
+                ended "Orbite is updated and running."
+                exit 0
+            fi
+            say "Your agent stays on the machine itself for now."
+            on_the_machine_after_all
+        fi
         systemctl restart orbite
         ended "Orbite is updated and running."
     else
@@ -621,6 +705,19 @@ if ! runuser -u orbite -- env ORBITE_HOME="$HOME_DIR" "$PROGRAM" setup </dev/tty
     UNFORESEEN=no
     say "Orbite is installed, but setup was not finished. Go on with: sudo orbite setup"
     exit 1
+fi
+# The agent just set up moves into a container of its own, where it and
+# every agent made after it runs. Where that does not work, it runs on the
+# machine itself, with a computer set up there.
+if [ "$CONTAINERS" = yes ]; then
+    if "$PROGRAM" server adopt; then
+        # Just set up, the agent kept nothing yet that a copy is worth
+        # keeping for: the one made before the move goes.
+        rm -f "$ROOT"/var/lib/orbite-before-server-*.orbite
+    else
+        on_the_machine_after_all
+        systemctl restart orbite
+    fi
 fi
 systemctl start orbite
 ended "Orbite is running, and will start again by itself after a restart."

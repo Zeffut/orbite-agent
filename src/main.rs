@@ -83,6 +83,51 @@ async fn asked() -> ExitCode {
         "desk" => true,
         _ => false,
     };
+    // Set up as root on a machine where agents run in containers, the
+    // agent just set up moves into one: asked as the agent's account, as
+    // ever, then moved as root, which that takes.
+    // SAFETY: a plain system call.
+    if command == "setup"
+        && env::args().nth(2).is_none()
+        && unsafe { libc::geteuid() } == 0
+        && env::var_os("ORBITE_SETUP_ALONE").is_none()
+        && let Ok(home) = home()
+        && !home.join("agents.json").exists()
+        && fs::canonicalize(&home).ok()
+            == fs::canonicalize(format!(
+                "{}/var/lib/orbite",
+                setting("ORBITE_ROOT").unwrap_or_default()
+            ))
+            .ok()
+        && PathBuf::from(format!(
+            "{}/usr/local/share/orbite/containers",
+            setting("ORBITE_ROOT").unwrap_or_default()
+        ))
+        .exists()
+    {
+        let asked = env::current_exe().and_then(|program| {
+            std::process::Command::new(program).arg("setup").env("ORBITE_SETUP_ALONE", "1").status()
+        });
+        if !asked.is_ok_and(|ended| ended.success()) {
+            return ExitCode::from(1);
+        }
+        return match adopt(&home).await {
+            Ok(()) => ExitCode::SUCCESS,
+            // Set up all the same: it runs on the machine itself, where
+            // running the installer again gives it a computer or moves it.
+            Err(failure) => {
+                eprintln!("{failure}");
+                let _ = std::process::Command::new(orbite::system_program("systemctl"))
+                    .args(["start", "orbite"])
+                    .status();
+                eprintln!(
+                    "Your agent is set up, and runs on this machine itself for now. Run the \
+                     installer again to move it into a container of its own."
+                );
+                ExitCode::SUCCESS
+            }
+        };
+    }
     // What Tailscale is asked takes whoever ran this, root or its operator:
     // asked before going on as the Agent's account.
     let reach = if command == "interface" { reach() } else { None };
@@ -182,11 +227,6 @@ async fn adopt(home: &std::path::Path) -> Result<(), Failure> {
     // Asked a second time, it would undo the first: a server is one already.
     if home.join("agents.json").exists() || fs::symlink_metadata(home.join("agents.json")).is_ok() {
         return Err("This installation already is a server: there is nothing to do.".into());
-    }
-    if Config::load(home)?.interface_public.is_some() {
-        return Err("This installation is reached from the Internet under a name of its own, \
-                    which a server does not serve yet: it is left as it is."
-            .into());
     }
     let docker = docker();
     docker.answers().map_err(|why| {
@@ -392,15 +432,14 @@ async fn adopt(home: &std::path::Path) -> Result<(), Failure> {
     }
     // It answers from its container with everything of its own: what is
     // left here is the server's alone.
+    // The move itself is done by then: this is said, and is no failure of it.
     if let Err(error) = settled("clear", None) {
-        return Err(format!(
+        eprintln!(
             "{} runs in its container with everything of its own, but what it left here could \
              not all be cleared ({error}). Nothing is lost, and it is finished with: sudo orbite \
-             server settle clear. A copy of everything as it was is in {}.",
-            held.name,
-            backup.display()
-        )
-        .into());
+             server settle clear.",
+            held.name
+        );
     }
     println!(
         "Done. {} now runs in a container of its own, and this machine holds as many agents as \
@@ -436,6 +475,43 @@ fn settle(home: &std::path::Path) -> Result<(), Failure> {
         Some("clear") => Ok(orbite::as_the_server(home)?),
         _ => Err("Usage: orbite server run | pair | adopt".into()),
     }
+}
+
+/// Opens the door of a Host with an address on the Internet, `public`, on
+/// what is served at `inside`: beside it, which goes on whether or not the
+/// door opens.
+fn open_the_door(home: &std::path::Path, public: std::net::IpAddr, inside: std::net::SocketAddr) {
+    let mut door = orbite::Door::of(home, public, inside);
+    // For trying it out against an authority of one's own, on ports that
+    // take no privilege.
+    if let Some(directory) = setting("ORBITE_ACME_DIRECTORY") {
+        door = door.asking(directory, setting("ORBITE_ACME_ROOT").map(PathBuf::from));
+    }
+    if let Some(ports) = setting("ORBITE_DOOR_PORTS")
+        && let Some((plain, encrypted)) = ports.split_once(',')
+        && let (Ok(plain), Ok(encrypted)) = (plain.parse(), encrypted.parse())
+    {
+        let on = |port| std::net::SocketAddr::new(public, port);
+        door = door.listening_on(on(plain), on(encrypted));
+    }
+    let kept = home.join("door");
+    tokio::spawn(async move {
+        if let Err(error) = door.open().await {
+            let trouble = match error.kind() {
+                std::io::ErrorKind::AddrInUse => format!(
+                    "something else on this machine already listens on port 80 or 443 \
+                     ({error}): they must be left to Orbite"
+                ),
+                _ => format!(
+                    "ports 80 and 443 of this machine could not be listened on ({error}): \
+                     run the installer again, which lets Orbite's service use them"
+                ),
+            };
+            eprintln!("The web interface is not reached from the Internet: {trouble}");
+            let _ = fs::create_dir_all(&kept);
+            let _ = fs::write(kept.join("trouble"), trouble);
+        }
+    });
 }
 
 /// Docker, running Agents from the image built on this machine from this
@@ -517,6 +593,14 @@ async fn serve(home: &std::path::Path) -> Result<(), Failure> {
     )
     .await?
     .hearing_with(hears);
+    // On a Host with an address on the Internet, the door there.
+    if let Some(public) = Config::load(&home)
+        .ok()
+        .and_then(|config| config.interface_public)
+        .and_then(|address| address.parse().ok())
+    {
+        open_the_door(&home, public, serving.address());
+    }
     println!("Serving at http://{}", serving.address());
     until_asked_to_stop(std::future::pending()).await;
     Ok(())
@@ -573,37 +657,7 @@ async fn run() -> Result<(), Failure> {
     // beside the Conversation, which goes on whether or not it opens.
     let public = config.interface_public.as_deref().and_then(|address| address.parse().ok());
     if let (Some(interface), Some(public)) = (&interface, public) {
-        let mut door = orbite::Door::of(&home, public, interface.address());
-        // For trying it out against an authority of one's own, on ports
-        // that take no privilege.
-        if let Some(directory) = setting("ORBITE_ACME_DIRECTORY") {
-            door = door.asking(directory, setting("ORBITE_ACME_ROOT").map(PathBuf::from));
-        }
-        if let Some(ports) = setting("ORBITE_DOOR_PORTS")
-            && let Some((plain, encrypted)) = ports.split_once(',')
-            && let (Ok(plain), Ok(encrypted)) = (plain.parse(), encrypted.parse())
-        {
-            let on = |port| std::net::SocketAddr::new(public, port);
-            door = door.listening_on(on(plain), on(encrypted));
-        }
-        let kept = home.join("door");
-        tokio::spawn(async move {
-            if let Err(error) = door.open().await {
-                let trouble = match error.kind() {
-                    std::io::ErrorKind::AddrInUse => format!(
-                        "something else on this machine already listens on port 80 or 443 \
-                         ({error}): they must be left to Orbite"
-                    ),
-                    _ => format!(
-                        "ports 80 and 443 of this machine could not be listened on ({error}): \
-                         run the installer again, which lets Orbite's service use them"
-                    ),
-                };
-                eprintln!("The web interface is not reached from the Internet: {trouble}");
-                let _ = fs::create_dir_all(&kept);
-                let _ = fs::write(kept.join("trouble"), trouble);
-            }
-        });
+        open_the_door(&home, public, interface.address());
     }
     let agent = agent()?;
     // The Agent's Computer is seen, and taken for a while, from its page.
@@ -1512,10 +1566,14 @@ fn uninstall() -> Result<(), Failure> {
     // The Agents a server held go with it: their containers, which would
     // otherwise run on, and what they kept unless it is asked to be kept.
     let docker = docker();
-    for agent in orbite::held_in(&data) {
+    let held = orbite::held_in(&data);
+    for agent in &held {
         if let Err(why) = docker.stop(&agent.id, !keep) {
             eprintln!("The container of {} could not be removed: {why}", agent.name);
         }
+    }
+    if !held.is_empty() && !keep {
+        docker.forget_images();
     }
     // What Tailscale serves for the web interface goes with it.
     if let Ok(Config { interface_reached_at: Some(_), .. }) = Config::load(&data)
@@ -1537,6 +1595,8 @@ fn uninstall() -> Result<(), Failure> {
         "/etc/xdg/autostart/orbite-desk.desktop",
         "/usr/local/share/orbite/desk",
         "/usr/local/share/orbite/computer",
+        "/usr/local/share/orbite/containers",
+        "/etc/systemd/system/orbite.service.d/docker.conf",
         "/usr/local/bin/orbite.previous",
         "/usr/local/bin/orbite.refused",
         "/usr/local/bin/orbite.updating",
@@ -1551,6 +1611,9 @@ fn uninstall() -> Result<(), Failure> {
             _ => {}
         }
     }
+    // The folder of what the service was told beside its own file goes
+    // when nothing of the Owner's is left in it.
+    let _ = fs::remove_dir(format!("{root}/etc/systemd/system/orbite.service.d"));
     // The folder of what the installer wrote down, when nothing is left in it.
     if let Some(folder) = PathBuf::from(format!("{root}/usr/local/share/orbite/desk")).parent() {
         let _ = fs::remove_dir(folder);

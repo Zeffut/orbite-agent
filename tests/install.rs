@@ -116,6 +116,9 @@ impl Machine {
                 fs::read_to_string(self.path("release/signing.pub")).unwrap(),
             )
             .env("ORBITE_SKIP_SETUP", "1")
+            .env("ORBITE_WITHOUT_CONTAINERS", "1")
+            // One agent on the machine itself, unless a test says otherwise.
+            .env("ORBITE_WITHOUT_CONTAINERS", "1")
             .env("ORBITE_MOZILLA_KEY_URL", format!("file://{}", self.path("mozilla.key").display()))
             .envs(said.iter().copied())
             .output()
@@ -621,6 +624,7 @@ fn what_is_installed_for_the_machine_is_readable_by_it_however_strict_the_accoun
         .env("ORBITE_RELEASE_URL", format!("file://{}", machine.path("release").display()))
         .env("ORBITE_SIGNING_KEY", fs::read_to_string(machine.path("release/signing.pub")).unwrap())
         .env("ORBITE_SKIP_SETUP", "1")
+        .env("ORBITE_WITHOUT_CONTAINERS", "1")
         .env("ORBITE_MOZILLA_KEY_URL", format!("file://{}", machine.path("mozilla.key").display()))
         .output()
         .unwrap();
@@ -726,6 +730,8 @@ impl Machine {
                 fs::read_to_string(self.path("release/signing.pub")).unwrap(),
             )
             .env("ORBITE_SKIP_SETUP", "1")
+            .env("ORBITE_WITHOUT_CONTAINERS", "1")
+            .env("ORBITE_WITHOUT_CONTAINERS", "1")
             .output()
             .unwrap()
     }
@@ -889,4 +895,36 @@ fn a_machine_with_a_desktop_does_not_lend_it_to_the_agent_either() {
     assert!(!machine.path("etc/xdg/autostart/orbite-desk.desktop").exists());
     assert!(!machine.path("usr/local/share/orbite/desk").exists());
     assert!(!machine.path("usr/local/share/orbite/computer").exists());
+}
+
+#[test]
+fn where_docker_does_not_answer_orbite_is_one_agent_on_the_machine_with_its_computer_there() {
+    let machine = Machine::debian();
+    machine.stand_in("docker", "exit 1");
+
+    let installed = machine.install_with(&[("ORBITE_WITHOUT_CONTAINERS", "0")]);
+
+    assert!(installed.status.success(), "{}", shown(&installed));
+    assert!(!machine.path("usr/local/share/orbite/containers").exists());
+    assert!(shown(&installed).contains("one agent on the"), "{}", shown(&installed));
+    assert!(machine.calls().contains("firefox"), "{}", machine.calls());
+}
+
+#[test]
+fn with_docker_there_every_agent_runs_in_a_container_and_nothing_of_a_computer_is_installed() {
+    let machine = Machine::debian();
+    machine.stand_in("docker", "exit 0");
+
+    let installed = machine.install_with(&[("ORBITE_WITHOUT_CONTAINERS", "0")]);
+
+    assert!(installed.status.success(), "{}", shown(&installed));
+    assert!(machine.path("usr/local/share/orbite/containers").exists());
+    let calls = machine.calls();
+    // Docker was there: nothing is installed for it, and no computer on the machine.
+    assert!(!calls.contains("docker.io") && !calls.contains("firefox"), "{calls}");
+
+    // Left out when asked, and the mark of it goes.
+    let again = machine.install_with(&[]);
+    assert!(again.status.success(), "{}", shown(&again));
+    assert!(!machine.path("usr/local/share/orbite/containers").exists());
 }

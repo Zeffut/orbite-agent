@@ -64,3 +64,9 @@ until [ "$(there 'systemctl is-active orbite' || true)" = "active" ]; do
 done
 [ "$(there 'systemctl is-active orbite-update.timer')" = "active" ]
 echo "Installed on the machine as published, and back by itself after the machine restarted."
+
+# Where asked, the same machine then holds its agent in a container: Docker
+# is brought by the installer, as on any machine that has none.
+if [ "${TRY_SERVER:-}" = 1 ]; then
+    there "sudo sh /$(basename "$RELEASE")/try-server.sh /$(basename "$RELEASE")"
+fi
