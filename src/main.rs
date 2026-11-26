@@ -160,12 +160,17 @@ async fn server() -> Result<(), Failure> {
         Some("run") => {
             let address = setting("ORBITE_SERVER").unwrap_or_else(|| DEFAULT_INTERFACE.to_owned());
             let address = address.parse().map_err(|_| format!("{address} is not an address."))?;
-            // Who every Agent thinks with is the server's to say, and passed on to each.
-            let passed_on =
-                ["ORBITE_PROVIDER", "ORBITE_MODEL", "ORBITE_API_KEY", "ORBITE_BASE_URL"]
-                    .into_iter()
-                    .filter_map(|name| Some((name.to_owned(), setting(name)?)))
-                    .collect();
+            // Who every Agent thinks with is the server's: it holds the keys,
+            // asks for each of them, and counts what all of them spend.
+            let (thinking, _) = thinking_with(&home, &Config::load(&home)?)?;
+            let thinking = std::sync::Arc::new(thinking);
+            let thinks: orbite::Thinks = std::sync::Arc::new(move |asked: orbite::Asked| {
+                let thinking = thinking.clone();
+                Box::pin(async move {
+                    use orbite::Provider;
+                    thinking.reply(asked.as_request()).await
+                })
+            });
             let image = setting("ORBITE_AGENT_IMAGE").unwrap_or_else(|| {
                 format!("ghcr.io/zeffut/orbite-agent:{}", env!("CARGO_PKG_VERSION"))
             });
@@ -176,9 +181,14 @@ async fn server() -> Result<(), Failure> {
                     Some(vec![reached.split("://").nth(1)?.split(['/', ':']).next()?.to_owned()])
                 })
                 .unwrap_or_default();
-            let serving =
-                orbite::Server::serving(&home, address, orbite::Docker { image, passed_on }, names)
-                    .await?;
+            let serving = orbite::Server::serving(
+                &home,
+                address,
+                orbite::Docker { image },
+                names,
+                Some(thinks),
+            )
+            .await?;
             println!("Serving at http://{}", serving.address());
             until_asked_to_stop(std::future::pending()).await;
             Ok(())
@@ -402,11 +412,14 @@ fn usual_provider(model: Option<String>) -> Result<Connected, Failure> {
 }
 
 /// The Agent of this installation: its Provider and the folder holding its data.
-fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
-    // What setup kept, unless the environment says otherwise.
-    let home = home()?;
-    let config = Config::load(&home)?;
-    let secrets = Secrets::kept_in(&home);
+/// The Owner's Providers, in the order they are asked, with their limits
+/// and what was already used today; and the data of the installation, where
+/// what they cost is kept.
+fn thinking_with(
+    home: &std::path::Path,
+    config: &Config,
+) -> Result<(Routed<Connected>, Store), Failure> {
+    let secrets = Secrets::kept_in(home);
     let chosen = config.provider.clone();
     let name = setting("ORBITE_PROVIDER")
         .or(chosen.as_ref().map(|chosen| chosen.name.clone()))
@@ -429,7 +442,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         setting("ORBITE_BASE_URL").or(chosen.as_ref().and_then(|chosen| chosen.address.clone()));
     let mut provider = Routed::through(
         &name,
-        connect_in(&home, &name, key.as_deref(), &model, address.as_deref())?,
+        connect_in(home, &name, key.as_deref(), &model, address.as_deref())?,
     );
     if let Some(limit) = chosen.as_ref().and_then(|chosen| chosen.daily_tokens) {
         provider = provider.limited_to(limit);
@@ -438,7 +451,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
     for other in &config.fallbacks {
         let key = key_of(Some(other))?;
         let connected =
-            connect_in(&home, &other.name, key.as_deref(), &other.model, other.address.as_deref())?;
+            connect_in(home, &other.name, key.as_deref(), &other.model, other.address.as_deref())?;
         provider = provider.or(&other.name, connected);
         if let Some(limit) = other.daily_tokens {
             provider = provider.limited_to(limit);
@@ -447,7 +460,7 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
     // Another Provider to fall back on when the usual one cannot answer.
     if let Some(other) = setting("ORBITE_FALLBACK_PROVIDER") {
         let fallback = connect_in(
-            &home,
+            home,
             &other,
             setting("ORBITE_FALLBACK_API_KEY").as_deref(),
             &required("ORBITE_FALLBACK_MODEL")?,
@@ -461,17 +474,17 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
         let light = match setting("ORBITE_LIGHT_PROVIDER") {
             Some(other) => {
                 let key = setting("ORBITE_LIGHT_API_KEY");
-                (other.clone(), connect_in(&home, &other, key.as_deref(), &light_model, None)?)
+                (other.clone(), connect_in(home, &other, key.as_deref(), &light_model, None)?)
             }
             None => (
                 name.clone(),
-                connect_in(&home, &name, key.as_deref(), &light_model, address.as_deref())?,
+                connect_in(home, &name, key.as_deref(), &light_model, address.as_deref())?,
             ),
         };
         provider = provider.with_light(&format!("{} (light)", light.0), light.1);
     }
 
-    fs::create_dir_all(&home)
+    fs::create_dir_all(home)
         .map_err(|error| format!("Could not create {}: {error}", home.display()))?;
     let store = Store::open(home.join("orbite.db"))
         .map_err(|error| format!("Could not open the Agent's data: {error}"))?;
@@ -480,6 +493,42 @@ fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
     for (by, tokens) in store.tokens_used_on(&today).unwrap_or_default() {
         provider = provider.having_used(&by, tokens);
     }
+
+    Ok((provider, store))
+}
+
+fn agent() -> Result<Agent<Routed<Connected>>, Failure> {
+    // What setup kept, unless the environment says otherwise.
+    let home = home()?;
+    let config = Config::load(&home)?;
+    // An Agent held by a server thinks through it: the server holds the
+    // keys, and counts what every Agent spends.
+    let (provider, store) = match (setting("ORBITE_SERVER_AT"), setting("ORBITE_SERVER_TOKEN")) {
+        (Some(at), Some(token)) => {
+            fs::create_dir_all(&home)
+                .map_err(|error| format!("Could not create {}: {error}", home.display()))?;
+            let store = Store::open(home.join("orbite.db"))
+                .map_err(|error| format!("Could not open the Agent's data: {error}"))?;
+            let served = Connected::Served(orbite::Served::at(at, token));
+            (Routed::through("server", served), store)
+        }
+        _ => thinking_with(&home, &config)?,
+    };
+    let secrets = Secrets::kept_in(&home);
+    let chosen = config.provider.clone();
+    let name = setting("ORBITE_PROVIDER")
+        .or(chosen.as_ref().map(|chosen| chosen.name.clone()))
+        .unwrap_or_else(|| "server".to_owned());
+    let key_of = |choice: Option<&orbite::ProviderChoice>| -> Result<Option<String>, Failure> {
+        let named = choice.and_then(|choice| choice.key.as_deref()).unwrap_or(PROVIDER_KEY);
+        Ok(secrets.get(named)?)
+    };
+    let key = match setting("ORBITE_API_KEY").filter(|_| config.fallbacks.is_empty()) {
+        Some(key) => Some(key),
+        None => secrets.get(PROVIDER_KEY)?,
+    };
+    let address =
+        setting("ORBITE_BASE_URL").or(chosen.as_ref().and_then(|chosen| chosen.address.clone()));
 
     let wake_ups: u32 = match setting("ORBITE_WAKE_UP_MINUTES") {
         Some(minutes) => minutes.parse().map_err(|_| "ORBITE_WAKE_UP_MINUTES must be a number.")?,

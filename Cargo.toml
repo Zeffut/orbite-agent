@@ -33,6 +33,7 @@ tar = "0.4.46"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "io-std", "time", "process", "signal"] }
 rustls-platform-verifier = "0.7.1"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs"] }
+tempfile = "3.27.0"
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 url = "2.5.8"
 x11rb = { version = "0.14.0", features = ["xtest"] }
@@ -40,7 +41,6 @@ x11rb = { version = "0.14.0", features = ["xtest"] }
 [dev-dependencies]
 ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
 rcgen = "0.14"
-tempfile = "3.27.0"
 wiremock = "0.6.5"
 
 # Enough to say where something went wrong, without the full debugging

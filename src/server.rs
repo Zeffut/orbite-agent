@@ -37,9 +37,15 @@ pub struct Held {
 /// What runs the Agents' containers. Docker, on a Host; something that
 /// pretends, in tests.
 pub trait Engine: Send + Sync + 'static {
-    /// Makes and starts the container of the Agent `id`, which is to trust
-    /// whoever shows `token`, and is first called `name`.
-    fn start(&self, id: &str, name: &str, token: &str) -> Result<(), String>;
+    /// Makes and starts the container of the Agent `id`, giving it what
+    /// the server has to tell it: what to trust the server by, what it is
+    /// first called, where the server is.
+    fn start(&self, id: &str, given: &[(String, String)]) -> Result<(), String>;
+    /// The address of this machine as an Agent sees it from its container,
+    /// when Agents can reach the server at all.
+    fn seen_from_agents(&self) -> Option<std::net::IpAddr> {
+        None
+    }
     /// Where the Agent `id` is reached, once it runs: `http://address:port`.
     fn reached_at(&self, id: &str) -> Result<String, String>;
     /// Removes the container of the Agent `id` and everything it kept.
@@ -50,8 +56,6 @@ pub trait Engine: Send + Sync + 'static {
 pub struct Docker {
     /// The image an Agent runs from.
     pub image: String,
-    /// What is passed on to every Agent: who it thinks with.
-    pub passed_on: Vec<(String, String)>,
 }
 
 impl Docker {
@@ -69,7 +73,15 @@ impl Docker {
 }
 
 impl Engine for Docker {
-    fn start(&self, id: &str, name: &str, token: &str) -> Result<(), String> {
+    fn seen_from_agents(&self) -> Option<std::net::IpAddr> {
+        // Where the machine stands on the network its containers are on.
+        self.ask(&["network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}"])
+            .ok()?
+            .parse()
+            .ok()
+    }
+
+    fn start(&self, id: &str, given: &[(String, String)]) -> Result<(), String> {
         let (container, volume) = (format!("orbite-agent-{id}"), format!("orbite-agent-{id}"));
         self.ask(&["volume", "create", &volume])?;
         let kept = format!("{volume}:/var/lib/orbite");
@@ -79,13 +91,8 @@ impl Engine for Docker {
                 .to_vec();
         // Given in the container's own surroundings, never on a command
         // line another account of the machine could read.
-        let mut given = vec![
-            ("ORBITE_SERVER_TOKEN".to_owned(), token.to_owned()),
-            ("ORBITE_AGENT_NAME".to_owned(), name.to_owned()),
-        ];
-        given.extend(self.passed_on.iter().cloned());
         let mut running = std::process::Command::new("docker");
-        for (key, value) in &given {
+        for (key, value) in given {
             asked.push("-e".into());
             asked.push(key.clone());
             running.env(key, value);
@@ -132,7 +139,22 @@ struct Shared {
     /// The names the server is reached under, beside its address.
     names: Vec<String>,
     at_most: usize,
+    /// Who every Agent thinks with, when the server holds the keys.
+    thinks: Option<Thinks>,
+    /// Where Agents reach the server from their containers.
+    for_agents: Mutex<Option<String>>,
 }
+
+/// Asks the Owner's Providers what an Agent asks, with the keys the server
+/// holds, and answers.
+pub type Thinks = Arc<
+    dyn Fn(
+            crate::Asked,
+        ) -> std::pin::Pin<
+            Box<dyn Future<Output = Result<crate::Reply, crate::ProviderError>> + Send>,
+        > + Send
+        + Sync,
+>;
 
 impl Shared {
     fn agents(&self) -> Vec<Held> {
@@ -158,6 +180,7 @@ impl Shared {
 pub struct Server {
     address: SocketAddr,
     serving: tokio::task::JoinHandle<()>,
+    for_agents: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Server {
@@ -167,7 +190,9 @@ impl Server {
         address: SocketAddr,
         engine: impl Engine,
         names: Vec<String>,
+        thinks: Option<Thinks>,
     ) -> io::Result<Self> {
+        let seen = engine.seen_from_agents();
         let shared = Arc::new(Shared {
             home: home.to_owned(),
             database: Mutex::new(kept_in(home)?),
@@ -177,7 +202,25 @@ impl Server {
             http: reqwest::Client::builder().build().map_err(io::Error::other)?,
             names,
             at_most: AGENTS_AT_MOST,
+            thinks,
+            for_agents: Mutex::new(None),
         });
+        // A door of its own for the Agents, on the side of the machine
+        // their containers see and nowhere else: what is asked there is
+        // asked by an Agent, which shows what it was given.
+        let mut for_agents = None;
+        if let (Some(seen), true) = (seen, shared.thinks.is_some()) {
+            let listening = tokio::net::TcpListener::bind((seen, 0)).await?;
+            *shared.for_agents.lock().expect("not poisoned") =
+                Some(format!("http://{}", listening.local_addr()?));
+            let asked = Router::new()
+                .route("/internal/think", post(think))
+                .layer(axum::extract::DefaultBodyLimit::max(64 * 1024 * 1024))
+                .with_state(shared.clone());
+            for_agents = Some(tokio::spawn(async move {
+                let _ = axum::serve(listening, asked).await;
+            }));
+        }
         let routes = Router::new()
             .route("/api/pair", post(pair))
             .route("/api/agents", get(agents).post(create))
@@ -189,7 +232,7 @@ impl Server {
         let serving = tokio::spawn(async move {
             let _ = axum::serve(listening, routes).await;
         });
-        Ok(Self { address, serving })
+        Ok(Self { address, serving, for_agents })
     }
 
     pub fn address(&self) -> SocketAddr {
@@ -200,6 +243,9 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.serving.abort();
+        if let Some(for_agents) = &self.for_agents {
+            for_agents.abort();
+        }
     }
 }
 
@@ -258,9 +304,15 @@ async fn create(
     if shared.keep(&held).is_err() {
         return refused(StatusCode::INTERNAL_SERVER_ERROR, "it could not be written down");
     }
+    let mut given = vec![
+        ("ORBITE_SERVER_TOKEN".to_owned(), token.clone()),
+        ("ORBITE_AGENT_NAME".to_owned(), name.clone()),
+    ];
+    if let Some(at) = shared.for_agents.lock().expect("not poisoned").clone() {
+        given.push(("ORBITE_SERVER_AT".to_owned(), at));
+    }
     let engine = shared.clone();
-    let started =
-        tokio::task::spawn_blocking(move || engine.engine.start(&id, &name, &token)).await;
+    let started = tokio::task::spawn_blocking(move || engine.engine.start(&id, &given)).await;
     match started {
         Ok(Ok(())) => {
             let made = held.last().expect("just added");
@@ -366,6 +418,36 @@ async fn carry(
     }
     back.body(Body::from_stream(answer.bytes_stream()))
         .unwrap_or_else(|_| refused(StatusCode::BAD_GATEWAY, "its answer could not be carried"))
+}
+
+/// Thinks for an Agent: asked by one of the server's own Agents, which
+/// shows what it was given, the Owner's Providers are asked with the keys
+/// the server holds, and what it cost is counted for all of them.
+async fn think(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(sent): Json<Value>,
+) -> Response {
+    let shown = headers.get("x-orbite-agent").and_then(|shown| shown.to_str().ok());
+    let known = shown.is_some_and(|shown| {
+        // Compared as what they hash to: how long it takes says nothing.
+        let shown = crate::interface::hashed(shown);
+        shared.agents().iter().any(|agent| crate::interface::hashed(&agent.token) == shown)
+    });
+    if !known {
+        return refused(StatusCode::UNAUTHORIZED, "not an agent of this server");
+    }
+    let (Some(thinks), Some(asked)) = (&shared.thinks, crate::Asked::read(&sent)) else {
+        return refused(StatusCode::BAD_REQUEST, "not what an agent asks");
+    };
+    let answered = thinks(asked).await;
+    if let Ok(crate::Reply { usage: Some(usage), .. }) = &answered
+        && let Ok(store) = crate::Store::open(shared.home.join("orbite.db"))
+    {
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let _ = store.record_usage(&today, usage);
+    }
+    Json(crate::served::written(&answered)).into_response()
 }
 
 /// A few random lowercase letters and digits.

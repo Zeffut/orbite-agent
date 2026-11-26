@@ -122,6 +122,8 @@ pub enum Connected {
     OpenAi(OpenAiCompatible),
     Anthropic(Anthropic),
     ChatGpt(ChatGpt),
+    /// The server that holds this Agent, which asks for it.
+    Served(crate::served::Served),
 }
 
 impl Provider for Connected {
@@ -130,6 +132,7 @@ impl Provider for Connected {
             Self::OpenAi(provider) => provider.reply(request).await,
             Self::Anthropic(provider) => provider.reply(request).await,
             Self::ChatGpt(provider) => provider.reply(request).await,
+            Self::Served(provider) => provider.reply(request).await,
         }
     }
 }
