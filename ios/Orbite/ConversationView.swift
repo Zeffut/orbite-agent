@@ -111,7 +111,7 @@ struct ConversationView: View {
             bottom.background(alignment: .bottom) { fade(from: .bottom) }
         }
         .sheet(isPresented: $settings) { SettingsView() }
-        .sheet(isPresented: $looking) { SettingsView(part: .look) }
+        .sheet(isPresented: $looking) { AgentMenu() }
         // A service the Agent asked to be signed in to opens by itself, and
         // closes by itself once it is connected: nothing to copy, nothing to find.
         .sheet(item: Binding(get: { agent.signing }, set: { agent.signing = $0 })) { signing in
@@ -140,7 +140,7 @@ struct ConversationView: View {
             recorder.prepare()
             // Started on its settings, when it is being tried out.
             if UserDefaults.standard.string(forKey: "show") == "settings" { settings = true }
-            if UserDefaults.standard.string(forKey: "show") == "look" { looking = true }
+            if ["look", "screen"].contains(UserDefaults.standard.string(forKey: "show") ?? "") { looking = true }
             if UserDefaults.standard.string(forKey: "show") == "menu" { menu = true }
             // Goes back once in the Conversation, when that is being tried out.
             if UserDefaults.standard.string(forKey: "show") == "earlier" {

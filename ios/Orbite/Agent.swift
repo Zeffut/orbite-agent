@@ -657,6 +657,29 @@ final class Agent {
         return content
     }
 
+    /// The Agent's screen as it is this moment: nothing when it could not
+    /// be seen, and empty when its computer is not started.
+    func screenNow(held: String?) async -> Data? {
+        let path = "/api/screen/now" + (held.map { "?held=\($0)" } ?? "")
+        guard let asking = request(path), let (content, answer) = try? await session.data(for: asking) else { return nil }
+        switch (answer as? HTTPURLResponse)?.statusCode {
+        case 200: return content
+        case 204: return Data()
+        default: return nil
+        }
+    }
+
+    /// Takes the Agent's computer, makes a gesture there or gives it back:
+    /// how it was answered, and what taking it gave.
+    func hand(_ gesture: [String: Any]) async -> (Int, String?) {
+        let body = try? JSONSerialization.data(withJSONObject: gesture)
+        guard let asking = request("/api/screen/hand", method: "POST", body: body),
+              let (told, answer) = try? await session.data(for: asking)
+        else { return (0, nil) }
+        let holder = (try? JSONSerialization.jsonObject(with: told) as? [String: Any])?["holder"] as? String
+        return ((answer as? HTTPURLResponse)?.statusCode ?? 0, holder)
+    }
+
     /// The Agent's settings, and how shapes and colours are drawn.
     func settings() async -> ([Setting], Looks)? {
         guard let asking = request("/api/settings"), let (told, answer) = try? await session.data(for: asking),
