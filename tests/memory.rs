@@ -127,7 +127,14 @@ async fn remembering_under_the_same_name_corrects_the_memory() {
         fs::read_to_string(memory.path().join("home.md")).unwrap(),
         "Lives in Nantes since 2026.\n"
     );
-    assert_eq!(fs::read_dir(memory.path()).unwrap().count(), 1);
+    // One entry, as before; and what it said before is kept aside, once.
+    let entries = fs::read_dir(memory.path())
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ending| ending == "md"))
+        .count();
+    assert_eq!(entries, 1);
+    assert!(memory.path().join(".replaced/home.md").exists());
 }
 
 #[tokio::test]
@@ -208,4 +215,83 @@ async fn an_agent_with_nowhere_to_remember_is_not_offered_to() {
         owner
     };
     assert!(owner_with_memory.was_asked_nothing());
+}
+
+#[tokio::test]
+async fn the_agent_looks_back_by_itself_and_keeps_what_must_outlive_the_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let provider = ScriptedProvider::default();
+    // Ten answers, with nothing kept of its own accord.
+    for nth in 0..10 {
+        provider.then(Ok(format!("Answer {nth}.")));
+    }
+    // Then, asked nothing by anybody, it looks back and keeps two things.
+    provider.then_acts([
+        (
+            "remember",
+            json!({ "name": "ytstartup", "text": "A course for Italian YouTubers; prospects are in prospects.csv." }),
+        ),
+        ("remember", json!({ "name": "owner-tone", "text": "Wants short answers." })),
+    ]);
+    provider.then(Ok("Answer after.".into()));
+    let (mut channel, mut owner) = memory_channel();
+    let (agent_provider, memory) = (provider.clone(), home.path().join("memory"));
+    tokio::spawn(async move {
+        Agent::new(agent_provider, Store::in_memory())
+            .remembering_in(memory)
+            .converse(&mut channel)
+            .await
+    });
+
+    for nth in 0..10 {
+        owner.says(&format!("Message {nth} about YTStartup."));
+        assert_eq!(owner.hears().await, format!("Answer {nth}."));
+    }
+    // Shown what was kept, once they have their answer.
+    let kept = owner.hears().await;
+    assert!(kept.contains("ytstartup") && kept.contains("owner-tone"), "{kept}");
+    let entry = std::fs::read_to_string(home.path().join("memory/ytstartup.md")).unwrap();
+    assert!(entry.contains("prospects.csv"), "{entry}");
+    // It was asked to look back, over the conversation, with only what keeps.
+    let asked = provider.every_call();
+    let (instructions, conversation) = &asked[10];
+    assert!(instructions.contains("looking back over part of your own conversation"));
+    assert!(format!("{conversation:?}").contains("Message 3 about YTStartup."));
+    // (This agent has nowhere to keep skills; and nothing is forgotten by looking back.)
+    let offered = &provider.every_offer()[10].1;
+    assert_eq!(offered, &["remember".to_owned()], "{offered:?}");
+    // Nothing of the looking back is in the conversation: it goes on as it was.
+    owner.says("And now?");
+    assert_eq!(owner.hears().await, "Answer after.");
+    let after = format!("{:?}", provider.last_asked());
+    assert!(!after.contains("Keep now what must outlive it"), "{after}");
+    assert!(provider.last_instructions().contains("ytstartup: A course for Italian YouTubers"));
+}
+
+#[tokio::test]
+async fn a_memory_that_is_full_takes_nothing_more_before_room_is_made() {
+    let home = tempfile::tempdir().unwrap();
+    let long = "a fact of some length. ".repeat(200);
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("remember", json!({ "name": "one", "text": long }))])
+        .then_acts([("remember", json!({ "name": "two", "text": long }))])
+        .then_acts([("remember", json!({ "name": "three", "text": long }))])
+        .then(Ok("Done.".into()));
+    let (mut channel, mut owner) = memory_channel();
+    let (agent_provider, memory) = (provider.clone(), home.path().join("memory"));
+    tokio::spawn(async move {
+        Agent::new(agent_provider, Store::in_memory())
+            .remembering_in(memory)
+            .converse(&mut channel)
+            .await
+    });
+
+    owner.says("Remember all this.");
+    assert_eq!(owner.hears().await, "Done.");
+    // Two fit; the third is refused, and the model is told how to make room.
+    assert!(home.path().join("memory/two.md").exists());
+    assert!(!home.path().join("memory/three.md").exists());
+    let told = format!("{:?}", provider.last_asked());
+    assert!(told.contains("Make room first"), "{told}");
 }

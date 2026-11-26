@@ -61,5 +61,11 @@ async fn a_turn_with_everything_on_offer_stays_light() {
     // Seventy more tell it what to do when a page asks for what only its
     // Owner can give: say so and let them take over its screen, rather than
     // work around a captcha or give the job up.
-    assert!(total <= 3_720, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
+    // A hundred and seventy more: its memory is told to hold what it
+    // learns working for its Owner, not only who they are, since an agent
+    // given a job over days kept nothing of the job; and it is told that
+    // what watches for something to happen is an Extension that looks by
+    // itself, since it otherwise woke every quarter of an hour to look,
+    // which a real Owner paid for.
+    assert!(total <= 3_890, "{total} tokens before the Conversation:\n{}", listed.join("\n"));
 }

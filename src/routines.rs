@@ -94,7 +94,9 @@ pub(crate) fn specs() -> Vec<ActionSpec> {
              minutes\") or `at` (a moment): the instruction then comes back to you as a notice \
              and you carry it out. Recurring, with `cron`: each run is done in a fresh context \
              that knows nothing of your conversation and can ask nobody; its report \
-             reaches you as a notice. An existing name is replaced.",
+             reaches you as a notice. An existing name is replaced. Not to go and look whether \
+             something happened (a new mail, a change): each look costs your Owner; create an \
+             Extension with a watch for that, which wakes you only when there is something.",
             json!({
                 "name": text("A few words naming it."),
                 "instruction": text("What to do, written to be understood on its own."),

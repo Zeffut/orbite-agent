@@ -2,6 +2,15 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.12.0
+
+Released on 2026-11-26.
+
+- **Your agent keeps what matters, by itself.** Its memory is no longer only about you: it holds what it learns working for you, each project and what it is for, the people and accounts in it, where things are kept, the rules you gave, mistakes not to make twice. It no longer waits to be told to remember. Every ten of your messages, and each time part of a long conversation is about to leave its sight, it looks back over what was said and keeps what must outlive it, in its memory and as skills; you are shown what it kept. Its memory has a size, and it makes room itself when it is full.
+- What it keeps of a long conversation it can no longer see whole is written under headings, with every name, number and address as given, and what was under way exactly where it stood.
+- **It is told when something happens, instead of waking to look.** Asked to tell you of a new mail, an order, a page that changes, your agent writes itself an extension that watches: Orbite runs it by itself every few minutes, with no AI involved and at no cost to you, and wakes your agent only when there is something new. It no longer sets itself a routine that wakes every quarter of an hour to look.
+- At the free permission level, your agent keeps a secret you wrote, or replaces one, without asking: it asks nothing at that level but before spending your money.
+
 ## 0.11.0
 
 Released on 2026-11-26.

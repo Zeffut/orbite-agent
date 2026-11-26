@@ -123,6 +123,10 @@ struct Manifest {
     /// The secrets it may send to those hosts, by name.
     #[serde(default)]
     secrets: Vec<String>,
+    /// How often its `watch` is run by Orbite itself, in minutes, when it
+    /// is there to tell the Agent of something that happens.
+    #[serde(default)]
+    watch_every_minutes: Option<u32>,
 }
 
 /// One Extension of this installation.
@@ -133,10 +137,35 @@ pub(crate) struct Extension {
     hosts: Vec<String>,
     secrets: Vec<String>,
     script: String,
+    /// How often its `watch` is run, in minutes, when it has one.
+    watches_every: Option<u32>,
     /// True for an Extension shipped with Orbite.
     pub(crate) official: bool,
     /// Why it is turned off, when it is.
     pub(crate) off: Option<String>,
+}
+
+/// What an Extension that watches has to tell the Agent.
+pub(crate) struct Watched {
+    pub(crate) name: String,
+    pub(crate) text: String,
+    /// True when it is about the watch itself, which stopped: not about
+    /// what it watches.
+    pub(crate) about_itself: bool,
+}
+
+/// After how many failures in a row a watch is stopped.
+const WATCH_FAILURES: u32 = 3;
+
+/// How many times an hour one watch wakes the Agent, at the most.
+const WAKES_AN_HOUR: usize = 6;
+
+/// How many times in a row the watch kept in `folder` has failed.
+fn failures(folder: &std::path::Path) -> u32 {
+    fs::read_to_string(folder.join("watch-failed"))
+        .ok()
+        .and_then(|kept| kept.trim().parse().ok())
+        .unwrap_or(0)
 }
 
 /// One Action an Extension adds, as the Extension describes it.
@@ -195,6 +224,7 @@ impl Extensions {
                     description_fr: manifest.description_fr,
                     hosts: manifest.hosts,
                     secrets: manifest.secrets,
+                    watches_every: None,
                     script: (*script).to_owned(),
                     official: true,
                     off: off(name),
@@ -219,6 +249,7 @@ impl Extensions {
                 description_fr: manifest.description_fr,
                 hosts: manifest.hosts,
                 secrets: manifest.secrets,
+                watches_every: manifest.watch_every_minutes.map(|minutes| minutes.clamp(1, 1440)),
                 script: fs::read_to_string(folder.join("main.js")).unwrap_or_default(),
                 official: false,
                 off: off(&name),
@@ -295,6 +326,7 @@ impl Extensions {
             description_fr: None,
             hosts: Vec::new(),
             secrets: Vec::new(),
+            watches_every: None,
             script: script.to_owned(),
             official: false,
             off: None,
@@ -351,10 +383,24 @@ impl Extensions {
         hosts: &[String],
         secrets: &[String],
         script: &str,
+        watch_every_minutes: Option<u32>,
     ) -> std::io::Result<()> {
         let folder = self.folder.join(name);
         fs::create_dir_all(&folder)?;
-        let manifest = json!({ "description": description, "hosts": hosts, "secrets": secrets });
+        let mut manifest =
+            json!({ "description": description, "hosts": hosts, "secrets": secrets });
+        // Repaired without a word of it, one that watched goes on watching.
+        let watched_before = fs::read_to_string(folder.join("extension.json"))
+            .ok()
+            .and_then(|kept| serde_json::from_str::<Manifest>(&kept).ok())
+            .and_then(|kept| kept.watch_every_minutes);
+        if let Some(minutes) = watch_every_minutes.or(watched_before) {
+            manifest["watch_every_minutes"] = json!(minutes.clamp(1, 1440));
+        }
+        // Written anew, it watches from now: what it noted before stays.
+        for kept in ["watched", "watch-failed", "watch-told", "watch-woke"] {
+            let _ = fs::remove_file(folder.join(kept));
+        }
         fs::write(folder.join("extension.json"), serde_json::to_string_pretty(&manifest)? + "\n")?;
         fs::write(folder.join("main.js"), script)?;
         match fs::remove_file(folder.join("off")) {
@@ -503,6 +549,143 @@ impl Extensions {
             Ok(Err(Failure::Threw(problem) | Failure::Broke(problem))) => Some(Err(problem)),
             Err(_) => Some(Err("it crashed".into())),
         }
+    }
+
+    /// Runs the `watch` of every Extension whose turn has come, by Orbite
+    /// itself: no model is asked anything. What comes back is what each
+    /// has to tell the Agent; most often nothing at all. They look at the
+    /// same time, and none is waited for longer than one run may last.
+    pub(crate) async fn watched(self: &Arc<Self>, secrets: Option<&Secrets>) -> Vec<Watched> {
+        let mut looking = Vec::new();
+        for extension in self.all() {
+            let Some(every) = extension.watches_every.filter(|_| extension.off.is_none()) else {
+                continue;
+            };
+            let folder = self.folder.join(&extension.name);
+            // One that kept failing looks no more until it is written again.
+            if failures(&folder) >= WATCH_FAILURES {
+                continue;
+            }
+            let last = fs::metadata(folder.join("watched")).and_then(|kept| kept.modified()).ok();
+            // (A clock set back makes it due, not never due.)
+            let due = last.is_none_or(|last| {
+                last.elapsed()
+                    .map_or(true, |since| since >= Duration::from_secs(u64::from(every) * 60))
+            });
+            // Where the moment it looked cannot be written down, it would
+            // look at every turn of the clock: it does not look at all.
+            if !due || fs::write(folder.join("watched"), "").is_err() {
+                continue;
+            }
+            let lent: Vec<(String, String)> = extension
+                .secrets
+                .iter()
+                .filter(|name| !name.starts_with("ORBITE_"))
+                .filter_map(|name| Some((name.clone(), secrets?.get(name).ok()??)))
+                .collect();
+            let call = "globalThis.__settled = null;
+                 if (typeof watch !== 'function') { __settled = { none: true }; }
+                 else Promise.resolve().then(() => watch()).then(
+                   value => { __settled = { ok: !value ? ''
+                     : typeof value === 'string' ? value : JSON.stringify(value, null, 1) }; },
+                   error => { __settled = { error: String((error && error.message) || error) }; });"
+                .to_owned();
+            let name = extension.name.clone();
+            let runner = Arc::clone(self);
+            let handle = tokio::runtime::Handle::current();
+            let run = tokio::task::spawn_blocking(move || {
+                runner.run(&extension, call, Some((handle, lent)))
+            });
+            looking.push((name, folder, run));
+        }
+        let until = tokio::time::Instant::now() + self.time_limit + Duration::from_secs(5);
+        let mut told = Vec::new();
+        for (name, folder, run) in looking {
+            // One still looking past that is left to end by itself: what
+            // it finds, it will find again at its next turn.
+            let Ok(ran) = tokio::time::timeout_at(until, run).await else { continue };
+            let found = match ran {
+                Ok(Ok(settled)) => match serde_json::from_str::<Value>(&settled) {
+                    Ok(Value::Object(settled)) if settled.contains_key("ok") => {
+                        let _ = fs::remove_file(folder.join("watch-failed"));
+                        Ok(settled["ok"].as_str().unwrap_or_default().trim().to_owned())
+                    }
+                    Ok(Value::Object(settled)) if settled.contains_key("none") => {
+                        Err("the script has no watch() function".to_owned())
+                    }
+                    Ok(Value::Object(settled)) => {
+                        Err(settled["error"].as_str().unwrap_or("?").to_owned())
+                    }
+                    _ => Err("it did not finish what it started".to_owned()),
+                },
+                Ok(Err(Failure::Threw(problem) | Failure::Broke(problem))) => Err(problem),
+                Err(_) => Err("it crashed".to_owned()),
+            };
+            match found {
+                Ok(said) if said.is_empty() => {}
+                Ok(said) => {
+                    let said: String = said.chars().take(4_000).collect();
+                    // Told the same thing twice running, it has not noted
+                    // what it saw: said once, not at every turn.
+                    if fs::read_to_string(folder.join("watch-told")).is_ok_and(|last| last == said)
+                    {
+                        continue;
+                    }
+                    let _ = fs::write(folder.join("watch-told"), &said);
+                    // And it wakes the Agent only so often: past that it is
+                    // the watch that is at fault, which the Agent is told.
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |since| since.as_secs());
+                    let mut woke: Vec<u64> = fs::read_to_string(folder.join("watch-woke"))
+                        .unwrap_or_default()
+                        .lines()
+                        .filter_map(|line| line.parse().ok())
+                        .filter(|when| now.saturating_sub(*when) < 3600)
+                        .collect();
+                    woke.push(now);
+                    let lines: Vec<String> = woke.iter().map(u64::to_string).collect();
+                    let _ = fs::write(folder.join("watch-woke"), lines.join("\n"));
+                    match woke.len() {
+                        times if times <= WAKES_AN_HOUR => {
+                            told.push(Watched { name, text: said, about_itself: false });
+                        }
+                        times if times == WAKES_AN_HOUR + 1 => {
+                            let _ =
+                                fs::write(folder.join("watch-failed"), WATCH_FAILURES.to_string());
+                            told.push(Watched {
+                                name,
+                                text: format!(
+                                    "it woke you more than {WAKES_AN_HOUR} times in an hour, \
+                                     which is a watch that does not note what it has seen. It \
+                                     is stopped. Read it with read_extension, repair it, and \
+                                     create it again with its watch_every_minutes."
+                                ),
+                                about_itself: true,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                Err(problem) => {
+                    let times = failures(&folder) + 1;
+                    let _ = fs::write(folder.join("watch-failed"), times.to_string());
+                    if times == WATCH_FAILURES {
+                        told.push(Watched {
+                            name,
+                            text: format!(
+                                "its watch failed {WATCH_FAILURES} times in a row and is stopped: \
+                                 {}. Read it with read_extension, repair it, and create it again \
+                                 with its watch_every_minutes.",
+                                problem.chars().take(600).collect::<String>()
+                            ),
+                            about_itself: true,
+                        });
+                    }
+                }
+            }
+        }
+        told
     }
 
     /// Turns off an Extension that does not work; the text tells the model.

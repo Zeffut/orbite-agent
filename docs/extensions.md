@@ -2,6 +2,12 @@
 
 An extension adds actions to your agent: a connector to a service you use, whatever it is (a mailbox on a host nobody has heard of, a tool of your company), or a small tool of your own. Extensions are short JavaScript programs. Most are written by the agent itself, when you ask for one and agree to what it wrote; the ones that come with Orbite are the Official Extensions.
 
+## Watching for something to happen
+
+An extension can watch for you: a new mail in a mailbox, an order, a page that changes. Ask your agent in words ("tell me as soon as a mail arrives at this address"), and it writes itself an extension with a `watch()` function and says how often it should look. Orbite then runs that function by itself, every few minutes, with no AI involved and at no cost to you; it remembers what it has already seen, and wakes your agent only when there is something new, with what it found. Your agent then does what you wanted done when that happens.
+
+A watch that fails three times in a row is reported to your agent, which repairs it.
+
 ## Living with extensions
 
 - `/extensions` lists them and says which are on.

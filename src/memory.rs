@@ -1,5 +1,6 @@
-//! What the Agent knows about its Owner, kept as one plain file per entry so
-//! the Owner can read, correct and delete any of it without Orbite.
+//! What the Agent knows that outlives every conversation: about its Owner,
+//! and about the work it does for them. Kept as one plain file per entry,
+//! so the Owner can read, correct and delete any of it without Orbite.
 
 use std::fs;
 use std::io;
@@ -10,6 +11,11 @@ use crate::slug::slug;
 pub(crate) struct Memory {
     folder: PathBuf,
 }
+
+/// How much the Agent remembers at the most, in letters: all of it is read
+/// at every turn, so it is kept to what matters, and the Agent makes room
+/// itself when it is full.
+pub(crate) const HOLDS: usize = 10_000;
 
 impl Memory {
     pub(crate) fn kept_in(folder: PathBuf) -> Self {
@@ -36,11 +42,42 @@ impl Memory {
         entries
     }
 
+    /// How many letters the memory holds now.
+    pub(crate) fn used(&self) -> usize {
+        self.entries().iter().map(|(name, text)| name.chars().count() + text.chars().count()).sum()
+    }
+
     /// Keeps `text` under `name`, replacing what was kept there.
     pub(crate) fn remember(&self, name: &str, text: &str) -> io::Result<String> {
         let name = slug(name)?;
+        // Full, it takes nothing more before room is made: nothing kept is
+        // dropped without the Agent choosing what.
+        let others: usize = self
+            .entries()
+            .iter()
+            .filter(|(kept, _)| *kept != name)
+            .map(|(kept, text)| kept.chars().count() + text.chars().count())
+            .sum();
+        let whole = others + name.chars().count() + text.trim().chars().count();
+        // (One that makes it smaller is always taken: a memory its Owner
+        // filled by hand past its size can still be brought back to it.)
+        if whole > HOLDS && whole > self.used() {
+            return Err(io::Error::other(format!(
+                "your memory would hold {whole} letters, and it holds {HOLDS} at the most. Make \
+                 room first: shorten or merge entries, forget what no longer matters, then \
+                 remember this again"
+            )));
+        }
         fs::create_dir_all(&self.folder)?;
-        fs::write(self.folder.join(format!("{name}.md")), format!("{}\n", text.trim()))?;
+        // What an entry said before is kept aside once: written over by
+        // mistake, it is not lost for good.
+        let entry = self.folder.join(format!("{name}.md"));
+        if entry.exists() {
+            let aside = self.folder.join(".replaced");
+            let _ = fs::create_dir_all(&aside);
+            let _ = fs::copy(&entry, aside.join(format!("{name}.md")));
+        }
+        fs::write(entry, format!("{}\n", text.trim()))?;
         Ok(name)
     }
 

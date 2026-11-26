@@ -58,6 +58,13 @@ be async, and throws an Error to say what went wrong.\n\
 - check() tries the connector for real without changing anything outside: it signs in, reads one small \
 thing, and returns a sentence saying what it found; it throws an Error when anything is wrong. Always \
 write one.\n\
+- watch(), for an Extension that is there to tell you when something happens (a new mail, an order, a \
+page that changes): give create_extension watch_every_minutes, and Orbite calls watch() by itself that \
+often, without you and at no cost to your Owner. It looks, remembers with store what it has already \
+seen, and returns a text only when there is something new, which wakes you with that text; otherwise it \
+returns nothing. The first time it runs it only notes what is there and returns nothing. Say in the \
+text all you need to act on it (who, what, which one). This is how you watch for anything: never \
+schedule a Routine that wakes you to go and look, which spends your Owner's usage each time for nothing.\n\
 It has plain JavaScript and what Orbite lends, nothing else: no fetch, require, file or timer. One run \
 lasts 20 seconds at most.\n\
 - store.get(key), store.set(key, value), store.remove(key), store.keys(): data it keeps.\n\
@@ -149,6 +156,8 @@ struct CreateExtension {
     secrets: Vec<String>,
     #[serde(default)]
     script: String,
+    #[serde(default)]
+    watch_every_minutes: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -396,7 +405,9 @@ impl Host {
             specs.push(ActionSpec {
                 name: "create_extension".into(),
                 description: "Writes yourself an Extension: a small JavaScript program that adds Actions \
-                    you can then use, such as a connector to a service your Owner uses often; or \
+                    you can then use, such as a connector to a service your Owner uses often, and \
+                    that can watch for something to happen (a new mail, a page that changes) and \
+                    wake you only then, at no cost meanwhile; or \
                     replaces one of the same name, to repair it. Your Owner is shown it and asked \
                     first. Call it with only `name` to be given the rules for writing one."
                     .into(),
@@ -408,6 +419,7 @@ impl Host {
                         "hosts": { "type": "array", "items": { "type": "string" } },
                         "secrets": { "type": "array", "items": { "type": "string" } },
                         "script": { "type": "string" },
+                        "watch_every_minutes": { "type": "integer" },
                     },
                     "required": ["name"],
                 }),
@@ -752,10 +764,25 @@ impl Host {
                         wanted.description,
                         self.language.say("Adds:", "Ajoute :"),
                         adds.join(", "),
-                        self.language.say(
-                            "It is tried at once, with what it reaches and sends.",
-                            "Elle est essayée aussitôt, avec ce qu'elle atteint et envoie."
-                        ),
+                        // One that watches runs by itself from then on: said.
+                        match wanted.watch_every_minutes {
+                            Some(minutes) => format!(
+                                "{} {} {}",
+                                self.language.say(
+                                    "It is tried at once, with what it reaches and sends. Then it runs by itself every",
+                                    "Elle est essayée aussitôt, avec ce qu'elle atteint et envoie. Elle tourne ensuite toute seule toutes les"
+                                ),
+                                minutes.clamp(1, 1440),
+                                self.language.say("minutes, to watch for you.", "minutes, pour guetter à ta place.")
+                            ),
+                            None => self
+                                .language
+                                .say(
+                                    "It is tried at once, with what it reaches and sends.",
+                                    "Elle est essayée aussitôt, avec ce qu'elle atteint et envoie."
+                                )
+                                .to_owned(),
+                        },
                         preview(&wanted.script)
                     ),
                     irreversible: replaces,
@@ -999,6 +1026,7 @@ impl Host {
                                 &wanted.hosts,
                                 &wanted.secrets,
                                 &wanted.script,
+                                wanted.watch_every_minutes,
                             )
                             .map(|()| adds)
                             .map_err(|error| format!("Could not keep the Extension: {error}."))
