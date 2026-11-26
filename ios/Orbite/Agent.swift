@@ -251,7 +251,8 @@ final class Agent {
         // On a server that holds several Agents, what is asked of an Agent
         // is asked of the one chosen; what is the server's is asked of it.
         var path = path
-        if several, let chosen, !path.hasPrefix("/api/pair"), !path.hasPrefix("/api/agents") {
+        if several, let chosen, !path.hasPrefix("/api/pair"), !path.hasPrefix("/api/agents"),
+           !path.hasPrefix("/api/devices") {
             path = "/a/\(chosen)\(path)"
         }
         guard let address, let to = URL(string: path, relativeTo: address) else { return nil }
@@ -678,6 +679,40 @@ final class Agent {
         else { return (0, nil) }
         let holder = (try? JSONSerialization.jsonObject(with: told) as? [String: Any])?["holder"] as? String
         return ((answer as? HTTPURLResponse)?.statusCode ?? 0, holder)
+    }
+
+    /// The devices let in to the server, when this is one.
+    func devices() async -> [Device]? {
+        guard several, let asking = request("/api/devices"), let (told, answer) = try? await session.data(for: asking),
+              (answer as? HTTPURLResponse)?.statusCode == 200,
+              let all = try? JSONSerialization.jsonObject(with: told) as? [String: Any]
+        else { return nil }
+        return (all["devices"] as? [[String: Any]] ?? []).compactMap { one in
+            guard let name = one["name"] as? String else { return nil }
+            return Device(
+                name: name, seen: Date(timeIntervalSince1970: one["seen"] as? Double ?? 0),
+                this: one["this"] as? Bool ?? false)
+        }
+    }
+
+    /// A code that lets one more device in, shown by this phone.
+    func oneMoreDevice() async -> NewDevice? {
+        guard let asking = request("/api/devices", method: "POST", body: Data("{}".utf8)),
+              let (told, answer) = try? await session.data(for: asking),
+              (answer as? HTTPURLResponse)?.statusCode == 200,
+              let given = try? JSONSerialization.jsonObject(with: told) as? [String: Any],
+              let code = given["code"] as? String
+        else { return nil }
+        return NewDevice(code: code, link: given["link"] as? String)
+    }
+
+    /// Turns the device called `name` away.
+    func turnAway(_ name: String) async -> Bool {
+        let named = name.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        guard let asking = request("/api/devices/\(named)", method: "DELETE"),
+              let (_, answer) = try? await session.data(for: asking)
+        else { return false }
+        return (answer as? HTTPURLResponse)?.statusCode == 200
     }
 
     /// The Agent's settings, and how shapes and colours are drawn.

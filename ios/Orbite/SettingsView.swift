@@ -215,6 +215,13 @@ struct SettingsView: View {
                         } label: {
                             Label(say("Services", "Services"), systemImage: "point.3.connected.trianglepath.dotted")
                         }
+                        if agent.several {
+                            NavigationLink {
+                                DevicesScreen()
+                            } label: {
+                                Label(say("Devices", "Appareils"), systemImage: "laptopcomputer.and.iphone")
+                            }
+                        }
                     }
                     Section {
                         Button(say("Remove this agent from this phone", "Retirer cet agent de ce téléphone"), role: .destructive) {
