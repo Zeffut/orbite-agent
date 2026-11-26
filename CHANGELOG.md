@@ -2,6 +2,14 @@
 
 What changed in each version of Orbite, for the people who run it.
 
+## 0.9.9
+
+Released on 2026-11-26.
+
+- **Your agent has a menu of its own.** Touch its name at the top of the conversation: *Customize* is its name, shape and colour, and *Screen* is its computer. The button for the screen that sat on the conversation is gone.
+- **See your agent's computer as it is, and take over.** The screen shows what it shows this moment. *Take over* gives you its mouse and keyboard: click on the picture, type, paste. What you type goes to its computer alone, never to the AI, so it is the way to sign in to an account yourself. Your agent leaves the computer alone while you have it and says it is waiting; it is given back when you say so, when you leave the screen, or a minute after your device went away.
+- On a computer, the column is now the list of your agents with settings at the bottom, as in the phone app, and services are found in settings.
+
 ## 0.9.8
 
 Released on 2026-11-26.

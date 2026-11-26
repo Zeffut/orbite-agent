@@ -58,7 +58,7 @@ pub use catalogue::{
 };
 pub use channel::{Answer, Approval, Channel};
 pub use chatgpt::ChatGpt;
-pub use computer::{Computer, Screen};
+pub use computer::{ByHand, Computer, Hand, Screen};
 pub use config::{Config, ProviderChoice, Transcription};
 pub use connectors::{CONNECTORS, Connector};
 pub use desk::{

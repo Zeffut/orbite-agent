@@ -113,7 +113,7 @@ pub(crate) struct Host {
     /// The MCP servers of this installation, when it has any.
     pub(crate) mcp: Option<Arc<Mcp>>,
     /// The Agent's Computer, when it has one.
-    pub(crate) computer: Option<Desk>,
+    pub(crate) computer: Option<std::sync::Arc<Desk>>,
 }
 
 #[derive(Deserialize)]
@@ -430,6 +430,10 @@ impl Host {
     /// the screen once it has settled.
     async fn on_the_computer(&self, gesture: Gesture) -> String {
         let Some(desk) = &self.computer else { return NO_COMPUTER.into() };
+        // One screen, and the Owner comes first on it.
+        if desk.in_the_owners_hand() {
+            return crate::computer::IN_THE_OWNERS_HAND.into();
+        }
         // Reached here with the Owner's say where one was needed: it holds
         // for as long as the Agent keeps working there.
         desk.taken();
@@ -478,6 +482,10 @@ impl Host {
         };
         let done = match done {
             Ok(done) => done,
+            // Taken by the Owner meanwhile: said as it is.
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                return crate::computer::IN_THE_OWNERS_HAND.into();
+            }
             Err(error) => return format!("That could not be done on the Computer: {error}."),
         };
         // A browser that is starting shows nothing for a moment, then its
@@ -485,6 +493,10 @@ impl Host {
         let calm = if before.is_some() { 3 } else { 2 };
         match desk.picture(patience, calm, before.as_deref()).await {
             Ok(picture) => format!("{done}\n{}", crate::attached(&picture)),
+            // What the Owner does there themselves is not shown to the model.
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                format!("{done} {}", crate::computer::IN_THE_OWNERS_HAND)
+            }
             Err(error) => format!("{done} The screen could not be pictured: {error}."),
         }
     }

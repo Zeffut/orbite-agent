@@ -84,6 +84,9 @@ struct Shared {
     /// The Agent's screen as last seen, and how many times it was: kept in
     /// memory alone.
     screen: Mutex<(u64, Vec<u8>)>,
+    /// The Agent's Computer, when it has one: seen as it is now, and taken
+    /// by the Owner for a while.
+    computer: Mutex<Option<crate::Hand>>,
     /// The names the interface is served under, beside its address.
     names: Vec<String>,
     /// True when the Owner's devices reach the interface encrypted.
@@ -314,6 +317,7 @@ impl Interface {
             signing_in: tokio::sync::Mutex::new(None),
             waiting: Mutex::new(Vec::new()),
             screen: Mutex::new((0, Vec::new())),
+            computer: Mutex::new(None),
             encrypted: crate::Config::load(home)
                 .ok()
                 .and_then(|config| config.interface_reached_at)
@@ -367,6 +371,8 @@ impl Interface {
             .route("/signed-in", get(signed_in))
             .route("/api/file", get(file))
             .route("/api/screen", get(screen))
+            .route("/api/screen/now", get(screen_now))
+            .route("/api/screen/hand", post(by_hand))
             .route(
                 "/api/upload",
                 post(upload).delete(give_up).layer(DefaultBodyLimit::max(UPLOAD_LIMIT)),
@@ -386,6 +392,13 @@ impl Interface {
             open_ask: None,
             serving,
         })
+    }
+
+    /// Lets the Owner see the Agent's Computer as it is now from their
+    /// devices, and take its mouse and keyboard for a while.
+    pub fn showing(self, computer: crate::Hand) -> Self {
+        *self.shared.computer.lock().expect("not poisoned") = Some(computer);
+        self
     }
 
     /// Where the interface is served.
@@ -428,6 +441,10 @@ impl Shared {
 
     /// The name of the device that sent `headers`, when it was let in:
     /// by this interface itself, or by the server in front of it.
+    fn hand(&self) -> Option<crate::Hand> {
+        self.computer.lock().expect("not poisoned").clone()
+    }
+
     fn device(&self, headers: &HeaderMap) -> Option<String> {
         sent_by_the_server(headers).or_else(|| device_in(&self.database, headers))
     }
@@ -680,6 +697,10 @@ async fn me(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Response {
             });
             Json(json!({
                 "device": name, "language": shared.language, "screen": seen,
+                // Whether the Agent has a Computer, and who holds it.
+                "computer": shared.hand().map(|hand| json!({
+                    "on": hand.is_on(), "taken": hand.is_taken(),
+                })),
                 "agent": agent,
                 // True once the Owner has been shown round, on any device.
                 "welcomed": crate::Store::open(shared.home.join("orbite.db"))
@@ -1189,6 +1210,100 @@ async fn screen(State(shared): State<Arc<Shared>>, headers: HeaderMap) -> Respon
         picture,
     )
         .into_response()
+}
+
+/// The Agent's screen as it is this moment. Nothing is shown of a Computer
+/// that is not started, and looking does not start it.
+async fn screen_now(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Query(asked): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let Some(hand) = shared.hand() else {
+        return refused(StatusCode::NOT_FOUND, "no computer");
+    };
+    // The device that holds the Computer and still shows it is still there.
+    if let Some(holder) = asked.get("held") {
+        hand.still_here(holder);
+    }
+    match tokio::task::spawn_blocking(move || hand.picture()).await {
+        Ok(Some(Ok(picture))) => (
+            [
+                (header::CONTENT_TYPE, "image/png"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (header::CACHE_CONTROL, "no-store"),
+            ],
+            picture,
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        _ => refused(StatusCode::SERVICE_UNAVAILABLE, "the screen could not be seen"),
+    }
+}
+
+/// What the Owner does on the Agent's Computer with their own hand: takes
+/// it, makes a gesture there, gives it back. Taking it gives the device
+/// what it is then known by, asked of all the rest.
+async fn by_hand(
+    State(shared): State<Arc<Shared>>,
+    headers: HeaderMap,
+    Json(sent): Json<Value>,
+) -> Response {
+    if !from_the_page(&headers, &shared.names) || shared.device(&headers).is_none() {
+        return refused(StatusCode::UNAUTHORIZED, "not paired");
+    }
+    let Some(hand) = shared.hand() else {
+        return refused(StatusCode::NOT_FOUND, "no computer");
+    };
+    let holder = sent["holder"].as_str().unwrap_or_default().to_owned();
+    // A point is a whole number on the screen, or the gesture is none.
+    let point = |key: &str| sent[key].as_u64().and_then(|at| u16::try_from(at).ok());
+    let at = || Some((point("x")?, point("y")?));
+    let text = |key: &str| sent[key].as_str().map(str::to_owned);
+    let gesture = match sent["do"].as_str() {
+        Some("take") => {
+            return match tokio::task::spawn_blocking(move || hand.take()).await {
+                Ok(Ok(holder)) => Json(json!({ "holder": holder })).into_response(),
+                _ => refused(StatusCode::SERVICE_UNAVAILABLE, "the computer did not start"),
+            };
+        }
+        Some("give") => {
+            hand.give_back(&holder);
+            return Json(json!({ "given": true })).into_response();
+        }
+        // The device still has it, though it shows something else for now.
+        Some("here") => {
+            return if hand.still_here(&holder) {
+                Json(json!({ "held": true })).into_response()
+            } else {
+                refused(StatusCode::CONFLICT, "the computer is not taken")
+            };
+        }
+        Some("click") => at().map(|(x, y)| crate::ByHand::Click { x, y }),
+        Some("double") => at().map(|(x, y)| crate::ByHand::DoubleClick { x, y }),
+        Some("type") => text("text").map(crate::ByHand::Type),
+        Some("key") => text("keys").map(crate::ByHand::Key),
+        Some("scroll") => at().zip(sent["notches"].as_i64()).map(|((x, y), notches)| {
+            crate::ByHand::Scroll { x, y, notches: notches.clamp(-10, 10) as i32 }
+        }),
+        _ => None,
+    };
+    let Some(gesture) = gesture else {
+        return refused(StatusCode::BAD_REQUEST, "not a gesture");
+    };
+    match tokio::task::spawn_blocking(move || hand.does(&holder, gesture)).await {
+        Ok(Ok(())) => Json(json!({ "done": true })).into_response(),
+        Ok(Err(error)) if error.kind() == io::ErrorKind::PermissionDenied => {
+            refused(StatusCode::CONFLICT, "the computer is not taken")
+        }
+        Ok(Err(error)) if error.kind() == io::ErrorKind::InvalidInput => {
+            refused(StatusCode::BAD_REQUEST, "not a gesture")
+        }
+        _ => refused(StatusCode::SERVICE_UNAVAILABLE, "the gesture could not be made"),
+    }
 }
 
 /// Takes in a file to go with the next message: saved where the Agent

@@ -280,6 +280,11 @@ async fn run() -> Result<(), Failure> {
         });
     }
     let agent = agent()?;
+    // The Agent's Computer is seen, and taken for a while, from its page.
+    let interface = interface.map(|interface| match agent.hand() {
+        Some(computer) => interface.showing(computer),
+        None => interface,
+    });
     let terminal = env::args()
         .any(|argument| argument == "--terminal")
         .then(|| Terminal::new(BufReader::new(stdin()), stdout()));

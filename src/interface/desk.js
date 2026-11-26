@@ -34,33 +34,29 @@
   function column() {
     side.replaceChildren();
     side.append(make("div", "mark", "Orbite"));
-    const who = make("button", "agent" + (showing === "agent" ? " here" : ""));
+    // Every agent, each its Conversation; what is set for all, at the bottom.
+    side.append(make("small", "over", say("Agents", "Agents")));
+    const mine = ["talk", "agent", "look", "screen"].includes(showing);
+    const who = make("button", "agent" + (mine ? " here" : ""));
     who.type = "button";
     const look = me && me.look;
-    who.append(figure(look && look.outline, look && look.colour, look && look.eyes, 40));
+    who.append(figure(look && look.outline, look && look.colour, look && look.eyes, 34));
     const named = make("span");
-    named.append(make("strong", "", (me && me.agent) || "Orbite"), make("small", "", say("My agent", "Mon agent")));
+    named.append(make("strong", "", (me && me.agent) || "Orbite"));
     who.append(named);
-    who.onclick = () => open("agent");
+    who.onclick = () => open("talk");
     side.append(who);
-    const places = [
-      ["talk", say("Conversation", "Conversation"), "M4 5h16v11H9l-5 4z"],
-      ["services", say("Services", "Services"), "M7 7h4v4H7zM13 13h4v4h-4zM11 9h4a2 2 0 0 1 2 2v2"],
-      ["settings", say("Settings", "Réglages"), "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM4 12h2M18 12h2M12 4v2M12 18v2M6.5 6.5l1.4 1.4M16.1 16.1l1.4 1.4M6.5 17.5l1.4-1.4M16.1 7.9l1.4-1.4"],
-    ];
-    const list = make("div", "places");
-    for (const [place, label, drawn] of places) {
-      const go = make("button", showing === place ? "here" : "");
-      go.type = "button";
-      go.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="${drawn}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-      go.append(make("span", "", label));
-      go.onclick = () => open(place);
-      list.append(go);
-    }
-    side.append(list);
+    const set = make("button", "low" + (showing === "settings" || showing === "services" ? " here" : ""));
+    set.type = "button";
+    set.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM4 12h2M18 12h2M12 4v2M12 18v2M6.5 6.5l1.4 1.4M16.1 16.1l1.4 1.4M6.5 17.5l1.4-1.4M16.1 7.9l1.4-1.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    set.append(make("span", "", say("Settings", "Réglages")));
+    set.onclick = () => open("settings");
+    side.append(set);
   }
 
   function open(place) {
+    // The Computer is given back when its screen is left.
+    if (showing === "screen" && place !== "screen") give();
     showing = place;
     column();
     panel.hidden = place === "talk";
@@ -69,15 +65,43 @@
     if (place === "settings") settings();
     if (place === "services") services();
     if (place === "agent") agent();
+    if (place === "look") look();
+    if (place === "screen") screen();
   }
 
-  function head(title, about) {
+  // What starts a screen of the panel: where it is left from, then its title.
+  function head(title, about, back) {
     panel.replaceChildren();
+    const shut = make("button", "shut");
+    shut.type = "button";
+    shut.setAttribute("aria-label", say("Close", "Fermer"));
+    shut.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>`;
+    shut.onclick = () => open("talk");
+    panel.append(shut);
+    if (back) {
+      const to = make("button", "back");
+      to.type = "button";
+      to.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      to.append(make("span", "", back[1]));
+      to.onclick = () => open(back[0]);
+      panel.append(to);
+    }
+    if (!title) return;
     const top = make("header");
     top.append(make("h1", "", title));
     if (about) top.append(make("p", "", about));
     panel.append(top);
   }
+
+  async function who() {
+    const told = await fetch("/api/me").catch(() => null);
+    if (told && told.ok) {
+      me = await told.json();
+      french = me.language === "fr";
+    }
+    return me;
+  }
+  const agentName = () => (me && me.agent) || "Orbite";
 
   async function read() {
     const told = await fetch("/api/settings").catch(() => null);
@@ -143,6 +167,17 @@
     const of = (key) => (kept.settings.find((one) => one.key === key) || { choices: [] }).choices;
     const models = kept.models || [];
     const called = Object.fromEntries(models.map((model) => [model.value, model.label + (model.value === kept.usual ? say(" · Recommended", " · Recommandé") : "")]));
+    // What the agent is connected to is set here too.
+    const linked = make("section");
+    const go = make("button", "go");
+    go.type = "button";
+    go.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h4v4H7zM13 13h4v4h-4zM11 9h4a2 2 0 0 1 2 2v2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const told = make("span");
+    told.append(make("strong", "", say("Services", "Services")), make("small", "", say("What your agent can use for you: mail, calendar, tools.", "Ce que ton agent peut utiliser pour toi : mails, agenda, outils.")));
+    go.append(told);
+    go.insertAdjacentHTML("beforeend", `<svg class="next" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+    go.onclick = () => open("services");
+    linked.append(go);
     const thinks = make("section");
     thinks.append(make("h2", "", say("Thinks with", "Réfléchit avec")));
     if (models.length) {
@@ -162,11 +197,11 @@
     rest.append(row(say("Language", "Langue"), say("Of Orbite's own words.", "Des textes d'Orbite."), chosen("language", of("language"))));
     rest.append(row(say("Voice messages", "Messages vocaux"), say("What writes down what you say.", "Ce qui transcrit ce que tu dis."), chosen("voice", of("voice"))));
     rest.append(row(say("Automatic updates", "Mises à jour automatiques"), "", chosen("updates", of("updates"))));
-    panel.append(thinks, does, rest);
+    panel.append(linked, thinks, does, rest);
   }
 
   async function services() {
-    head(say("Services", "Services"), say("What your agent can use for you, once you have signed in.", "Ce que ton agent peut utiliser pour toi, une fois que tu t'es connecté."));
+    head(say("Services", "Services"), say("What your agent can use for you, once you have signed in.", "Ce que ton agent peut utiliser pour toi, une fois que tu t'es connecté."), ["settings", say("Settings", "Réglages")]);
     const told = await fetch("/api/connectors").catch(() => null);
     const all = told && told.ok ? await told.json() : null;
     if (!all) return panel.append(make("p", "quiet", say("The services could not be read.", "Les services n'ont pas pu être lus.")));
@@ -213,8 +248,267 @@
     panel.append(list);
   }
 
+  // The Agent's own menu: who it is, then what is its own, each a screen.
   async function agent() {
-    head(say("Your agent", "Ton agent"), say("Its name and its look, which are its own.", "Son nom et son apparence, qui lui sont propres."));
+    await who();
+    if (showing !== "agent") return;
+    head("", "", document.body.classList.contains("desk") ? ["talk", say("Conversation", "Conversation")] : null);
+    const look = me && me.look;
+    const top = make("div", "whois");
+    top.append(figure(look && look.outline, look && look.colour, look && look.eyes, 96));
+    top.append(make("h1", "", agentName()), make("p", "", say("My agent", "Mon agent")));
+    const has = me && me.computer;
+    const rows = [
+      ["look", say("Customize", "Personnaliser"), say("Its name, its shape, its colour.", "Son nom, sa forme, sa couleur."),
+        "M12 3l2.2 5.3 5.8.5-4.4 3.8 1.3 5.6L12 15.3 7.1 18.2l1.3-5.6L4 8.8l5.8-.5z", true],
+      ["screen", say("Screen", "Écran"),
+        has ? say("See what it does on its computer, or take over.", "Voir ce qu'il fait sur son ordinateur, ou prendre la main.")
+          : say("It has no computer on this installation.", "Il n'a pas d'ordinateur sur cette installation."),
+        "M4 5h16v11H4zM9 20h6M12 16v4", !!has],
+    ];
+    const list = make("section");
+    for (const [place, label, about, drawn, there] of rows) {
+      const go = make("button", "go");
+      go.type = "button";
+      go.disabled = !there;
+      go.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${drawn}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      const words = make("span");
+      words.append(make("strong", "", label), make("small", "", about));
+      go.append(words);
+      go.insertAdjacentHTML("beforeend", `<svg class="next" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`);
+      go.onclick = () => open(place);
+      list.append(go);
+    }
+    panel.append(top, list);
+  }
+
+  // The Agent's screen as it is this moment, and the Owner's hand on it.
+  // What taking it gave this page, while it has it.
+  let taken = "";
+  const hand = (body) =>
+    fetch("/api/screen/hand", { method: "POST", keepalive: true, headers: { "content-type": "application/json", "x-orbite": "1" }, body: JSON.stringify({ holder: taken, ...body }) });
+  function give() {
+    if (!taken) return;
+    const holder = taken;
+    taken = "";
+    hand({ do: "give", holder }).catch(() => null);
+  }
+  addEventListener("pagehide", give);
+
+  async function screen() {
+    head(say("Screen", "Écran"), say("{name}'s own computer, as it is right now.", "L'ordinateur de {name}, tel qu'il est en ce moment.").replace("{name}", agentName()), ["agent", agentName()]);
+    const stage = make("div", "stage off");
+    const shown = make("img");
+    shown.alt = "";
+    shown.draggable = false;
+    // What is typed is caught by a field nobody sees: a picture takes no keys.
+    const keys = make("textarea");
+    keys.setAttribute("aria-label", say("Keyboard of the agent's computer", "Clavier de l'ordinateur de l'agent"));
+    const dark = make("p", "dark", say("Its computer is off: it starts when your agent needs it, or when you take over.", "Son ordinateur est éteint : il démarre quand ton agent en a besoin, ou quand tu prends la main."));
+    stage.append(shown, dark, keys);
+    const bar = make("div", "hand");
+    const told = make("p");
+    const take = make("button");
+    take.type = "button";
+    bar.append(told, take);
+    const typed = make("form", "typed");
+    const field = make("input");
+    field.placeholder = say("Type on its screen…", "Écrire sur son écran…");
+    // What is written there may be a password: nothing keeps or learns it.
+    for (const typing of [field, keys]) {
+      typing.autocapitalize = "off";
+      typing.autocomplete = "off";
+      typing.spellcheck = false;
+      typing.setAttribute("autocorrect", "off");
+    }
+    const enter = make("button", "", say("Enter", "Entrée"));
+    enter.type = "button";
+    typed.append(field, enter);
+    panel.append(stage, bar, typed);
+    const here = () => showing === "screen" && panel.contains(stage);
+
+    function draw() {
+      stage.classList.toggle("taken", taken);
+      take.className = taken ? "back-to" : "";
+      take.textContent = taken ? say("Give it back to {name}", "Rendre la main à {name}").replace("{name}", agentName()) : say("Take over", "Prendre le contrôle");
+      told.textContent = taken
+        ? say("You have its mouse and keyboard: click on the screen and type. {name} waits.", "Tu as sa souris et son clavier : clique sur l'écran et tape. {name} attend.").replace("{name}", agentName())
+        : say("You see what {name} sees. Take over to do something yourself, such as signing in.", "Tu vois ce que voit {name}. Prends la main pour faire quelque chose toi-même, comme te connecter à un compte.").replace("{name}", agentName());
+      // A phone has no keys until a field asks for them.
+      typed.classList.toggle("shown", taken && matchMedia("(pointer: coarse)").matches);
+    }
+
+    // One gesture after another, in the order they were made.
+    let line = Promise.resolve();
+    const act = (body) => {
+      line = line.then(async () => {
+        const done = await hand(body).catch(() => null);
+        if (done && done.status === 409 && taken) {
+          taken = "";
+          draw();
+        }
+        see();
+      });
+      return line;
+    };
+
+    let looking = false;
+    async function see() {
+      if (!here() || looking || document.hidden) return;
+      looking = true;
+      const got = await fetch("/api/screen/now" + (taken ? "?held=" + taken : ""), { cache: "no-store" }).catch(() => null);
+      looking = false;
+      if (!here()) return;
+      if (got && got.status === 200) {
+        const old = shown.src;
+        shown.src = URL.createObjectURL(await got.blob());
+        if (old.startsWith("blob:")) shown.addEventListener("load", () => URL.revokeObjectURL(old), { once: true });
+        stage.classList.remove("off");
+      } else if (got && got.status === 204) {
+        stage.classList.add("off");
+      }
+    }
+    (async function follow() {
+      if (!here()) return;
+      await see();
+      setTimeout(follow, taken ? 450 : 1300);
+    })();
+    // Kept while the window is behind another, where nothing is drawn: the
+    // time to fetch a code somewhere else.
+    (async function hold() {
+      if (!here()) return;
+      if (taken && document.hidden) {
+        const still = await hand({ do: "here" }).catch(() => null);
+        if (still && still.status === 409) {
+          taken = "";
+          draw();
+        }
+      }
+      setTimeout(hold, 15000);
+    })();
+
+    take.onclick = async () => {
+      if (taken) {
+        // What was typed and not sent yet goes first.
+        flush();
+        take.disabled = true;
+        await line;
+        take.disabled = false;
+        give();
+        return draw();
+      }
+      take.disabled = true;
+      take.textContent = say("Starting…", "Démarrage…");
+      const done = await hand({ do: "take" }).catch(() => null);
+      take.disabled = false;
+      taken = (done && done.ok && (await done.json()).holder) || "";
+      // Left meanwhile: it is given back at once.
+      if (!here()) return give();
+      draw();
+      if (taken) keys.focus({ preventScroll: true });
+      see();
+    };
+
+    // Where on its screen a point of the picture is: the picture is shown
+    // whole inside its frame, with bands beside it when the frame is wider.
+    const at = (event) => {
+      if (!shown.naturalWidth) return null;
+      const box = shown.getBoundingClientRect();
+      const scale = Math.min(box.width / shown.naturalWidth, box.height / shown.naturalHeight) || 1;
+      const left = box.left + (box.width - shown.naturalWidth * scale) / 2;
+      const top = box.top + (box.height - shown.naturalHeight * scale) / 2;
+      const x = Math.round((event.clientX - left) / scale), y = Math.round((event.clientY - top) / scale);
+      return x < 0 || y < 0 || x >= shown.naturalWidth || y >= shown.naturalHeight ? null : { x, y };
+    };
+    shown.addEventListener("click", (event) => {
+      if (!taken) return;
+      const point = at(event);
+      // Letters still waiting are typed where they were meant, before the click.
+      flush();
+      if (point) act({ do: "click", ...point });
+      if (!matchMedia("(pointer: coarse)").matches) keys.focus({ preventScroll: true });
+    });
+    let turned = 0, turning = null, over = null;
+    stage.addEventListener("wheel", (event) => {
+      if (!taken) return;
+      event.preventDefault();
+      turned += event.deltaY;
+      over = at(event) || over;
+      if (turning || !over) return;
+      turning = setTimeout(() => {
+        const notches = Math.max(-5, Math.min(5, Math.round(turned / 100) || Math.sign(turned)));
+        turned = 0;
+        turning = null;
+        flush();
+        if (notches) act({ do: "scroll", ...over, notches });
+      }, 120);
+    }, { passive: false });
+
+    // Letters are sent together, a moment after the last one; a key that
+    // is no letter is sent by its name.
+    const NAMED = { Enter: "Return", Backspace: "BackSpace", Tab: "Tab", Escape: "Escape", Delete: "Delete", ArrowLeft: "Left", ArrowRight: "Right", ArrowUp: "Up", ArrowDown: "Down", Home: "Home", End: "End", PageUp: "Page_Up", PageDown: "Page_Down", " ": "space" };
+    let letters = "", sending = null;
+    // A long text goes in pieces, none of it dropped.
+    const type = (text) => {
+      for (let from = 0; from < text.length; from += 1500) act({ do: "type", text: text.slice(from, from + 1500) });
+    };
+    function flush() {
+      clearTimeout(sending);
+      sending = null;
+      if (!letters) return;
+      const text = letters;
+      letters = "";
+      type(text);
+    }
+    keys.addEventListener("keydown", (event) => {
+      if (!taken || event.isComposing || event.keyCode === 229) return;
+      // A letter is one however it was made: with the keys that reach a
+      // keyboard's third signs too, which a French one needs for @ and #.
+      const held = (event.ctrlKey || event.metaKey) && !event.getModifierState("AltGraph");
+      // Pasting is left to the browser, which hands over what is pasted.
+      if (held && event.key.toLowerCase() === "v") return;
+      if (event.key === "Dead" || event.key === "Process") return;
+      if (event.key.length === 1 && !held) {
+        event.preventDefault();
+        letters += event.key;
+        clearTimeout(sending);
+        sending = setTimeout(flush, 140);
+        return;
+      }
+      const name = NAMED[event.key] || (event.key.length === 1 && /[a-z0-9]/i.test(event.key) ? event.key.toLowerCase() : null);
+      if (!name) return;
+      event.preventDefault();
+      flush();
+      const with_ = [(event.ctrlKey || event.metaKey) && "ctrl", event.altKey && "alt", event.shiftKey && (name.length > 1 || held) && "shift"].filter(Boolean);
+      act({ do: "key", keys: [...with_, name].join("+") });
+    });
+    // What is pasted goes straight to its computer: no model reads it.
+    keys.addEventListener("paste", (event) => {
+      event.preventDefault();
+      const text = (event.clipboardData || window.clipboardData).getData("text");
+      flush();
+      if (taken && text) type(text);
+    });
+    // What a keyboard composes, an accent then its letter, or a phone's
+    // own way of writing, arrives as text: sent as it is.
+    const composed = () => {
+      const text = keys.value;
+      keys.value = "";
+      if (taken && text) { flush(); type(text); }
+    };
+    keys.addEventListener("input", (event) => { if (!event.isComposing) composed(); });
+    keys.addEventListener("compositionend", composed);
+    const write = () => {
+      if (taken && field.value) type(field.value);
+      field.value = "";
+    };
+    typed.onsubmit = (event) => { event.preventDefault(); write(); };
+    enter.onclick = () => { write(); if (taken) act({ do: "key", keys: "Return" }); };
+    draw();
+  }
+
+  async function look() {
+    head(say("Customize", "Personnaliser"), say("Its name and its look, which are its own.", "Son nom et son apparence, qui lui sont propres."), ["agent", agentName()]);
     if (!(await read())) return;
     const shapes = kept.shapes || {}, colours = kept.colours || {};
     const colour = () => colours[value("colour")] || "#f2f2f0";
@@ -272,17 +566,12 @@
     document.body.classList.toggle("desk", here);
     side.hidden = !here;
     if (!here) {
+      if (showing !== "talk") open("talk");
       panel.hidden = true;
       talk.classList.remove("aside");
       return;
     }
-    if (!me) {
-      const told = await fetch("/api/me").catch(() => null);
-      if (told && told.ok) {
-        me = await told.json();
-        french = me.language === "fr";
-      }
-    }
+    if (!me) await who();
     column();
     latest();
   }
@@ -297,6 +586,9 @@
     setTimeout(go, 250);
     setTimeout(go, 900);
   }
+  // On a phone the Agent itself, at the top of the Conversation, is the way
+  // to its menu.
+  $("who").addEventListener("click", () => { if (!talk.hidden) open("agent"); });
   wide.addEventListener("change", arrange);
   // The Conversation shows once the device is let in: the column comes with it.
   new MutationObserver(arrange).observe(talk, { attributes: true, attributeFilter: ["hidden"] });

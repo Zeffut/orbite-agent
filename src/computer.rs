@@ -290,6 +290,21 @@ impl Screen {
         self.act(&["click", "--repeat", &notches.unsigned_abs().max(1).to_string(), button])
     }
 
+    /// Turns the wheel over a point of the screen.
+    pub fn scroll_at(&self, x: u16, y: u16, notches: i32) -> io::Result<()> {
+        let button = if notches >= 0 { "5" } else { "4" };
+        self.act(&[
+            "mousemove",
+            "--sync",
+            &x.to_string(),
+            &y.to_string(),
+            "click",
+            "--repeat",
+            &notches.unsigned_abs().max(1).to_string(),
+            button,
+        ])
+    }
+
     /// Has the mouse and keyboard do something on this screen.
     fn act(&self, gesture: &[&str]) -> io::Result<()> {
         let mut acting = Command::new("xdotool");
@@ -638,6 +653,202 @@ pub(crate) struct Desk {
     /// Until when the Owner's last say covers the Agent holding this
     /// computer's mouse and keyboard.
     taken_until: std::sync::Mutex<Option<Instant>>,
+    /// Until when the Owner holds the Computer's mouse and keyboard with
+    /// their own hand, from a device: the Agent leaves it alone meanwhile.
+    /// Who took it, known by what taking gave them, and until when.
+    in_hand: std::sync::Mutex<Option<(String, Instant)>>,
+}
+
+/// What the Agent is told while its Owner holds the Computer themselves.
+pub(crate) const IN_THE_OWNERS_HAND: &str = "Your Owner has taken the Computer's mouse and \
+    keyboard themselves, from their device: nothing was done. Do not act on the Computer while \
+    they have it. Tell them in one short line that you are waiting for them to give it back, and \
+    carry on from the screen as they left it once they say they are done.";
+
+/// How long the Computer stays in its Owner's hand after the last sign of
+/// them: a device that went away gives it back by itself.
+const IN_HAND_FOR: Duration = Duration::from_secs(60);
+
+/// The Agent's Computer as its Owner reaches it from a device: to see its
+/// screen as it is now, and to take its mouse and keyboard for a while.
+#[derive(Clone)]
+pub struct Hand(std::sync::Arc<Desk>);
+
+/// What an Owner does on the Agent's screen with their own hand. Points are
+/// those of the screen itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ByHand {
+    Click { x: u16, y: u16 },
+    DoubleClick { x: u16, y: u16 },
+    Type(String),
+    Key(String),
+    Scroll { x: u16, y: u16, notches: i32 },
+}
+
+/// The longest text typed in one go by hand.
+const TYPED_AT_MOST: usize = 2000;
+
+impl ByHand {
+    /// The gesture as it may be made: points kept on the screen, and a key
+    /// that is the name of one. `None` for what is no gesture.
+    fn kept_sound(self) -> Option<Self> {
+        let on = |x: u16, y: u16| (x.min(SCREEN.0 - 1), y.min(SCREEN.1 - 1));
+        Some(match self {
+            Self::Click { x, y } => {
+                let (x, y) = on(x, y);
+                Self::Click { x, y }
+            }
+            Self::DoubleClick { x, y } => {
+                let (x, y) = on(x, y);
+                Self::DoubleClick { x, y }
+            }
+            Self::Scroll { x, y, notches } => {
+                let (x, y) = on(x, y);
+                if notches == 0 {
+                    return None;
+                }
+                Self::Scroll { x, y, notches: notches.clamp(-10, 10) }
+            }
+            Self::Type(text) => {
+                let text: String = text
+                    .chars()
+                    .filter(|letter| !letter.is_control() || matches!(letter, '\n' | '\t'))
+                    .take(TYPED_AT_MOST)
+                    .collect();
+                if text.is_empty() {
+                    return None;
+                }
+                Self::Type(text)
+            }
+            // The names of keys, joined by `+`: nothing else is one, and
+            // nothing else reaches the program that presses them.
+            Self::Key(keys) => {
+                let named = !keys.is_empty()
+                    && keys.len() <= 40
+                    && keys.split('+').all(|key| {
+                        !key.is_empty()
+                            && key
+                                .chars()
+                                .all(|letter| letter.is_ascii_alphanumeric() || letter == '_')
+                    });
+                if !named {
+                    return None;
+                }
+                Self::Key(keys)
+            }
+        })
+    }
+}
+
+impl Hand {
+    /// True when the Computer is started: a screen there is to see. While
+    /// something is being done there, it is.
+    pub fn is_on(&self) -> bool {
+        match self.0.computer.try_lock() {
+            Ok(mut computer) => {
+                computer.as_mut().is_some_and(|computer| computer.screen.is_served())
+            }
+            Err(std::sync::TryLockError::WouldBlock) => true,
+            Err(std::sync::TryLockError::Poisoned(_)) => false,
+        }
+    }
+
+    /// The screen as it is now, as a PNG; `None` when the Computer is not
+    /// started, which looking never does.
+    pub fn picture(&self) -> Option<io::Result<Vec<u8>>> {
+        let seen = {
+            let mut computer =
+                self.0.computer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let computer = computer.as_mut()?;
+            if !computer.screen.is_served() {
+                return None;
+            }
+            computer.screen().points()
+        };
+        Some(seen.map(|(width, height, points)| crate::png::encode(width, height, &points)))
+    }
+
+    /// Takes the mouse and keyboard for the Owner, starting the Computer
+    /// when it was not: the Agent leaves it alone until it is given back.
+    /// What comes back says who took it, and is asked of every gesture: a
+    /// device that takes it after another has it from then on.
+    pub fn take(&self) -> io::Result<String> {
+        let mut drawn = [0_u8; 16];
+        getrandom::fill(&mut drawn).map_err(io::Error::other)?;
+        let holder: String = drawn.iter().map(|byte| format!("{byte:02x}")).collect();
+        // A screen with nothing on it is nothing to take: its browser is
+        // opened when it was not, on an empty page. Taken while the
+        // Computer is held, so that no gesture of the Agent's comes after.
+        self.0.with_for(true, |computer| {
+            let browsing = computer
+                .running
+                .as_mut()
+                .is_some_and(|browser| matches!(browser.try_wait(), Ok(None)));
+            if !browsing {
+                computer.open("about:blank")?;
+            }
+            *self.0.in_hand.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                Some((holder.clone(), Instant::now() + IN_HAND_FOR));
+            Ok(())
+        })?;
+        Ok(holder)
+    }
+
+    /// Says the Owner is still at the Computer; false when `holder` does
+    /// not have it, or no longer.
+    pub fn still_here(&self, holder: &str) -> bool {
+        let mut held = self.0.in_hand.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match held.as_mut() {
+            Some((known, until)) if same(known, holder) && Instant::now() < *until => {
+                *until = Instant::now() + IN_HAND_FOR;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Gives the mouse and keyboard back to the Agent, when `holder` has them.
+    pub fn give_back(&self, holder: &str) {
+        let mut held = self.0.in_hand.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if held.as_ref().is_some_and(|(known, _)| same(known, holder)) {
+            *held = None;
+        }
+    }
+
+    /// True while the Owner holds the mouse and keyboard.
+    pub fn is_taken(&self) -> bool {
+        self.0.in_the_owners_hand()
+    }
+
+    /// Makes `gesture` on the screen, for the Owner who took the Computer
+    /// as `holder`: refused otherwise, the Agent and its Owner never both
+    /// acting there.
+    pub fn does(&self, holder: &str, gesture: ByHand) -> io::Result<()> {
+        let Some(gesture) = gesture.kept_sound() else {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a gesture"));
+        };
+        // Whose it is is looked at once the Computer is held: a gesture
+        // that waited is not made for one who no longer has it.
+        self.0.with_for(true, |computer| {
+            if !self.still_here(holder) {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not taken"));
+            }
+            let screen = computer.screen();
+            match &gesture {
+                ByHand::Click { x, y } => screen.click(*x, *y),
+                ByHand::DoubleClick { x, y } => screen.double_click(*x, *y),
+                ByHand::Type(text) => screen.type_text(text),
+                ByHand::Key(keys) => screen.key(keys),
+                ByHand::Scroll { x, y, notches } => screen.scroll_at(*x, *y, *notches),
+            }
+        })
+    }
+}
+
+/// True when two holders are the same, however long it takes to say so.
+fn same(one: &str, other: &str) -> bool {
+    one.len() == other.len()
+        && one.bytes().zip(other.bytes()).fold(0, |differing, (a, b)| differing | (a ^ b)) == 0
 }
 
 /// How long the Owner's say lets the Agent hold this computer's mouse and
@@ -710,7 +921,19 @@ impl Desk {
             lent: std::sync::Arc::default(),
             keeps_to_its_own: std::sync::atomic::AtomicBool::new(false),
             taken_until: std::sync::Mutex::new(None),
+            in_hand: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The Computer as the Owner reaches it from a device.
+    pub(crate) fn hand(self: &std::sync::Arc<Self>) -> Hand {
+        Hand(self.clone())
+    }
+
+    /// True while the Owner holds the Computer's mouse and keyboard.
+    pub(crate) fn in_the_owners_hand(&self) -> bool {
+        let held = self.in_hand.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        held.as_ref().is_some_and(|(_, until)| Instant::now() < *until)
     }
 
     /// True when the next gesture would take this computer's mouse and
@@ -838,12 +1061,27 @@ impl Desk {
         }
     }
 
-    /// Does `something` with the Computer, starting it first when needed.
+    /// Does `something` with the Computer for the Agent, starting it first
+    /// when needed: refused while the Owner holds it themselves.
     pub(crate) fn with<T>(
         &self,
         something: impl FnOnce(&mut Computer) -> io::Result<T>,
     ) -> io::Result<T> {
+        self.with_for(false, something)
+    }
+
+    /// The same, for the Owner's own hand when `theirs`. Whose turn it is
+    /// is looked at once the Computer is held: nothing of the Agent's is
+    /// done there after its Owner took it.
+    fn with_for<T>(
+        &self,
+        theirs: bool,
+        something: impl FnOnce(&mut Computer) -> io::Result<T>,
+    ) -> io::Result<T> {
         let mut computer = self.computer.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !theirs && self.in_the_owners_hand() {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, IN_THE_OWNERS_HAND));
+        }
         // A screen that died is not one to act on: a new Computer is started.
         if computer.as_mut().is_some_and(|computer| !computer.screen.is_served()) {
             drop(computer.take());

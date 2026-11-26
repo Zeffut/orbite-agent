@@ -83,12 +83,6 @@ button { cursor: pointer; }
 @keyframes blink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.1); } }
 @keyframes travel { from { offset-distance: 0%; } to { offset-distance: 100%; } }
 #link { position: absolute; left: 16px; font-size: 12px; color: var(--warn); }
-.pill {
-  position: absolute; right: 16px; display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px;
-  border-radius: 999px; border: 1px solid var(--agent-line); background: var(--agent); font-size: 13px; font-weight: 500;
-}
-.pill.fresh::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-.pill[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 
 #said {
   flex: 1; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
@@ -204,23 +198,9 @@ button { cursor: pointer; }
 #talk.dropping #said { outline: 2px dashed var(--accent); outline-offset: -8px; border-radius: 20px; }
 @media (prefers-reduced-motion: reduce) { .mascot.agent .body, .mascot .eyes, .mascot.working .moon, #recordTime::before { animation: none; } }
 
-/* The Agent's screen, beside the Conversation. */
-#screen {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(48vw, 760px); z-index: 2;
-  background: var(--panel); border-left: 1px solid var(--line); display: flex; flex-direction: column;
-}
-#screen header { display: flex; align-items: center; gap: 10px; padding: 10px 8px 10px 18px; padding-top: max(10px, env(safe-area-inset-top)); }
-#screen header strong { font-size: 14px; font-weight: 600; }
-#screenWhen { font-size: 12px; color: var(--quiet); margin-right: auto; }
-#screenOpen { flex: 1; min-height: 0; display: grid; place-items: start center; padding: 4px 14px 14px; overflow: auto; }
-#screenNow { max-width: 100%; border-radius: 14px; border: 1px solid var(--line); display: block; }
-@media (min-width: 1100px) { body.watching #talk { margin-right: min(48vw, 760px); } }
-@media (max-width: 1099px) { #screen { width: 100%; border-left: 0; background: var(--ground); } }
 @media (max-width: 600px) {
   body { font-size: 16px; }
   .said { max-width: 86%; }
-  .pill span { display: none; }
-  .pill { padding: 8px; }
 }
 
 /* On a phone everything is read at arm's length: larger, all of it. */
@@ -233,10 +213,9 @@ button { cursor: pointer; }
 body.desk { display: grid; grid-template-columns: 264px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100vh; height: 100dvh; overflow: hidden; }
 body.desk #talk { grid-column: 2; min-width: 0; min-height: 0; height: auto; }
 body.desk #talk.aside { display: none; }
-body.desk #who { display: none; }
-body.desk #said { padding-left: max(28px, calc((100% - 820px) / 2)); padding-right: max(28px, calc((100% - 820px) / 2)); padding-top: 28px; }
+body.desk #said { padding-left: max(28px, calc((100% - 820px) / 2)); padding-right: max(28px, calc((100% - 820px) / 2)); padding-top: 76px; }
 body.desk #foot { padding-left: max(28px, calc((100% - 820px) / 2)); padding-right: max(28px, calc((100% - 820px) / 2)); padding-bottom: 22px; }
-body.desk #talk header { background: none; min-height: 0; padding: 0; }
+#who:hover { border-color: color-mix(in srgb, var(--ink) 30%, transparent); }
 body.desk .said { max-width: min(640px, 78%); }
 #side {
   grid-column: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 22px 12px 16px;
@@ -249,7 +228,10 @@ body.desk .said { max-width: min(640px, 78%); }
 }
 #side button:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 #side button.here { background: color-mix(in srgb, var(--ink) 10%, transparent); }
-#side .agent { padding: 10px; margin-bottom: 10px; }
+#side .agent { padding: 8px 10px; }
+#side .over { padding: 0 10px 4px; text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }
+#side .low { margin-top: auto; }
+#side .low svg { color: var(--quiet); flex: none; }
 #side .agent span { display: grid; line-height: 1.25; min-width: 0; }
 #side .agent strong { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #side small, #panel small { color: var(--quiet); font-size: 12.5px; }
@@ -283,3 +265,39 @@ body.desk .said { max-width: min(640px, 78%); }
 #panel .card button:disabled { opacity: 0.4; }
 #panel .card .done { color: var(--ok); font-size: 13px; font-weight: 600; }
 #panel .card .letter.mark { background: #f2f2f0; }
+
+/* The Agent's own menu: who it is, and its screen. */
+#who { cursor: pointer; }
+#panel .back { display: inline-flex; align-items: center; gap: 4px; margin: 0 0 14px -8px; padding: 6px 10px; border: 0; border-radius: 10px; background: none; color: var(--quiet); font-size: 14px; }
+#panel .back:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--ink); }
+#panel .whois { display: grid; justify-items: center; gap: 6px; padding: 8px 0 4px; text-align: center; }
+#panel .whois h1 { margin: 8px 0 0; font-size: 26px; letter-spacing: -0.01em; }
+#panel .whois p { margin: 0; color: var(--quiet); }
+#panel .go { display: flex; align-items: center; gap: 14px; width: 100%; padding: 14px 0; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; color: var(--ink); }
+#panel section > .go:first-child { border-top: 0; }
+#panel .go:disabled { opacity: 0.5; }
+#panel .go > svg:first-child { flex: none; width: 38px; height: 38px; padding: 9px; border-radius: 11px; background: var(--ground); }
+#panel .go > span { display: grid; flex: 1; min-width: 0; line-height: 1.3; }
+#panel .go strong { font-weight: 500; }
+#panel .go .next { flex: none; color: var(--quiet); }
+#panel .stage { position: relative; margin-top: 22px; border-radius: 16px; border: 1px solid var(--agent-line); background: var(--agent); overflow: hidden; aspect-ratio: 16 / 10; display: grid; place-items: center; }
+#panel .stage img { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; }
+#panel .stage.off img { display: none; }
+#panel .stage .dark { display: none; color: var(--quiet); padding: 24px; text-align: center; }
+#panel .stage.off .dark { display: block; }
+#panel .stage.taken { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent); }
+#panel .stage.taken img { cursor: crosshair; }
+#panel .stage textarea { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; }
+#panel .hand { display: flex; align-items: center; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
+#panel .hand p { margin: 0; color: var(--quiet); flex: 1; min-width: 200px; }
+#panel .hand button { padding: 10px 18px; border-radius: 999px; border: 1px solid var(--line); background: var(--bright); color: var(--on-bright); font-weight: 600; }
+#panel .hand button.back-to { background: none; color: var(--ink); }
+#panel .hand button:disabled { opacity: 0.5; }
+#panel .typed { display: none; gap: 8px; margin-top: 12px; }
+#panel .typed.shown { display: flex; }
+#panel .typed input { flex: 1; width: auto; max-width: none; }
+#panel .typed button { padding: 8px 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--agent); }
+/* On a phone the menu takes the whole page, and is left by its cross. */
+body:not(.desk) #panel:not([hidden]) { position: fixed; inset: 0; z-index: 20; background: var(--ground); overflow-y: auto; padding: max(18px, env(safe-area-inset-top)) 18px 40px; }
+#panel .shut { display: none; }
+body:not(.desk) #panel .shut { display: grid; place-items: center; position: absolute; top: max(12px, env(safe-area-inset-top)); right: 12px; width: 40px; height: 40px; border: 0; border-radius: 50%; background: var(--agent); color: var(--ink); }

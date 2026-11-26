@@ -381,8 +381,15 @@ impl<P: Provider + 'static> Agent<P> {
     /// Gives the Agent a Computer, a screen and a browser of its own, which
     /// keeps what it has to in `folder`. It is started when first used.
     pub fn using_a_computer_in(mut self, folder: impl Into<PathBuf>) -> Self {
-        self.host_mut().computer = Some(crate::computer::Desk::in_folder(folder.into()));
+        self.host_mut().computer =
+            Some(std::sync::Arc::new(crate::computer::Desk::in_folder(folder.into())));
         self
+    }
+
+    /// The Agent's Computer as its Owner reaches it from a device, when it
+    /// has one: to see its screen, and to take it for a while.
+    pub fn hand(&self) -> Option<crate::Hand> {
+        self.host.computer.as_ref().map(crate::computer::Desk::hand)
     }
 
     /// The folder where Orbite leaves word for the Owner of what it did by

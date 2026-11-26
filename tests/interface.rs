@@ -742,3 +742,134 @@ async fn a_setting_touched_while_the_agent_asks_is_no_answer_to_what_it_asked() 
     assert_eq!(next(&mut shown, "settled").await["answer"], "allow");
     assert_eq!(next(&mut shown, "agent").await["text"], "Removed.");
 }
+
+/// True where a screen and a browser can be started; panics where they were promised.
+fn has_a_computer() -> bool {
+    let profile = tempfile::tempdir().unwrap();
+    match orbite::Computer::start(profile.path(), 320, 200) {
+        Ok(_) => true,
+        Err(error) if std::env::var_os("ORBITE_TESTS_NEED_A_SCREEN").is_some() => {
+            panic!("no Computer can be started here: {error}")
+        }
+        Err(error) => {
+            eprintln!("skipped: no Computer can be started here ({error})");
+            false
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_owner_sees_the_agents_computer_as_it_is_and_takes_it_while_the_agent_waits() {
+    if !has_a_computer() {
+        return;
+    }
+    let home = std::sync::Arc::new(tempfile::tempdir().unwrap());
+    let provider = ScriptedProvider::default();
+    provider
+        .then_acts([("computer", json!({ "do": "look" }))])
+        .then(Ok("I am waiting for you to give it back.".into()));
+    let mut agent = Agent::new(provider.clone(), Store::in_memory())
+        .using_a_computer_in(home.path().join("computer"));
+    let mut interface = Interface::serving(home.path(), "127.0.0.1:0".parse().unwrap(), "en")
+        .await
+        .unwrap()
+        .showing(agent.hand().expect("it was given a Computer"));
+    let mut browser = Browser::at(interface.address());
+    let held = home.clone();
+    tokio::spawn(async move {
+        agent.converse(&mut interface).await;
+        drop(held);
+    });
+    let code = orbite::pairing_code(home.path()).unwrap();
+    assert_eq!(browser.pairs_with(&code).await, 200);
+    let now = |kept: Option<String>| {
+        let mut asking = browser.http.get(format!("{}/api/screen/now", browser.at));
+        if let Some(kept) = kept {
+            asking = asking.header("cookie", kept);
+        }
+        async move { asking.send().await.unwrap() }
+    };
+
+    // A Computer that is not started shows nothing, and looking leaves it so.
+    assert_eq!(now(browser.kept.clone()).await.status(), 204);
+    assert_eq!(now(browser.kept.clone()).await.status(), 204);
+    // Nothing is done there by a hand that did not take it.
+    let typed = json!({ "do": "type", "text": "hello" });
+    assert_eq!(browser.posts("/api/screen/hand", typed.clone()).await.status(), 409);
+
+    let taking = browser.posts("/api/screen/hand", json!({ "do": "take" })).await;
+    assert_eq!(taking.status(), 200);
+    let holder = taking.json::<Value>().await.unwrap()["holder"].as_str().unwrap().to_owned();
+    let with = |mut gesture: Value| {
+        gesture["holder"] = json!(holder);
+        gesture
+    };
+    let seen = now(browser.kept.clone()).await;
+    assert_eq!(seen.status(), 200);
+    assert_eq!(seen.headers()["content-type"], "image/png");
+    assert!(seen.bytes().await.unwrap().starts_with(b"\x89PNG"));
+    // The one who took it acts there; a device that did not is refused,
+    // paired as it is.
+    assert_eq!(browser.posts("/api/screen/hand", typed.clone()).await.status(), 409);
+    assert_eq!(browser.posts("/api/screen/hand", with(typed.clone())).await.status(), 200);
+    let click = with(json!({ "do": "click", "x": 640, "y": 400 }));
+    assert_eq!(browser.posts("/api/screen/hand", click).await.status(), 200);
+    // A point is one of the screen, and a key is the name of one.
+    for none in [
+        json!({ "do": "click" }),
+        json!({ "do": "click", "x": -1, "y": 3 }),
+        json!({ "do": "click", "x": 12.5, "y": 3 }),
+        json!({ "do": "scroll", "x": 5, "y": 5, "notches": 0 }),
+        json!({ "do": "key", "keys": "--help" }),
+        json!({ "do": "key", "keys": "a b" }),
+        json!({ "do": "key", "keys": "Return;reboot" }),
+        json!({ "do": "key", "keys": "ctrl+" }),
+        json!({ "do": "dance" }),
+    ] {
+        let status = browser.posts("/api/screen/hand", with(none.clone())).await.status();
+        assert_eq!(status, 400, "{none}");
+    }
+    // A device says it is still there with what taking gave it, and only so.
+    assert_eq!(
+        browser.posts("/api/screen/hand", with(json!({ "do": "here" }))).await.status(),
+        200
+    );
+    assert_eq!(browser.posts("/api/screen/hand", json!({ "do": "here" })).await.status(), 409);
+    let pressed = with(json!({ "do": "key", "keys": "ctrl+a" }));
+    assert_eq!(browser.posts("/api/screen/hand", pressed).await.status(), 200);
+
+    // The Agent leaves the Computer alone meanwhile, and is told why.
+    assert_eq!(browser.says("Look at your screen.").await, 200);
+    let mut shown = browser.watches(None).await.unwrap();
+    loop {
+        if next(&mut shown, "agent").await["text"] == "I am waiting for you to give it back." {
+            break;
+        }
+    }
+    let told = format!("{:?}", provider.last_asked());
+    assert!(told.contains("Your Owner has taken the Computer"), "{told}");
+
+    // A stranger sees nothing and takes nothing, nor does another site's page.
+    assert_eq!(now(None).await.status(), 401);
+    let stranger = Browser::at(browser.at.trim_start_matches("http://").parse().unwrap());
+    assert_eq!(stranger.posts("/api/screen/hand", json!({ "do": "take" })).await.status(), 401);
+    let elsewhere = browser
+        .http
+        .post(format!("{}/api/screen/hand", browser.at))
+        .header("cookie", browser.kept.clone().unwrap())
+        .header("origin", "https://elsewhere.example")
+        .json(&typed)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(elsewhere.status(), 401);
+
+    // Given back, it is the Agent's again.
+    // Only by the one who took it.
+    let other = json!({ "do": "give", "holder": "0".repeat(32) });
+    assert_eq!(browser.posts("/api/screen/hand", other).await.status(), 200);
+    assert_eq!(browser.posts("/api/screen/hand", with(typed.clone())).await.status(), 200);
+    let given = with(json!({ "do": "give" }));
+    assert_eq!(browser.posts("/api/screen/hand", given).await.status(), 200);
+    assert_eq!(browser.posts("/api/screen/hand", with(typed)).await.status(), 409);
+}
