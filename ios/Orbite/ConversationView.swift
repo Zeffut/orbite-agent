@@ -256,6 +256,8 @@ struct ConversationView: View {
                                 Label(say("Photos", "Photos"), systemImage: "photo.on.rectangle")
                             }
                             Button(say("Files", "Fichiers"), systemImage: "folder") { choosingFile = true }
+                            // What was copied elsewhere, a picture or a document, is attached.
+                            Button(say("Paste", "Coller"), systemImage: "doc.on.clipboard") { paste() }
                         } label: {
                             Image(systemName: "plus").font(.title3.weight(.medium)).frame(width: 46, height: 46)
                                 .glassEffect(.regular.interactive(), in: .circle)
@@ -513,6 +515,41 @@ struct ConversationView: View {
                     attached.removeAll { $0.id == waiting.id }
                 }
             }
+        }
+    }
+
+    /// Attaches what is on the clipboard: each picture or document as a
+    /// file to send; words alone go into the field.
+    private func paste() {
+        let board = UIPasteboard.general
+        var took = false
+        for provider in board.itemProviders {
+            guard let kind = Pasted.kind(of: provider) else { continue }
+            took = true
+            let ending = kind.preferredFilenameExtension ?? "bin"
+            let stamp = Int(Date().timeIntervalSince1970 * 1000)
+            let name: String
+            if let suggested = provider.suggestedName, !suggested.isEmpty {
+                name = suggested.contains(".") ? suggested : "\(suggested).\(ending)"
+            } else {
+                name = say("pasted", "collé") + "-\(stamp).\(ending)"
+            }
+            let waiting = Attached(name: name)
+            attached.append(waiting)
+            Task {
+                if let content = await Pasted.content(of: provider, as: kind) {
+                    await uploaded(waiting, content)
+                } else {
+                    attached.removeAll { $0.id == waiting.id }
+                }
+            }
+        }
+        if took {
+            Haptic.touched()
+        } else if let words = board.string, !words.isEmpty {
+            text += words
+        } else {
+            agent.trouble = say("There is nothing to paste.", "Il n'y a rien à coller.")
         }
     }
 
